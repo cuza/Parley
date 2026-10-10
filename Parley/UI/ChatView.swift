@@ -135,7 +135,7 @@ struct ChatView: View {
                 List(selection: Binding(get: { fixedConversation ?? store.shortcut.map(Self.tag) ?? store.selectedID }, set: { id in
                     guard let id else { return }
                     if let shortcut = Shortcut.allCases.first(where: { Self.tag($0) == id }) { Task { await store.openShortcut(shortcut) } }
-                    else { Task { await store.select(id) } }
+                    else if store.conversations.contains(where: { $0.id == id }) { Task { await store.select(id) } }   // not a "Show all" row
                 })) {
                     ForEach(Conversation.sidebarSections(store.conversations, limit: sectionLimitArgs.limit, expanded: sectionLimitArgs.expanded,
                                                          selected: fixedConversation ?? store.selectedID), id: \.title) {
@@ -354,7 +354,7 @@ struct ChatView: View {
                     let open = sectionLimitArgs.expanded.contains(title)
                     Button { expandedSections = Self.lines(expandedSections, title, contains: !open) } label: {
                         Label(open ? "Show less" : "Show all", systemImage: "chevron.up.chevron.down").font(.system(size: 13)).foregroundStyle(.secondary)
-                    }.buttonStyle(.plain)
+                    }.buttonStyle(.plain).selectionDisabled()   // a click on the row toggles it, never selects it
                 }
             } header: {
                 HStack {

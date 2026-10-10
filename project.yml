@@ -42,8 +42,8 @@ targets:
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: dev.cuza.Parley
-        MARKETING_VERSION: "1.5.2"
-        CURRENT_PROJECT_VERSION: "54"
+        MARKETING_VERSION: "1.5.4"
+        CURRENT_PROJECT_VERSION: "56"
         CODE_SIGN_STYLE: Automatic
         CODE_SIGN_ENTITLEMENTS: Parley/Parley.entitlements
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
