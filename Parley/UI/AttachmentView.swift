@@ -13,7 +13,7 @@ struct AttachmentView: View {
     var transcriptOpen = false
     var toggleTranscript: () -> Void = {}
     var dismissCard: () -> Void = {}
-    var clickCard: (Data, [Card.Input]) async -> Void = { _, _ in }
+    var clickCard: (String?, Data, [Card.Input]) async -> Void = { _, _, _ in }
     @State private var loaded: (key: String, image: NSImage)?
     @State private var failedKey: String?
     /// The row view is recycled: only this attachment's picture or failure shows, and a cached picture shows on the
@@ -24,7 +24,7 @@ struct AttachmentView: View {
 
     var body: some View {
         if attachment.kind == .voice { VoiceMessageView(attachment: attachment, own: own, load: load, transcriptOpen: transcriptOpen, toggleTranscript: toggleTranscript) }
-        else if let card = attachment.card { CardView(card: card, dismiss: dismissCard, expanded: transcriptOpen, toggle: toggleTranscript, click: clickCard)
+        else if let card = attachment.card { CardView(card: card, dismiss: dismissCard, expanded: transcriptOpen, toggle: toggleTranscript, click: { await clickCard(card.id, $0, $1) })
             .id(attachment.cacheKey) }   // a recycled row starts with empty fields
         else if attachment.kind == .image || attachment.kind == .video { media } else if attachment.domain != nil { card } else { chip }
     }

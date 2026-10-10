@@ -101,6 +101,7 @@ actor FakeBackend: ChatBackend {
     func connect() throws -> Person {
         if signedOut { signedOut = false; throw AuthFailure.signInRequired }
         if cancelNextConnect { cancelNextConnect = false; throw CancellationError() }
+        continuation.yield(.ownStatusChanged(ownStatus))
         continuation.yield(.connectionChanged(.connected)); return Self.me
     }
     func simulateSignedOut() { signedOut = true }
@@ -166,6 +167,26 @@ actor FakeBackend: ChatBackend {
     static let customEmoji = [shipIt, CustomEmoji(id: "demo-lgtm", shortcode: "lgtm", imageURL: URL(string: "https://example.invalid/emoji/lgtm")),
                               CustomEmoji(id: "demo-party-parrot", shortcode: "party-parrot", imageURL: URL(string: "https://example.invalid/emoji/party-parrot"))]
     func customEmojis() -> [CustomEmoji] { Self.customEmoji }
+    /// The demo apps' commands, matched as the server does: the query anywhere in the name.
+    static let slashCommands = [
+        SlashCommand(appID: shipyard.id, appName: shipyard.name, appAvatar: shipyardIcon, name: "/deploy", id: 1, description: "Deploy a build", opensDialog: true),
+        SlashCommand(appID: shipyard.id, appName: shipyard.name, appAvatar: shipyardIcon, name: "/shipyard_help", id: 2, description: "Show what Shipyard can do"),
+        SlashCommand(appID: notebook.id, appName: notebook.name, appAvatar: notebookIcon, name: "/notebook_help", id: 1, description: "Show the help card"),
+    ]
+    /// Google Chat's own "Send a Meet link", listed first as the server lists it.
+    static let meetLink = SlashCommand(appID: "", appName: "Google Meet", name: "", id: 0, description: "Send a new meeting link",
+                                       action: .meetLink, title: "Send a Meet link")
+    /// Shipyard's quick command: its "Create issue" dialog, with no message.
+    static let createIssueCommand = SlashCommand(appID: shipyard.id, appName: shipyard.name, appAvatar: shipyardIcon, name: "", id: 3,
+                                                 description: "Open an issue", opensDialog: true, action: .quick, title: "Create issue")
+    private(set) var slashCommandRequests: [(query: String, toApp: Bool)] = []
+    /// A space's apps' commands; a person's DM has no apps, so only Google Chat's Meet link.
+    func slashCommands(in conversation: ConversationID, matching query: String, toApp: Bool) -> [SlashCommand] {
+        slashCommandRequests.append((query, toApp))
+        let space = rooms.first { $0.id == conversation }?.kind == .space
+        let commands = space ? Self.slashCommands + [Self.createIssueCommand] : []
+        return ([Self.meetLink] + commands).filter { query.isEmpty || $0.label.lowercased().contains(query.lowercased()) }
+    }
     func setReaction(_ emoji: String, custom: CustomEmoji?, on id: MessageID, present: Bool) {
         guard let i = history.firstIndex(where: { $0.id == id }) else { return }
         var reactions = history[i].reactions
@@ -191,7 +212,8 @@ actor FakeBackend: ChatBackend {
         continuation.yield(.readStateChanged(conversation, unread: 0))
     }
     // Sidebar actions: applied to `rooms`, so a refresh shows them as the server would.
-    private(set) var changes: [String] = []   // "pin <id>", "unpin <id>", "mute <id>", "unmute <id>", "unread <id>", "leave <id>", "level <level>[ muted] <id>"
+    private(set) var changes: [String] = []   // "pin <id>", "unpin <id>", "mute <id>", "unmute <id>", "unread <id>", "leave <id>", "level <level>[ muted] <id>",
+                                              // "rename <name> <id>", "emoji <emoji> <id>", "add <ids> <id>", "remove <person> <id>", "hide <id>"
     private var failNextChange = false
     func simulateChangeFailure() { failNextChange = true }
     private func change(_ name: String, _ id: ConversationID, _ edit: (inout Conversation) -> Void) async throws {
@@ -210,6 +232,27 @@ actor FakeBackend: ChatBackend {
         try await change("leave", conversation) { _ in }
         rooms.removeAll { $0.id == conversation }
     }
+    /// I manage every space and group but General, where I am a plain member.
+    func permissions(in conversation: ConversationID) -> ConversationPermissions {
+        guard let room = rooms.first(where: { $0.id == conversation }), room.kind != .direct, room.id != "general" else { return .init() }
+        return ConversationPermissions(editProfile: true, manageMembers: true)
+    }
+    func updateProfile(_ conversation: ConversationID, name: String?, emoji: String?) async throws {
+        if let name { try await change("rename \(name)", conversation) { $0.name = name } }
+        if let emoji { try await change("emoji \(emoji)", conversation) { $0.emoji = emoji } }
+    }
+    func addMembers(_ people: [PersonID], to conversation: ConversationID) async throws {
+        let everyone = Dictionary((rooms.flatMap(\.members) + directory).map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
+        try await change("add \(people.joined(separator: ","))", conversation) { room in
+            room.members += people.filter { id in !room.members.contains { $0.id == id } }.map { everyone[$0] ?? Person(id: $0, name: $0) }
+        }
+    }
+    func removeMember(_ person: PersonID, from conversation: ConversationID) async throws {
+        try await change("remove \(person)", conversation) { $0.members.removeAll { $0.id == person } }
+    }
+    func setHidden(_ hidden: Bool, conversation: ConversationID) async throws {
+        try await change(hidden ? "hide" : "unhide", conversation) { $0.hidden = hidden ? .now : nil }
+    }
     func searchMessages(_ query: String, cursor: String?) -> SearchPage {
         SearchPage(messages: history.filter { $0.text.localizedCaseInsensitiveContains(query) })
     }
@@ -223,6 +266,13 @@ actor FakeBackend: ChatBackend {
         let everyone = Dictionary(rooms.flatMap(\.members).map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
         for id in people { if let person = everyone[id] { continuation.yield(.presenceChanged(id, person.presence, status: nil)) } }
     }
+    /// Mine, kept as the server would: automatic, away and DND exclude each other.
+    private(set) var ownStatus = OwnStatus()
+    func setDoNotDisturb(for duration: TimeInterval) -> OwnStatus {
+        ownStatus.availability = .doNotDisturb(until: .now.addingTimeInterval(duration)); return ownStatus
+    }
+    func setAway(_ away: Bool) -> OwnStatus { ownStatus.availability = away ? .away : .automatic; return ownStatus }
+    func setCustomStatus(_ status: CustomStatus?) -> OwnStatus { ownStatus.custom = status; return ownStatus }
     // New conversations: people outside the sidebar and spaces not yet joined.
     private let directory = [Person(id: "priya", name: "Priya Patel", presence: .available, email: "priya@example.com"),
                              Person(id: "sam", name: "Sam Okafor", presence: .away, email: "sam@example.com")]
@@ -316,15 +366,19 @@ actor FakeBackend: ChatBackend {
     /// Pushes an event as the server would, for tests and previews.
     func push(_ event: ChatEvent) { continuation.yield(event) }
     func simulateSendFailure() { failNextSend = true }
-    private(set) var cardClicks: [String] = []   // "<message id> <input>=<value> …"
+    private(set) var cardClicks: [String] = []   // "<message id> card=<id> <input>=<value> …"
+    private var cardRefusal: String?
+    /// The next card action is refused, as an app (or the server for it) refuses one, saying why.
+    func refuseNextCardClick(_ why: String) { cardRefusal = why }
     /// A card action: the app answers by updating the message, as a documents app does when a reply is posted: the reply
     /// joins the comment, or the comment is resolved.
-    func clickCard(_ id: MessageID, action: Data, inputs: [Card.Input]) async throws -> Message? {
-        cardClicks.append(([id] + inputs.map { "\($0.name)=\($0.value)" }).joined(separator: " "))
+    func clickCard(_ id: MessageID, card: String?, action: Data, inputs: [Card.Input]) async throws -> Message? {
+        cardClicks.append(([id] + (card.map { ["card=\($0)"] } ?? []) + inputs.map { "\($0.name)=\($0.value)" }).joined(separator: " "))
         if failNextChange { failNextChange = false; throw URLError(.networkConnectionLost) }
+        if let why = cardRefusal { cardRefusal = nil; throw DynamiteError.appRefused(why) }
         guard let i = history.firstIndex(where: { $0.id == id }) else { return nil }
         history[i].edited = true
-        if var card = history[i].attachments.first?.card, let input = card.sections.firstIndex(where: { $0.contains { if case .input = $0 { true } else { false } } }) {
+        if var card = history[i].attachments.first?.card, let input = card.sections.firstIndex(where: { $0.contains { if case .field = $0 { true } else { false } } }) {
             let function = (try? Dynamite_CardAction(serializedBytes: action))?.function
             if function == "RESOLVE_COMMENT" {
                 card.sections.replaceSubrange(input..., with: [[.text("Dave resolved this comment", [TextStyleRange(style: .italic, start: 0, length: 26)])]])
@@ -335,6 +389,45 @@ actor FakeBackend: ChatBackend {
         }
         return history[i]
     }
+    private(set) var dialogSteps: [String] = []   // "<step> <message id> app=<id> <input>=<value> …"
+    private var dialogAnswer: DialogAnswer?
+    /// The next dialog request gets this answer, as an app answers one (another step, a refusal).
+    func answerNextDialog(_ answer: DialogAnswer) { dialogAnswer = answer }
+    /// The code-review app's "Create issue" dialog: a title it requires and a priority. Created, the issue arrives as a
+    /// message from the app and the dialog closes with its note.
+    func dialog(_ step: DialogStep, _ context: DialogContext, action: Data?, inputs: [Card.Input]) async throws -> DialogAnswer {
+        dialogSteps.append((["\(step)", context.message, "app=\(context.app)"] + inputs.map { "\($0.name)=\($0.value)" }).joined(separator: " "))
+        if failNextChange { failNextChange = false; throw URLError(.networkConnectionLost) }
+        if let answer = dialogAnswer { dialogAnswer = nil; return answer }
+        switch step {
+        case .open: return .show(Self.createIssue)
+        case .cancel: return .close(nil)
+        case .submit where (try? Dynamite_CardAction(serializedBytes: action ?? Data()))?.function == "cancel": return .close(nil)
+        case .submit:
+            let title = inputs.first { $0.name == "title" }?.value.trimmingCharacters(in: .whitespaces) ?? ""
+            guard !title.isEmpty else { return .invalid("Give the issue a title.") }
+            let conversation = context.command != nil ? context.message : history.first { $0.id == context.message }?.conversationID ?? "design"
+            let issue = Message(id: "issue\(history.count)", conversationID: conversation, sender: Self.shipyard,
+                                text: "Issue #43 opened: \(title)", createdAt: .now)
+            history.append(issue)
+            push(.messageUpserted(issue))
+            return .close("Issue #43 created.")
+        }
+    }
+    static let shipyard = Person(id: "shipyard", name: "Shipyard", avatarURL: shipyardIcon)
+    /// Shipyard's dialog: a title, a priority menu, Cancel and Create.
+    static let createIssue: AppDialog = {
+        func action(_ function: String) -> Data { (try? Dynamite_CardAction.with { $0.function = function }.serializedData()) ?? Data() }
+        let page = URL(string: "https://shipyard.example/issues/new")!
+        return AppDialog(title: "Create issue", card: Card(sections: [[
+            .field(Card.Field(name: "title", label: "Title", value: "", placeholder: "What needs doing?", required: true)),
+            .field(Card.Field(name: "details", label: "Details", value: "", multiline: true)),
+            .choice(Card.Choice(name: "priority", label: "Priority", style: .menu, options: [
+                .init(text: "Low", value: "low", selected: false), .init(text: "Normal", value: "normal", selected: true),
+                .init(text: "High", value: "high", selected: false)])),
+        ]]), primary: Card.Link(title: "Create", url: page, filled: true, action: action("create"), required: ["title"]),
+             secondary: Card.Link(title: "Cancel", url: page, action: action("cancel")))
+    }()
     // Demo apps. Their icons are drawn locally (`demoIcons`), as nothing is fetched in the demo.
     static let shipyardIcon = URL(string: "https://shipyard.example/icon.png")!
     static let notebookIcon = URL(string: "https://notebook.example/icon.png")!
@@ -367,8 +460,11 @@ actor FakeBackend: ChatBackend {
                 TextStyleRange(style: .small, start: start, length: label.utf16.count), TextStyleRange(style: .color(Card.secondaryText), start: start, length: label.utf16.count),
                 TextStyleRange(style: .color(0xFF1AA64A), start: start, length: 4)]),
             .text(body, [], lines: 2),
+            .links([Card.Link(title: "Create issue", url: link, action: (try? Dynamite_CardAction.with { $0.function = "create_issue"; $0.interaction = 1 }.serializedData()) ?? Data(),
+                              dialog: true)]),
         ]])
         card.by = Card.Attribution(name: "Shipyard", icon: shipyardIcon)
+        card.app = shipyard.id
         return Attachment(name: title, kind: .card, card: card)
     }()
     /// A documents app's comment notification: the document (the row opens it), the comment, a Reply box, and Reply and
@@ -380,7 +476,7 @@ actor FakeBackend: ChatBackend {
         return Attachment(name: "Launch plan", kind: .card, card: Card(sections: [
             [.row(icon: documentIcon, round: false, label: nil, text: "Launch plan", formatting: [TextStyleRange(style: .nowrap, start: 0, length: 11)], open: document)],
             [.row(icon: nil, round: true, label: maria.name, text: comment, formatting: [])],
-            [.input(name: "REPLY_TO_COMMENT", label: "Reply", value: "")],
+            [.field(Card.Field(name: "REPLY_TO_COMMENT", label: "Reply", value: ""))],
             [.links([Card.Link(title: "Reply", url: document, action: action("REPLY_TO_COMMENT")),
                      Card.Link(title: "Resolve", url: document, action: action("RESOLVE_COMMENT")),
                      Card.Link(title: "Open", url: document, trailing: true)])],

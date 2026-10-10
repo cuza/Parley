@@ -26,7 +26,7 @@ struct ParleyApp: App {
         } else if ProcessInfo.processInfo.arguments.contains("-uiTestingFormattedThread") {
             store = ChatStore(backend: FakeBackend(formattedThread: true))
         } else if ProcessInfo.processInfo.arguments.contains("-uiTestingManyConversations") {
-            UserDefaults.standard.removeObject(forKey: "collapsedSidebarSections")
+            for key in ["collapsedSidebarSections", SidebarLimit.enabledKey] { UserDefaults.standard.removeObject(forKey: key) }
             store = ChatStore(backend: FakeBackend(manyConversations: 320))
         } else if ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil || ProcessInfo.processInfo.arguments.contains("-uiTestingDemo") {
             store = ChatStore(backend: FakeBackend())
@@ -123,7 +123,6 @@ private struct DiagnosticsMenuItem: View {
     @Environment(\.openWindow) private var openWindow
     var body: some View {
         Button("Report a Problem…") { openWindow(id: "connection-diagnostics") }
-        Button("Export Unsupported Message Shapes…") { MessageShapes.saveExport() }
     }
 }
 

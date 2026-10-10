@@ -8,6 +8,8 @@ private let log = Logger(subsystem: "dev.cuza.Parley", category: "store")
 @MainActor @Observable
 final class ChatStore {
     var conversations: [Conversation] = []
+    /// Hidden from my sidebar (`Conversation.hidden`), for Settings ▸ Hidden conversations.
+    var hidden: [Conversation] = []
     var messages: [Message] = [] { didSet { timelines = [:] } }
     /// Sorted timelines by draft key, kept until `messages` changes: a timeline view reads its messages several times
     /// per update, and filtering and sorting every loaded message each time showed up in profiles.
@@ -65,10 +67,14 @@ final class ChatStore {
     private(set) var shared: [String: [SharedContent.Item]] = [:]
     private(set) var sharedMore: Set<String> = []
     private(set) var members: [ConversationID: [Person]] = [:]   // per conversation, from `ChatBackend.members(of:)`
+    private(set) var permissions: [ConversationID: ConversationPermissions] = [:]   // what I may change, once the server said
     @ObservationIgnored private var memberLoads: Set<ConversationID> = []
     /// The organisation's custom emoji, for the picker and `:shortcode` suggestions; see `loadCustomEmoji`.
     private(set) var customEmoji: [CustomEmoji] = []
     @ObservationIgnored private var customEmojiLoad: Task<Void, Never>?
+    /// The conversations' apps' slash commands found so far, for the composer's "/" list; see `loadSlashCommands`.
+    private(set) var slashCommands: [ConversationID: [SlashCommand]] = [:]
+    @ObservationIgnored private var slashQueries: [ConversationID: Set<String>] = [:]
     @ObservationIgnored private var reactors: [MessageID: [Reaction: [Person]]] = [:]   // see `reactorsLine`
     private(set) var loading: Set<String> = []
     @ObservationIgnored private let backend: any ChatBackend
@@ -86,6 +92,8 @@ final class ChatStore {
     struct Activity: Equatable { var person: PersonID; var label: String; var at: Date }
     private(set) var presence: [String: Presence] = [:]
     private(set) var statuses: [String: String] = [:]          // custom status text
+    /// Mine, as the server last said; `OwnStatus.current(at:)` drops what has expired since.
+    private(set) var ownStatus = OwnStatus()
     private(set) var readReceipts: [ConversationID: [String: Date]] = [:]   // reader → read up to
     @ObservationIgnored private var receiptsOff: Set<ConversationID> = []
     // ponytail: only threads seen this session (loaded, pushed, or labelled while connected); a thread followed earlier in a
@@ -137,7 +145,7 @@ final class ChatStore {
     /// Another account connected: nothing of the previous one may show, be sent, or be cached.
     private func forgetAccount() {
         serverDrafts = [:]; draftEdits = [:]; draftsListed = false; draftTimers.values.forEach { $0.cancel() }; draftTimers = [:]
-        conversations = []; homeThreads = []; messages = []; selectedID = nil; drafts = [:]; draftFormatting = [:]; draftAttachments = [:]
+        conversations = []; hidden = []; homeThreads = []; messages = []; selectedID = nil; drafts = [:]; draftFormatting = [:]; draftAttachments = [:]
         quoting = [:]; searchResults = []; shortcut = nil; shortcutLists = [:]; shortcutCursors = [:]; hasMore = []; members = [:]; memberLoads = []; customEmoji = []; customEmojiLoad = nil; loaded = []; threadID = nil; editing = [:]
         typing = [:]; presence = [:]; statuses = [:]; readReceipts = [:]; receiptsOff = []; followed = []; presenceFetched = [:]; watching = nil
     }
@@ -208,7 +216,7 @@ final class ChatStore {
         // Together, so Home never shows the new list with the old threads (a conversation flashing up as a plain row).
         let listed = try await backend.conversations()
         let threads = await backend.homeThreads()
-        conversations = listed; homeThreads = threads
+        conversations = listed.filter { $0.hidden == nil }; hidden = listed.filter { $0.hidden != nil }; homeThreads = threads
         let vanished = !conversations.contains(where: { $0.id == selectedID })
         if vanished { selectedID = conversations.first?.id }
         if let selectedID {
@@ -326,6 +334,17 @@ final class ChatStore {
             return message.attachments.first { $0.kind == .call }?.url
         } catch { report(error); return nil }
     }
+    /// A picked "/" entry that runs at once: Google Chat's "Send a Meet link" (sent, then opened), or an app's quick
+    /// command (its dialog, for the conversation).
+    func run(_ command: SlashCommand, in conversation: ConversationID) async {
+        switch command.action {
+        case .meetLink: if let url = await sendMeetLink(in: conversation) { openURL(url) }
+        case .quick:
+            await openDialog(DialogContext(message: conversation, app: command.appID, command: command.id), app: command.appName,
+                             in: conversation, action: nil, inputs: [])
+        case nil: break
+        }
+    }
     /// Whether a restored window's conversation is this account's; nil until the list has come.
     func hasConversation(_ id: ConversationID) -> Bool? {
         conversations.isEmpty ? nil : conversations.contains { $0.id == id }
@@ -415,15 +434,23 @@ final class ChatStore {
                 Task { await markRead(message.conversationID) }
             }
         case .messageDeleted(let id): messages.removeAll { $0.id == id }
+        case .conversationUpserted(let room) where room.hidden != nil:   // hidden here or elsewhere: off the sidebar, into Settings' list
+            apply(.conversationRemoved(room.id))
+            hidden.insert(room, at: 0)
         case .conversationUpserted(var room):   // changed elsewhere; a new one is the most recent
+            hidden.removeAll { $0.id == room.id }
             // The open conversation stays read: its server read state can trail what is on screen (my own send, a membership change).
             if room.id == selectedID, room.unread > 0, isAppActive() {
                 room.unread = 0
                 Task { await markRead(room.id) }
             }
             if let i = conversations.firstIndex(where: { $0.id == room.id }) { conversations[i] = room } else { conversations.insert(room, at: 0) }
+            // Members or roles may have changed: what is on screen is read again.
+            if members[room.id] != nil { Task { await reloadMembers(room.id) } }
+            if permissions[room.id] != nil { Task { await loadPermissions(room.id) } }
         case .conversationRemoved(let id):
             conversations.removeAll { $0.id == id }
+            hidden.removeAll { $0.id == id }
             messages.removeAll { $0.conversationID == id }
             notifier?.clear(conversation: id)
             if selectedID == id {
@@ -469,6 +496,9 @@ final class ChatStore {
             statuses[person] = status
             if let state { presence[person] = state; presenceFetched[person] = now() }
             else if presence[person] == .doNotDisturb { presence[person] = nil; presenceFetched[person] = nil }   // DND over: ask again
+            return
+        case .ownStatusChanged(let status):
+            ownStatus = status
             return
         case .resync:
             Task { do { try await refresh() } catch { report(error) } }
@@ -536,6 +566,12 @@ final class ChatStore {
         watching = open
         await backend.watch(open)
     }
+    func setDoNotDisturb(for duration: TimeInterval) async { await setOwnStatus { try await $0.setDoNotDisturb(for: duration) } }
+    func setAway(_ away: Bool) async { await setOwnStatus { try await $0.setAway(away) } }
+    func setCustomStatus(_ status: CustomStatus?) async { await setOwnStatus { try await $0.setCustomStatus(status) } }
+    private func setOwnStatus(_ change: (any ChatBackend) async throws -> OwnStatus) async {
+        do { ownStatus = try await change(backend) } catch { report(error) }
+    }
     /// Asks, in one batch, for everyone whose presence is over 60 s old among 1:1 partners and the open conversation's members.
     // ponytail: the 50 most recent 1:1 DMs; page through the rest if the sidebar shows more dots than that.
     func refreshPresence() async {
@@ -593,11 +629,83 @@ final class ChatStore {
         let known = (members[conversation] ?? []) + (conversations.first { $0.id == conversation }?.members ?? [])
         return known.first { $0.id == id && $0.name != "Unknown" } ?? messages.first { $0.sender.id == id }?.sender
     }
-    /// A card button's action (a Drive comment's Reply, Resolve): sent with the card's inputs; the app's answer replaces the
-    /// message. A refusal says why.
-    func clickCard(_ message: Message, action: Data, inputs: [Card.Input]) async {
-        do { if let updated = try await backend.clickCard(message.id, action: action, inputs: inputs) { upsert(updated); persist() } }
+    /// A card button's action (a Drive comment's Reply, Resolve, a poll's Vote): sent with the card's id and inputs; the
+    /// app's answer replaces the message. A refusal says why, naming the app as Google Chat does. A button that opens the
+    /// app's dialog opens it (`openDialog`).
+    func clickCard(_ message: Message, card: String?, action: Data, inputs: [Card.Input]) async {
+        let cards = message.attachments.compactMap(\.card)
+        if let owner = cards.first(where: { $0.links.contains { $0.action == action && $0.dialog == true } }) {
+            let app = owner.app ?? message.sender.id
+            await openDialog(DialogContext(message: message.id, app: app), app: owner.by?.name ?? message.sender.name,
+                             in: message.conversationID, action: action, inputs: inputs)
+            return
+        }
+        do { if let updated = try await backend.clickCard(message.id, card: card, action: action, inputs: inputs) { upsert(updated); persist() } }
+        catch DynamiteError.appRefused(let why) { self.error = "\(message.sender.name) is unable to process your request." + (why.isEmpty ? "" : " " + why) }
         catch { report(error) }
+    }
+    /// An app's dialog showing over its conversation, with what the app last said was wrong.
+    struct OpenDialog: Hashable {
+        var context: DialogContext
+        var conversation: ConversationID
+        var app: String          // its name, for the sheet's title when the card has none and for errors
+        var dialog: AppDialog
+        var problem: String? = nil
+    }
+    var dialog: OpenDialog?
+    /// A short note shown for a moment over the conversation (an app's "Poll started."); it fades after `toastDuration`.
+    var toast: String? {
+        didSet {
+            toastFade?.cancel()
+            guard toast != nil else { return }
+            toastFade = Task { [weak self, toastDuration] in
+                try? await Task.sleep(for: toastDuration)
+                guard !Task.isCancelled else { return }
+                self?.toast = nil
+            }
+        }
+    }
+    @ObservationIgnored var toastDuration: Duration = .seconds(3)
+    @ObservationIgnored private var toastFade: Task<Void, Never>?
+    /// Opens links an app's answer asks for (its setup page); tests record them.
+    @ObservationIgnored var openURL: @MainActor (URL) -> Void = { NSWorkspace.shared.open($0) }
+    /// Opens an app's dialog: from a card's button (its action and the card's inputs), or with no action for a slash
+    /// command's message. A refusal shows as an error; the dialog shows in a sheet over `conversation`.
+    func openDialog(_ context: DialogContext, app: String, in conversation: ConversationID, action: Data?, inputs: [Card.Input]) async {
+        do {
+            let answer = try await backend.dialog(.open, context, action: action, inputs: inputs)
+            if case .show(let shown) = answer { dialog = OpenDialog(context: context, conversation: conversation, app: app, dialog: shown) }
+            else { apply(answer, app: app) }
+        } catch { report(error) }
+    }
+    /// One of the open dialog's buttons: its action with every input. The app answers with the next step (same sheet),
+    /// what's wrong (kept open, said in the sheet), or done (closed, with its note as a toast).
+    func submitDialog(action: Data, inputs: [Card.Input]) async {
+        guard let open = dialog else { return }
+        do {
+            let answer = try await backend.dialog(.submit, open.context, action: action, inputs: inputs)
+            guard dialog?.context == open.context else { return }   // closed meanwhile
+            apply(answer, app: open.app)
+        } catch {
+            guard dialog?.context == open.context else { return }
+            dialog?.problem = error.localizedDescription
+        }
+    }
+    /// Closes the dialog (✕, Escape) and tells the app, as Google Chat does, without waiting for its answer.
+    func cancelDialog() async {
+        guard let open = dialog else { return }
+        dialog = nil
+        _ = try? await backend.dialog(.cancel, open.context, action: nil, inputs: [])
+    }
+    private func apply(_ answer: DialogAnswer, app: String) {
+        switch answer {
+        case .show(let next): dialog?.dialog = next; dialog?.problem = nil
+        case .close(let note): dialog = nil; if let note { toast = note }
+        case .invalid(let why):
+            let text = why.isEmpty ? "\(app) is unable to process your request." : why
+            if dialog != nil { dialog?.problem = text } else { error = text }
+        case .configure(let url): dialog = nil; openURL(url)
+        }
     }
     /// Where dismissed cards are remembered; tests use their own.
     @ObservationIgnored var defaults = UserDefaults.standard
@@ -781,6 +889,22 @@ final class ChatStore {
     }
 
     /// Once a session, when a picker or the composer first needs them; a failure leaves the list empty and allows a retry.
+    /// Asks the server for `conversation`'s commands matching what's typed after "/", as Google Chat does on each key
+    /// (the full list comes a page at a time). A bare "/" starts over, so added or removed apps show; each other query
+    /// is asked once and its commands join the list.
+    func loadSlashCommands(_ conversation: ConversationID, query: String) async {
+        if query.isEmpty { slashQueries[conversation] = [] }
+        guard slashQueries[conversation, default: []].insert(query).inserted else { return }
+        do {
+            let toApp = conversations.first { $0.id == conversation }?.app != nil
+            let found = try await backend.slashCommands(in: conversation, matching: query, toApp: toApp)
+            let known = query.isEmpty ? [] : slashCommands[conversation] ?? []
+            slashCommands[conversation] = known + found.filter { new in !known.contains { $0.appID == new.appID && $0.id == new.id } }
+        } catch {
+            slashQueries[conversation]?.remove(query)
+            if (error as? AuthFailure)?.endsSession == true { report(error) }
+        }
+    }
     func loadCustomEmoji() async {
         if let customEmojiLoad { return await customEmojiLoad.value }
         let load = Task {
@@ -795,9 +919,19 @@ final class ChatStore {
     }
 
     func loadMembers(_ conversation: ConversationID) async {
-        guard members[conversation] == nil, !memberLoads.contains(conversation) else { return }
+        guard members[conversation] == nil else { return }
+        await reloadMembers(conversation)
+    }
+    /// The list on screen stays until the new one arrives.
+    private func reloadMembers(_ conversation: ConversationID) async {
+        guard !memberLoads.contains(conversation) else { return }
         memberLoads.insert(conversation); defer { memberLoads.remove(conversation) }
         if let people = try? await backend.members(of: conversation), !people.isEmpty { members[conversation] = people }
+    }
+    /// Unknown (nothing offered) when the server doesn't answer.
+    func loadPermissions(_ conversation: ConversationID) async {
+        guard conversations.first(where: { $0.id == conversation })?.kind != .direct else { return }
+        if let allowed = try? await backend.permissions(in: conversation) { permissions[conversation] = allowed }
     }
     /// Adds files to the draft; ones Google Chat would refuse (folders, empty, over 200 MB) are reported and left out.
     func attach(_ urls: [URL], conversation: String, thread: String?) {
@@ -891,6 +1025,11 @@ final class ChatStore {
                                                            serverDraftID: serverDraft),
                                                to: pending.conversationID, thread: pending.threadID)
             messages.removeAll { $0.id == pending.id }; upsert(sent)
+            // A command that opens a dialog: the app's dialog for the command's message, as Google Chat asks for it.
+            if let command = pending.formatting.lazy.compactMap({ if case .slashCommand(let command) = $0.style { command } else { nil } }).first,
+               command.opensDialog {
+                await openDialog(DialogContext(message: sent.id, app: command.appID), app: command.appName, in: sent.conversationID, action: nil, inputs: [])
+            }
         } catch {
             var failed = pending; failed.delivery = .failed; upsert(failed)
             _ = endedSession(error)
@@ -986,15 +1125,55 @@ final class ChatStore {
             report(error); persist()
         }
     }
+    func leave(_ id: ConversationID) async { await removeFromSidebar(id) { try await self.backend.leave(id) } }
+    func hide(_ id: ConversationID) async {
+        guard var room = conversations.first(where: { $0.id == id }) else { return }
+        await removeFromSidebar(id) { try await self.backend.setHidden(true, conversation: id) }
+        guard !conversations.contains(where: { $0.id == id }), !hidden.contains(where: { $0.id == id }) else { return }   // refused, or pushed meanwhile
+        room.hidden = .now
+        hidden.insert(room, at: 0)
+    }
+    /// Back in the sidebar at once; a refusal hides it again and says why.
+    func unhide(_ id: ConversationID) async {
+        guard var room = hidden.first(where: { $0.id == id }) else { return }
+        let hiddenAt = room.hidden
+        room.hidden = nil
+        apply(.conversationUpserted(room)); persist()
+        do { try await backend.setHidden(false, conversation: id) } catch {
+            room.hidden = hiddenAt
+            apply(.conversationUpserted(room)); persist()
+            report(error)
+        }
+    }
     /// Gone from the sidebar at once; a refusal puts it back where it was.
-    func leave(_ id: ConversationID) async {
+    private func removeFromSidebar(_ id: ConversationID, send: () async throws -> Void) async {
         guard let index = conversations.firstIndex(where: { $0.id == id }) else { return }
         let room = conversations[index]
         apply(.conversationRemoved(id))
-        do { try await backend.leave(id) } catch {
+        do { try await send() } catch {
             if !conversations.contains(where: { $0.id == id }) { conversations.insert(room, at: min(index, conversations.count)) }
             report(error); persist()
         }
+    }
+    func rename(_ id: ConversationID, to name: String) async {
+        let name = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !name.isEmpty, let room = conversations.first(where: { $0.id == id }), room.name != name else { return }
+        await change(id, \.name, to: name) { try await self.backend.updateProfile(id, name: name, emoji: nil) }
+    }
+    func setEmoji(_ emoji: String, _ id: ConversationID) async {
+        await change(id, \.emoji, to: emoji) { try await self.backend.updateProfile(id, name: nil, emoji: emoji) }
+    }
+    /// The roster is read again afterwards: a space lists invited people only once they join.
+    func addMembers(_ people: [Person], to id: ConversationID) async {
+        guard !people.isEmpty else { return }
+        do { try await backend.addMembers(people.map(\.id), to: id) } catch { report(error); return }
+        await reloadMembers(id)
+    }
+    /// Off the roster at once; a refusal puts them back.
+    func removeMember(_ person: PersonID, from id: ConversationID) async {
+        let before = members[id]
+        members[id]?.removeAll { $0.id == person }
+        do { try await backend.removeMember(person, from: id) } catch { members[id] = before; report(error) }
     }
     /// A shortcut's messages, newest first; Starred drops a message as soon as it is unstarred.
     func shortcutMessages(_ shortcut: Shortcut) -> [Message] {

@@ -237,6 +237,46 @@ import Testing
             #expect(h.table.rect(ofRow: i).height == layout.height, "row \(i): row \(h.table.rect(ofRow: i).height), layout \(layout.height) at \(h.table.bounds.width)")
         }
     }
+    /// Each row is measured once per width: row views take the table's layouts instead of measuring again, and going
+    /// back to a recent width (a pane closing again) reuses the layouts made for it.
+    @Test func eachRowIsMeasuredOncePerWidth() {
+        let tally = MeasureTally()
+        RowLayout.$tally.withValue(tally) {
+            let h = Harness()
+            h.show(messages(0..<12))
+            for width in [420.0, 800, 420, 800] { h.window.setContentSize(NSSize(width: width, height: 600)); h.settle() }
+        }
+        let repeated = Dictionary(grouping: tally.rows, by: { $0 }).filter { $0.value.count > 1 }.keys.sorted()
+        #expect(repeated.isEmpty, "measured more than once: \(repeated)")
+        #expect(Set(tally.rows.map { $0.split(separator: "@")[1] }).count == 2, "widths measured: \(Set(tally.rows.map { $0.split(separator: "@")[1] }))")
+    }
+    /// A long history isn't re-measured all at once when a resize ends: the rows nearest the reader are, then the rest
+    /// over the next turns of the run loop, while the reader's message stays where it was.
+    @Test func aLongHistoryIsRemeasuredNearTheReaderFirst() async throws {
+        let h = Harness(), shown = messages(0..<600), rows = TimelineRow.rows(shown)
+        h.show(shown)
+        h.scroll(to: h.table.bounds.height / 2)
+        let first = try #require((h.table.rows(in: h.clip).location..<h.table.numberOfRows).first { h.table.rect(ofRow: $0).minY >= h.clip.minY })
+        let id = rows[first].id, onScreen = h.table.rect(ofRow: first).minY - h.clip.minY
+        func checkPlace(_ step: String) {
+            let index = h.coordinator.rows.firstIndex { $0.id == id }!
+            #expect(abs(h.table.rect(ofRow: index).minY - h.clip.minY - onScreen) <= 1, "\(step): the reader's message moved")
+        }
+        func measured(_ i: Int) -> Bool {
+            h.table.rect(ofRow: i).height == RowLayout.make(rows[i], width: h.table.bounds.width, own: rows[i].message.sender.id == "me", kind: .space).height
+        }
+        h.window.setContentSize(NSSize(width: 420, height: 600)); h.settle()
+        checkPlace("right after the resize")
+        let visible = h.table.rows(in: h.clip)
+        #expect((visible.location..<visible.location + visible.length).allSatisfy(measured), "rows in view are measured at once")
+        #expect(!rows.indices.allSatisfy(measured), "far rows wait for later turns")
+        for _ in 0..<200 where !rows.indices.allSatisfy(measured) {
+            try await Task.sleep(for: .milliseconds(10)); h.settle()
+            checkPlace("while re-measuring")
+        }
+        #expect(rows.indices.allSatisfy(measured), "every row ends up measured")
+        checkPlace("after re-measuring")
+    }
     @Test func olderPagesInsertAboveWithoutMovingTheReader() {
         let h = Harness()
         h.show(messages(50..<100))

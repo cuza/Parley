@@ -54,6 +54,8 @@ struct SettingsView: View {
     @State private var giphyKey = Giphy.key ?? ""
     @State private var keyError: String?
     @AppStorage(NotificationSettings.enabledKey) private var notify = true
+    @AppStorage(SidebarLimit.enabledKey) private var limitSections = false
+    @AppStorage(SidebarLimit.countKey) private var sectionLimit = 10
     @AppStorage(NotificationSound.key) private var sound = NotificationSound.standard.stored
     @State private var sounds = NotificationSound.available()
     @State private var notificationStatus = UNAuthorizationStatus.notDetermined
@@ -116,6 +118,16 @@ struct SettingsView: View {
             Text("Plain lists every message on the left, with names and avatars, like Telegram's list mode.")
                 .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)   // wraps instead of truncating
             Divider()
+            LabeledContent("Sidebar") {
+                HStack {
+                    Toggle("Limit sections to", isOn: $limitSections)
+                    Picker("Rows", selection: $sectionLimit) { ForEach(SidebarLimit.choices, id: \.self) { Text("\($0) rows").tag($0) } }
+                        .labelsHidden().fixedSize().disabled(!limitSections)
+                }
+            }
+            Text("As web Chat: Direct messages, Spaces and Apps show their first rows, then Show all. Unread conversations and the open one always show.")
+                .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)   // wraps instead of truncating
+            Divider()
             Toggle("Show notifications", isOn: $notify)
                 .onChange(of: notify) { _, on in if on { Task { notificationStatus = await SystemNotifier.requestAuthorization() } } }
                 .task { notificationStatus = await UNUserNotificationCenter.current().notificationSettings().authorizationStatus }
@@ -145,6 +157,8 @@ struct SettingsView: View {
             Text("Each conversation notifies as set in its Notifications menu, the same setting web and mobile Chat use. Muted conversations never notify. Banners and sounds are also set in System Settings ▸ Notifications.")
                 .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)   // wraps instead of truncating
             Divider()
+            HiddenConversationsSection(store: store)
+            Divider()
             SecureField("GIPHY API key", text: $giphyKey)
                 .onChange(of: giphyKey) { _, key in
                     let key = key.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -161,6 +175,16 @@ struct SettingsView: View {
             }
             Text("Connection status, the saved session and read checks, with a report to copy.")
                 .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)   // wraps instead of truncating
+            // ponytail: the count is read when Settings draws; it doesn't follow new messages while it is open.
+            let kinds = MessageShapes.shared.withLock { $0.entries.count }
+            LabeledContent("Unsupported content") {
+                HStack {
+                    Button("Export…") { MessageShapes.saveExport() }
+                    Button("Copy Summary") { MessageShapes.copySummary() }
+                }.disabled(kinds == 0)
+            }
+            Text("\(kinds) kind\(kinds == 1 ? "" : "s") seen this session. Message content Parley can't draw yet, as field numbers only: no text, names or ids.")
+                .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
         }
         .confirmationDialog("Sign out of Google Chat?", isPresented: $confirmSignOut) {
             Button("Sign Out", role: .destructive) {

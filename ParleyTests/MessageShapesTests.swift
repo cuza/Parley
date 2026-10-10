@@ -14,7 +14,9 @@ struct MessageShapesTests {
     }
     @Test func theSkeletonCarriesNoContent() throws {
         var store = MessageShapes.Store()
-        let added = store.record(flagged(), fields: ["19.1=9"]); #expect(added)
+        let fields = MessageCoverage.gaps(flagged(), selfID: "me")
+        #expect(fields == ["19.1=9"])
+        let added = store.record(flagged(), fields: fields); #expect(added)
         let json = try #require(String(data: MessageShapes.export(store.entries, app: "1.0 (1)", os: "15.0", date: Date(timeIntervalSince1970: 0)), encoding: .utf8))
         for secret in ["Secret", "Alice", "alice@example.com", "msg-id-424242", "user-id-777", "setup.example.com", "424242", "777"] {
             #expect(!json.contains(secret), "\(secret) leaked")
@@ -43,15 +45,21 @@ struct MessageShapesTests {
         }
     }
     private func flag(_ message: Dynamite_Message, in store: inout MessageShapes.Store) -> Bool {
-        store.record(message, fields: DynamiteMapper.undrawn(message, selfID: "me"), parts: DynamiteMapper.undrawnParts(message))
+        store.record(message, fields: MessageCoverage.gaps(message, selfID: "me"))
     }
     @Test func oneGapIsOneEntryWhateverElseTheMessageHolds() throws {
         var store = MessageShapes.Store()
         let first = flag(try drive(rows: 1), in: &store), second = flag(try drive(rows: 4), in: &store)
         #expect(first && !second)
-        #expect(store.entries.count == 1 && store.entries.first?.count == 2 && store.entries.first?.fields == ["15.7.2.2"])
+        #expect(store.entries.count == 1 && store.entries.first?.count == 2 && store.entries.first?.fields == ["15.7.2.2.?21"])
         let other = flag(try drive(rows: 2, kind: 22), in: &store)   // another widget kind Parley doesn't draw
         #expect(other && store.entries.count == 2)
+    }
+    @Test func theSummaryCountsMessagesPerGapMostSeenFirst() {
+        let entries = [MessageShapes.Entry(fields: ["15.7.2.2.13.?6", "19.1=5"], skeleton: "", count: 3),
+                       MessageShapes.Entry(fields: ["19.1=5"], skeleton: "", count: 2)]
+        #expect(MessageShapes.summary(entries) == ["19.1=5 — 5 messages", "15.7.2.2.13.?6 — 3 messages"])
+        #expect(MessageShapes.summary([MessageShapes.Entry(fields: ["50"], skeleton: "")]) == ["50 — 1 message"])
     }
     @Test func theLogLineNamesOnlyFields() {
         #expect(MessageShapes.logLine(["19.1=9", "35"]) == "a message has content Parley doesn't draw: fields 19.1=9, 35")

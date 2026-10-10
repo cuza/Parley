@@ -58,6 +58,17 @@ enum DynamiteMapper {
         let text = [status.customStatus.emoji.unicode, status.customStatus.statusText].filter { !$0.isEmpty }.joined(separator: " ")
         return text.isEmpty ? nil : text
     }
+    /// My status: DND while its state says so, else away when presence is not shared. Expiries are µs.
+    static func ownStatus(_ status: Dynamite_UserStatus) -> OwnStatus {
+        let dnd = status.dndSettings
+        let availability: OwnStatus.Availability = dnd.dndState == .dnd ? .doNotDisturb(until: date(dnd.dndExpiryTimeUsec))
+            : status.hasPresenceShared && !status.presenceShared ? .away : .automatic
+        let custom = status.customStatus
+        let set = status.hasCustomStatus && !(custom.statusText.isEmpty && custom.emoji.unicode.isEmpty)
+        return OwnStatus(availability: availability, custom: set ? CustomStatus(
+            text: custom.statusText, emoji: custom.emoji.unicode,
+            expires: custom.stateExpiryTimestampUsec > 0 ? date(custom.stateExpiryTimestampUsec) : nil) : nil)
+    }
     /// Avatar and preview image URLs may be scheme-relative (`//lh3…`). Only https is loaded.
     static func imageURL(_ raw: String) -> URL? {
         guard let url = URL(string: raw.hasPrefix("//") ? "https:" + raw : raw), url.scheme == "https", url.host() != nil else { return nil }
@@ -83,9 +94,9 @@ enum DynamiteMapper {
         let senderID = proto.creator.userID.id
         let sender = people[senderID] ?? person(proto.creator)
         let id = DynamiteID.message(conversation, topic: proto.id.parentID.topicID.topicID, message: proto.id.messageID)
-        let missing = undrawn(proto, selfID: selfID)
+        let missing = MessageCoverage.gaps(proto, selfID: selfID)
         // Anonymous: the fields only, once per shape; the shape is kept for Help ▸ Export Unsupported Message Shapes.
-        if !missing.isEmpty, MessageShapes.shared.withLock({ $0.record(proto, fields: missing, parts: undrawnParts(proto)) }) {
+        if !missing.isEmpty, MessageShapes.shared.withLock({ $0.record(proto, fields: missing) }) {
             log.notice("\(MessageShapes.logLine(missing), privacy: .public)")
         }
         // A deleted message Google Chat keeps in its place: who deleted it, in italics, as Google Chat shows it.
@@ -129,7 +140,7 @@ enum DynamiteMapper {
         }
         let rich = richText(proto.textBody, proto.annotations, hiding: fallback)
         // An app that couldn't answer sends no text, only why: say so, with a link to set it up when it needs that.
-        if rich.text.isEmpty, attachments.isEmpty, let response = proto.botResponses.first(where: { $0.type != appSuggestion }) {
+        if rich.text.isEmpty, attachments.isEmpty, let response = proto.botResponses.first(where: { $0.type != appSuggestion && $0.type != slashCommandEcho }) {
             let app = response.bot.name.isEmpty ? sender.name : response.bot.name
             let setup = URL(string: response.setupURL).flatMap { $0.scheme == "https" ? Attachment(name: "Configure \(app)", kind: .link, url: $0) : nil }
             return Message(id: id, conversationID: conversation, sender: sender, text: "\(app) couldn’t respond", createdAt: date(proto.createTime),
@@ -144,8 +155,10 @@ enum DynamiteMapper {
                        createdAt: date(proto.createTime), edited: proto.lastEditTime > 0 && !isMeetCall(proto), reactions: reactions, attachments: unsupported ? open.map { [$0] } ?? [] : attachments,
                        formatting: rich.formatting, quote: quote,
                        lastUpdateMicros: [proto.lastUpdateTime, proto.lastEditTime, proto.createTime].first { $0 > 0 },
-                       // An app's name, and "Only visible to you" on a message only I can see.
-                       via: [appIDs(proto).first.map { people[$0]?.name ?? "App" }, proto.privateMessageViewers.isEmpty ? nil : "Only visible to you"]
+                       // "App" after an app's name, the app that posted for a person, and "Only visible to you" on a message
+                       // only I can see (one for named viewers, or one the server holds for me alone: message state 2).
+                       via: [proto.creator.userID.type == .bot ? "App" : nil, appIDs(proto).first.map { people[$0]?.name ?? "App" },
+                             proto.privateMessageViewers.isEmpty && proto.messageState != 2 ? nil : "Only visible to you"]
                            .compactMap { $0 }.joined(separator: " · ").nilIfEmpty,
                        starred: proto.messageLabels.contains { $0.type == .star })
         // Google Chat gives a picture a new token, so a new URL, on every load: its cache knows it by its message and place.
@@ -191,51 +204,22 @@ enum DynamiteMapper {
             case .tasks: .tasks
             default: .web
             }
-            return Source(title: source.title.isEmpty ? url.host() ?? source.url : source.title, url: url, kind: kind)
+            let detail = [source.snippet.text, source.footer.text].first { !$0.isEmpty }
+            return Source(title: source.title.isEmpty ? url.host() ?? source.url : source.title, url: url, kind: kind, detail: detail)
         }
     }
-    private static let appSuggestion: Int32 = 6   // BotResponse type APP_SUGGESTION
+    static let appSuggestion: Int32 = 6   // BotResponse type APP_SUGGESTION
+    /// BotResponse type on a slash command's own message: the command went to the app; nothing to draw.
+    static let slashCommandEcho: Int32 = 5
     private static let log = Logger(subsystem: "dev.cuza.Parley", category: "dynamite")
-    /// Field numbers of content on `proto` that Parley doesn't draw ("19.1=<type>" for a bot response), so a new
-    /// message shape shows up in the log instead of vanishing: bot responses other than an app suggestion, or the
-    /// "couldn't respond" row on a message without text; a private message for someone else; a translation; client-side-
-    /// encrypted content. Numbers only: no text or names.
-    static func undrawn(_ proto: Dynamite_Message, selfID: String) -> [String] {
-        // Drawn: an app suggestion; types 1–4 as the "couldn't respond" row without text, or with text as the card saying
-        // what the app needs (`appCards`), when they say it.
-        let bots = proto.botResponses.filter { $0.type != appSuggestion
-            && !((1...4).contains($0.type) && (proto.textBody.isEmpty || $0.hasRequiredAction)) }
-        return bots.map { "19.1=\($0.type)" }
-            + (proto.privateMessageViewers.contains { $0.viewer.id != selfID } ? ["35"] : [])
-            + (proto.hasEncryptedContent ? ["50"] : [])
-            + (undrawnWidgets(proto).isEmpty ? [] : ["15.7.2.2"]) + (droppedButtons(proto).isEmpty ? [] : ["15.7.2.2.8"])
-    }
-    /// The skeletons (`MessageShapes`) of the card widgets and buttons `undrawn` reports: what tells one gap from another.
-    static func undrawnParts(_ proto: Dynamite_Message) -> [String] {
-        let widgets = undrawnWidgets(proto).compactMap { try? $0.serializedBytes() as [UInt8] }.compactMap { MessageShapes.skeleton($0[...], path: [15, 7, 2, 2]) }
-        let buttons = droppedButtons(proto).compactMap { try? $0.serializedBytes() as [UInt8] }.compactMap { MessageShapes.skeleton($0[...], path: [15, 7, 2, 2, 8]) }
-        return widgets + buttons
-    }
-    /// Card widgets of a kind Parley doesn't draw (an input, a chip list, a grid…).
-    private static func undrawnWidgets(_ proto: Dynamite_Message) -> [Dynamite_CardWidget] {
-        proto.appAttachments.flatMap { $0.card.sections.flatMap(\.widgets) }.filter { w in
-            !(w.hasTextParagraph || !w.buttons.isEmpty || w.hasDecoratedText || w.hasImage || w.hasDivider || w.hasColumns || w.hasTextInput)
-        }
-    }
-    /// Buttons Parley drops: icon-only, or ones that neither open a link nor act (Gemini's feedback row aside).
-    private static func droppedButtons(_ proto: Dynamite_Message) -> [Dynamite_CardButton] {
-        proto.appAttachments.filter { !isFeedbackRow($0) }.flatMap { $0.card.sections.flatMap(\.widgets) }.flatMap { w in
-            w.buttons + w.columns.columns.flatMap { $0.widgets.flatMap(\.buttons) }
-        }.filter { !drawn($0) }
-    }
     /// An app that could preview a link in my message, offered to me alone, as Google Chat draws it under the message:
     /// "Only visible to you", the app, why, and Install, which opens the message in Google Chat where the install
     /// dialog lives. "Don't install" hides it in Parley only.
-    /// Also, on a message with text, an app that needs setting up (types 1–4 with a required action), as Google Chat's
+    /// Also an app that needs setting up (types 1–4 with a required action), as Google Chat's
     /// clients word it: "<app> requires authentication" with Sign in, "requires configuration" with Configure (both open
     /// the setup link), or "<app> not responding". The app is named as looked up (`cardAppIDs`), else "App".
     static func appCards(_ proto: Dynamite_Message, id: MessageID, people: [String: Person] = [:]) -> [Attachment] {
-        let setups: [Attachment] = proto.textBody.isEmpty ? [] : proto.botResponses.filter { (1...4).contains($0.type) && $0.hasRequiredAction }.map { response -> Attachment in
+        let setups: [Attachment] = proto.botResponses.filter { (1...4).contains($0.type) && $0.hasRequiredAction }.map { response -> Attachment in
             let known = people[response.bot.userID.id].flatMap { $0.name == "Unknown" ? nil : $0 }
             let app = response.bot.name.isEmpty ? known?.name ?? "App" : response.bot.name, only = "Only visible to you"
             let icon = URL(string: response.bot.avatarURL).flatMap { $0.scheme == "https" ? $0 : nil } ?? known?.avatarURL
@@ -244,9 +228,10 @@ enum DynamiteMapper {
             case 2: ("\(app) requires authentication", "Sign in")
             default: ("\(app) not responding", nil)
             }
-            var items: [Card.Item] = [.text(only, [TextStyleRange(style: .color(Card.secondaryText), start: 0, length: (only as NSString).length)]),
-                                      .row(icon: icon, round: false, label: nil, text: app, formatting: [TextStyleRange(style: .bold, start: 0, length: (app as NSString).length)]),
-                                      .text(title, [])]
+            // The message itself says "Only visible to you" when the server holds it for me alone (state 2).
+            var items: [Card.Item] = (proto.messageState == 2 ? [] : [.text(only, [TextStyleRange(style: .color(Card.secondaryText), start: 0, length: (only as NSString).length)])])
+                + [.row(icon: icon, round: false, label: nil, text: app, formatting: [TextStyleRange(style: .bold, start: 0, length: (app as NSString).length)]),
+                   .text(title, [])]
             if let button, let url = URL(string: response.setupURL), url.scheme == "https" { items.append(.links([Card.Link(title: button, url: url)])) }
             return Attachment(name: app, kind: .card, card: Card(sections: [items]))
         }
@@ -264,57 +249,216 @@ enum DynamiteMapper {
             return Attachment(name: app, kind: .card, card: Card(sections: [top], dismiss: "Don't install"))
         }
     }
-    /// An app's cards, read-only, as attachments drawn under the message: titles and rows, paragraphs with their styles
-    /// (a row that opens a link becomes a link), and buttons: one that opens a link opens it, one that sends an action to
-    /// the app opens the message in Google Chat (with `id`), where the action works.
-    /// Inputs are left out. A Meet call's card says what its chip says, and Ask Gemini's is only its feedback row.
+    /// An app's cards as attachments drawn under the message: the header (with its picture), sections (collapsible ones
+    /// end in their toggle), paragraphs and rows with their formatting, a row's end button, pictures, and buttons: one
+    /// that opens a link opens it, one that sends an action to the app sends it (`click_card`, with the card's `id`),
+    /// one that opens a dialog carries its action too, marked `dialog` (Parley opens the dialog, `ChatBackend.dialog`).
+    /// The buttons an app puts under its message ("accessory_actions") are drawn bare; Ask Gemini's feedback row (icon
+    /// buttons only) and a Meet call's card (its chip says the same) are left out.
     static func cards(_ proto: Dynamite_Message, id: MessageID? = nil, people: [String: Person] = [:]) -> [Attachment] {
         let chat = id.flatMap(ChatLink.url(message:))
         guard !isMeetCall(proto) else { return [] }
         return proto.appAttachments.compactMap { attachment -> Attachment? in
             guard attachment.hasCard, !isFeedbackRow(attachment) else { return nil }
-            var sections: [[Card.Item]] = []
-            if attachment.card.hasHeader {
-                var title = CardText(); title.add(attachment.card.header.title, bold: true)
-                var subtitle = CardText(); subtitle.add(attachment.card.header.subtitle)
-                sections.append([title.item, subtitle.item].compactMap { $0 })
-            }
-            for section in attachment.card.sections {
-                var items: [Card.Item] = []
-                if !section.header.isEmpty { items.append(.text(section.header, [TextStyleRange(style: .bold, start: 0, length: (section.header as NSString).length)])) }
-                for widget in section.widgets {
-                    if widget.hasImage, let url = URL(string: widget.image.imageURL), url.scheme == "https" {
-                        items.append(.image(url, aspect: widget.image.aspectRatio > 0 ? widget.image.aspectRatio : 16.0 / 9))
-                    }
-                    if widget.hasDivider { items.append(.divider) }
-                    if widget.hasTextInput { items.append(.input(name: widget.textInput.name, label: widget.textInput.label, value: widget.textInput.value)) }
-                    items += item(widget.textParagraph) + item(widget.decoratedText) + links(widget.buttons, chat: chat)
-                    // Columns of buttons only share one row, the end column's at the end, as web lays them out.
-                    let columns = widget.columns.columns
-                    if !columns.isEmpty, columns.allSatisfy({ $0.widgets.allSatisfy { !$0.hasTextParagraph && !$0.hasDecoratedText } }) {
-                        let row = columns.flatMap { column in
-                            links(column.widgets.flatMap(\.buttons), chat: chat).flatMap { item -> [Card.Link] in
-                                guard case .links(let links) = item else { return [] }
-                                return links.map { var link = $0; if column.horizontalAlignment == 3 { link.trailing = true }; return link }
-                            }
-                        }
-                        if !row.isEmpty { items.append(.links(row)) }
-                    } else {
-                        for column in columns {
-                            for part in column.widgets { items += item(part.textParagraph) + item(part.decoratedText) + links(part.buttons, chat: chat) }
-                        }
-                    }
-                }
-                if !items.isEmpty { sections.append(items) }
-            }
+            var sections = Self.sections(attachment.card, chat: chat)
             guard !sections.isEmpty else { return nil }
+            // A card that needs what Parley doesn't draw says where to see all of it, as Google Chat's other clients do.
+            if let chat, attachment.card.requiredFeatures.contains(where: { !supportedFeatures.contains($0) }) {
+                let note = "Open in Google Chat for the full card", open = "Open in Google Chat"
+                sections.append([.text(note, [TextStyleRange(style: .link(chat), start: 0, length: (open as NSString).length)])])
+            }
             let name = sections.lazy.flatMap { $0 }.compactMap { item -> String? in
-                switch item { case .text(let text, _, _), .row(_, _, _, let text, _, _): text; case .links, .image, .divider, .input: nil }
+                if case .text(let text, _, _) = item { text } else if case .row(_, _, _, let text, _, _, _, _, _) = item { text } else { nil }
             }.first ?? "Card"
             // The app that made it, once looked up (see `cardAppIDs`).
             let by = people[attachment.app.userID.id].flatMap { $0.name == "Unknown" ? nil : $0 }.map { Card.Attribution(name: $0.name, icon: $0.avatarURL) }
-            return Attachment(name: name, kind: .card, card: Card(sections: sections, by: by))
+            // The app its dialogs talk to: the card's own, else the app that sent the message.
+            let app = attachment.app.userID.id.isEmpty ? (proto.creator.userID.type == .bot ? proto.creator.userID.id : "") : attachment.app.userID.id
+            return Attachment(name: name, kind: .card, card: Card(sections: sections, id: attachment.attachmentID.isEmpty ? nil : attachment.attachmentID,
+                                                                  app: app.isEmpty ? nil : app,
+                                                                  bare: attachment.attachmentID == accessoryActions ? true : nil,
+                                                                  dividers: attachment.card.sectionDividerStyle == 2 ? false : nil, by: by))
         }
+    }
+    /// An app's dialog as the sheet draws it: the header's title as the sheet's, the sections, and the fixed footer's
+    /// buttons. Every action in it goes back as a submit (`DialogStep.submit`).
+    static func dialog(_ card: Dynamite_Card, message: MessageID) -> AppDialog {
+        let chat = ChatLink.url(message: message)
+        var title = CardText(); title.add(card.header.title)
+        var sections = Self.sections(card, chat: chat, header: false)
+        var subtitle = CardText(); subtitle.add(card.header.subtitle)
+        if let item = subtitle.item { sections.insert([item], at: 0) }
+        func button(_ text: Dynamite_TextButton) -> Card.Link? { link(.with { $0.textButton = text }, chat: chat) }
+        let footer = card.fixedFooter
+        return AppDialog(title: title.trimmed.isEmpty ? nil : title.trimmed,
+                         card: Card(sections: sections, dividers: card.sectionDividerStyle == 2 ? false : nil),
+                         primary: footer.hasPrimaryButton ? button(footer.primaryButton) : nil,
+                         secondary: footer.hasSecondaryButton ? button(footer.secondaryButton) : nil)
+    }
+    /// A card's sections as drawn (with its header unless `header` is false), its required inputs marked.
+    private static func sections(_ card: Dynamite_Card, chat: URL?, header: Bool = true) -> [[Card.Item]] {
+        var sections: [[Card.Item]] = []
+        if header, card.hasHeader {
+            let top = card.header
+            var title = CardText(); title.add(top.title, bold: true)
+            var subtitle = CardText(); subtitle.add(top.subtitle)
+            if let image = imageURL(top.imageURL) {   // the picture left of the title and subtitle, as web draws it
+                var text = CardText(); text.add(top.title, bold: true); text.newline()
+                text.add(top.subtitle, over: [.color(Card.secondaryText)])
+                sections.append([.row(icon: image, round: top.imageType == 2, label: nil, text: text.trimmed, formatting: text.formatting)])
+            } else {
+                sections.append([title.item, subtitle.item].compactMap { $0 })
+            }
+        }
+        for section in card.sections {
+            var items: [Card.Item] = [], boundary: Int?
+            if !section.header.isEmpty { items.append(.text(section.header, [TextStyleRange(style: .bold, start: 0, length: (section.header as NSString).length)])) }
+            else if section.hasFormattedHeader { var header = CardText(); header.add(section.formattedHeader); items += [header.item].compactMap { $0 } }
+            for (index, widget) in section.widgets.enumerated() {
+                if section.collapsible, index == Int(section.uncollapsibleWidgetsCount) { boundary = items.count }
+                items += Self.items(widget, chat: chat)
+            }
+            // A collapsible section: what follows its first widgets shows once expanded, with the control's own words.
+            if let boundary, boundary < items.count {
+                func label(_ button: Dynamite_CardButton) -> String? {
+                    var text = CardText(); text.add(button.textButton.label); return text.trimmed.isEmpty ? nil : text.trimmed
+                }
+                items.append(.collapse(more: label(section.collapseControl.expandButton) ?? "Show more",
+                                       less: label(section.collapseControl.collapseButton) ?? "Show less", hidden: items.count - boundary))
+            }
+            if !items.isEmpty { sections.append(items) }
+        }
+        return required(tidy(sections, lines: card.sectionDividerStyle != 2))
+    }
+    /// The card's dividers as Google Chat draws them: never two lines in a row (a divider next to a section's own line,
+    /// or a section that is only a divider), nor one at the card's top or bottom. A collapsible section keeps its items,
+    /// which its toggle counts.
+    static func tidy(_ sections: [[Card.Item]], lines: Bool) -> [[Card.Item]] {
+        var tidied: [[Card.Item]] = [], line = true   // the card's top counts as a line
+        for section in sections {
+            if lines, !tidied.isEmpty { line = true }
+            if case .collapse? = section.last { tidied.append(section); line = false; continue }
+            var kept: [Card.Item] = []
+            for item in section {
+                if case .divider = item { if line { continue }; line = true } else { line = false }
+                kept.append(item)
+            }
+            if lines, case .divider? = kept.last { kept.removeLast() }
+            if !kept.isEmpty { tidied.append(kept) }
+        }
+        while case .divider? = tidied.last?.last {   // and none at the bottom
+            tidied[tidied.count - 1].removeLast()
+            if tidied.last?.isEmpty == true { tidied.removeLast() }
+        }
+        return tidied
+    }
+    /// What Google Chat's card features (`Card.required_features`) Parley draws: header, sections, paragraphs, icons, buttons,
+    /// rows, images, text fields, date and time pickers, every selection kind, dividers, button lists, icon buttons,
+    /// columns, row switches, code, lists, actions, links, overflow menus, Markdown. Not: footers (dialogs), grids,
+    /// carousels, chips, autocompletion, navigation, Drive pickers.
+    static let supportedFeatures: Set<Int32> = [1, 2, 1000, 1001, 1002, 1003, 1004, 1006, 1007, 1008, 1009, 1010, 1011, 1012, 1013,
+                                                1014, 1016, 1017, 1018, 1019, 1020, 1021, 1025, 1026, 2000, 2001, 2002, 2005, 3000]
+    /// One widget's items, as Google Chat draws it (a column's widgets too).
+    private static func items(_ widget: Dynamite_CardWidget, chat: URL?) -> [Card.Item] {
+        var items: [Card.Item] = []
+        if widget.hasImage, let url = URL(string: widget.image.imageURL), url.scheme == "https" {
+            let click = link(onClick: widget.image.onClick, title: "", chat: chat)
+            items.append(.image(url, aspect: widget.image.aspectRatio > 0 ? widget.image.aspectRatio : 16.0 / 9, click: click,
+                                alt: widget.image.altText.isEmpty ? nil : widget.image.altText))
+        }
+        if widget.hasDivider { items.append(.divider) }
+        if widget.hasTextInput { items.append(.field(field(widget.textInput))) }
+        if widget.hasSelectionInput { items.append(.choice(choice(widget.selectionInput))) }
+        if widget.hasDateTimePicker {
+            let picker = widget.dateTimePicker
+            items.append(.date(Card.DateField(name: picker.name, label: picker.label.isEmpty ? nil : picker.label,
+                                              kind: Card.DateField.Kind(rawValue: Int(picker.type)) ?? .dateAndTime,
+                                              ms: picker.valueMsEpoch > 0 ? picker.valueMsEpoch : nil)))
+        }
+        items += item(widget.textParagraph) + item(widget.decoratedText, chat: chat) + links(widget.buttons, chat: chat)
+        // Columns of buttons only share one row, the end column's at the end, as web lays them out; others sit side by side.
+        let columns = widget.columns.columns
+        if !columns.isEmpty, columns.allSatisfy({ $0.widgets.allSatisfy { $0.buttons.count > 0 && !$0.hasTextParagraph && !$0.hasDecoratedText } }) {
+            let row = columns.flatMap { column in
+                links(column.widgets.flatMap(\.buttons), chat: chat).flatMap { item -> [Card.Link] in
+                    guard case .links(let links) = item else { return [] }
+                    return links.map { var link = $0; if column.horizontalAlignment == 3 { link.trailing = true }; return link }
+                }
+            }
+            if !row.isEmpty { items.append(.links(row)) }
+        } else if !columns.isEmpty {
+            let drawn = columns.prefix(2).map { column in   // two at most, as Google Chat allows
+                column.widgets.flatMap { part in
+                    Self.items(.with { w in
+                        if part.hasDateTimePicker { w.dateTimePicker = part.dateTimePicker }
+                        if part.hasImage { w.image = part.image }
+                        if part.hasDecoratedText { w.decoratedText = part.decoratedText }
+                        if part.hasSelectionInput { w.selectionInput = part.selectionInput }
+                        if part.hasTextInput { w.textInput = part.textInput }
+                        if part.hasTextParagraph { w.textParagraph = part.textParagraph }
+                        w.buttons = part.buttons
+                    }, chat: chat)
+                }
+            }
+            // Text beside a single button: a row with the button at its end, the text taking the rest, as web draws it.
+            var row: Card.Item?
+            if drawn.count == 2, drawn[0].count == 1, drawn[1].count == 1, case .links(let end) = drawn[1][0], end.count == 1 {
+                switch drawn[0][0] {
+                case .text(let text, let formatting, _):
+                    row = .row(icon: nil, round: false, label: nil, text: text, formatting: formatting, button: end[0])
+                case .row(let icon, let round, let label, let text, let formatting, let open, nil, nil, let alt):
+                    row = .row(icon: icon, round: round, label: label, text: text, formatting: formatting, open: open, button: end[0], alt: alt)
+                default: break
+                }
+            }
+            if let row { items.append(row) } else if drawn.contains(where: { !$0.isEmpty }) { items.append(.columns(drawn)) }
+        }
+        return items
+    }
+    private static func field(_ input: Dynamite_TextInput) -> Card.Field {
+        let validation = input.validation
+        let kind: Card.Field.Kind? = switch validation.inputType { case 2: .integer; case 3: .number; case 4: .email; default: nil }
+        return Card.Field(name: input.name, label: input.label, value: input.value, hint: input.hintText.isEmpty ? nil : input.hintText,
+                          placeholder: input.placeholderText.isEmpty ? nil : input.placeholderText, multiline: input.type == 1 ? true : nil,
+                          limit: validation.characterLimit > 0 ? Int(validation.characterLimit) : nil, kind: kind)
+    }
+    private static func choice(_ input: Dynamite_SelectionInput) -> Card.Choice {
+        let style: Card.Choice.Style = switch input.type { case 0: .checkbox; case 1: .radio; case 2: .switches; case 4: .multiple; default: .menu }
+        let options = input.items.map { item in
+            Card.Choice.Option(text: item.text, value: item.value.isEmpty ? item.text : item.value, selected: item.selected,
+                               detail: item.bottomText.isEmpty ? nil : item.bottomText)
+        }
+        return Card.Choice(name: input.name, label: input.label.isEmpty ? nil : input.label, style: style, options: options,
+                           limit: input.multiSelectMaxSelectedItems > 0 ? Int(input.multiSelectMaxSelectedItems) : nil)
+    }
+    /// The card with each input an action needs marked required, so it keeps room to say so.
+    private static func required(_ sections: [[Card.Item]]) -> [[Card.Item]] {
+        var names = Set<String>(), all = false
+        func scan(_ link: Card.Link?) {
+            guard let link else { return }
+            for name in link.required ?? [] { if name == "*" { all = true } else { names.insert(name) } }
+            link.menu?.forEach { scan($0.link) }
+        }
+        let card = Card(sections: sections)
+        for item in card.allItems {
+            switch item {
+            case .links(let links): links.forEach(scan)
+            case .row(_, _, _, _, _, _, let button, _, _): scan(button)
+            case .image(_, _, let click, _): scan(click)
+            default: break
+            }
+        }
+        guard all || !names.isEmpty else { return sections }
+        func mark(_ item: Card.Item) -> Card.Item {
+            switch item {
+            case .field(var field) where all || names.contains(field.name): field.required = true; return .field(field)
+            case .choice(var choice) where all || names.contains(choice.name): choice.required = true; return .choice(choice)
+            case .date(var date) where all || names.contains(date.name): date.required = true; return .date(date)
+            case .columns(let columns): return .columns(columns.map { $0.map(mark) })
+            default: return item
+            }
+        }
+        return sections.map { $0.map(mark) }
     }
     private static func item(_ widget: Dynamite_TextParagraph) -> [Card.Item] {
         guard widget.hasText else { return [] }
@@ -322,7 +466,7 @@ enum DynamiteMapper {
         guard case .text(let string, let formatting, _)? = text.item else { return [] }
         return [.text(string, formatting, lines: widget.maxLines > 0 ? Int(widget.maxLines) : nil)]
     }
-    private static func item(_ widget: Dynamite_DecoratedText) -> [Card.Item] {
+    private static func item(_ widget: Dynamite_DecoratedText, chat: URL?) -> [Card.Item] {
         guard widget.hasText || widget.hasTopLabel else { return [] }
         // The row's on-click opens from anywhere on it, its text no link (web draws it plain); links in the text stay.
         var text = CardText(); text.add(widget.text, over: widget.wrapText ? [] : [.nowrap])
@@ -330,32 +474,78 @@ enum DynamiteMapper {
         var label = CardText(); label.add(widget.topLabel)
         let iconURL = widget.icon.url.isEmpty ? widget.startIconURL : widget.icon.url
         let round = widget.icon.imageType == 2 || widget.startIconImageType == 2
+        // The end button (or switch) sits in either of two fields, as cards of different ages carry it.
+        let button = widget.hasEndButton ? widget.endButton : widget.hasButton ? widget.button : nil
+        let control = widget.hasEndSwitchControl ? widget.endSwitchControl : widget.hasSwitchControl ? widget.switchControl : nil
+        let toggle = control.map { Card.Toggle(name: $0.name, value: $0.value, on: $0.selected, checkbox: $0.controlType == 2) }
+        let alt = [widget.icon.altText, widget.startIconAltText].first { !$0.isEmpty }
         return [.row(icon: URL(string: iconURL), round: round, label: label.text.isEmpty ? nil : label.text,
-                     text: text.trimmed, formatting: text.formatting, open: openLink(widget.onClick))]
+                     text: text.trimmed, formatting: text.formatting, open: openLink(widget.onClick), button: button.flatMap { link($0, chat: chat) },
+                     toggle: toggle, alt: alt)]
     }
+    /// The id of the buttons an app puts under its message (and of Gemini's feedback row).
+    static let accessoryActions = "accessory_actions"
     /// Gemini's feedback row: icon buttons only, under the id "accessory_actions". An app's card with that id and a
     /// text button (a reminder's "Manage reminder") is not one.
-    private static func isFeedbackRow(_ attachment: Dynamite_AppAttachment) -> Bool {
-        attachment.attachmentID == "accessory_actions"
+    static func isFeedbackRow(_ attachment: Dynamite_AppAttachment) -> Bool {
+        attachment.attachmentID == accessoryActions
             && !attachment.card.sections.contains { $0.widgets.contains { $0.buttons.contains(where: \.hasTextButton) } }
     }
-    /// Whether `links` draws the button: a text button that opens a link or sends an action.
-    private static func drawn(_ button: Dynamite_CardButton) -> Bool {
-        button.hasTextButton && (button.textButton.onClick.hasOpenLink || button.textButton.onClick.hasAction)
-    }
-    /// A button that sends an action to the app carries it (Parley sends it with `click_card`), with the message in Google
-    /// Chat (`chat`) as its link; one whose action opens a dialog (such as "Sign in") only opens the message there.
     private static func links(_ buttons: [Dynamite_CardButton], chat: URL?) -> [Card.Item] {
-        let links = buttons.compactMap { button -> Card.Link? in
-            let onClick = button.textButton.onClick
-            guard let url = openLink(onClick) ?? (onClick.hasAction ? chat : nil) else { return nil }
-            var label = CardText(); label.add(button.textButton.label)
-            let filled = [2, 3].contains(button.textButton.type)   // FILLED, FILLED_TONAL
-            // An action Parley can send itself, unless it opens a dialog, which only Google Chat draws.
-            let sendable = onClick.hasAction && openLink(onClick) == nil && (try? Dynamite_CardAction(serializedBytes: onClick.action)).map { $0.interaction != 1 } == true
-            return Card.Link(title: label.text.isEmpty ? "Open" : label.trimmed, url: url, filled: filled ? true : nil, action: sendable ? onClick.action : nil)
-        }
+        let links = buttons.compactMap { link($0, chat: chat) }
         return links.isEmpty ? [] : [.links(links)]
+    }
+    /// A card button as Google Chat draws it: its label (or only its icon), its look, greyed when disabled. One that
+    /// sends an action to the app carries it (Parley sends it with `click_card`, or opens the app's dialog when it says
+    /// so: `dialog`), with the message in Google Chat (`chat`) as its link.
+    static func link(_ button: Dynamite_CardButton, chat: URL?) -> Card.Link? {
+        if button.hasImageButton {
+            let image = button.imageButton
+            guard var link = link(onClick: image.onClick, title: "", chat: chat, disabled: image.disabled) else { return nil }
+            link.symbol = symbol(image.materialIcon.name)
+            link.icon = link.symbol == nil ? imageURL(image.iconURL) : nil
+            link.alt = image.altText.isEmpty ? nil : image.altText
+            return link.symbol == nil && link.icon == nil ? nil : link
+        }
+        let text = button.textButton
+        var label = CardText(); label.add(text.label)
+        let symbol = symbol(text.materialIcon.name), icon = symbol == nil ? imageURL(text.iconURL) : nil
+        guard var link = link(onClick: text.onClick, title: label.text.isEmpty && symbol == nil && icon == nil ? "Open" : label.trimmed,
+                              chat: chat, disabled: text.disabled) else { return nil }
+        // A colour makes a button filled in it, as Google Chat's public card docs say.
+        link.filled = text.type == 2 || text.hasColor ? true : nil
+        link.look = text.type == 3 && !text.hasColor ? .tonal : text.type == 4 && !text.hasColor ? .borderless : nil
+        link.color = text.hasColor ? 0xFF00_0000 | text.color.light : nil
+        link.symbol = symbol; link.icon = icon
+        link.alt = text.altText.isEmpty ? nil : text.altText
+        return link
+    }
+    /// What a click does, as a button: open its link, or send its action (one that opens the app's dialog is marked). A
+    /// disabled button with nowhere to go still draws, greyed.
+    private static func link(onClick: Dynamite_CardOnClick, title: String, chat: URL?, disabled: Bool = false) -> Card.Link? {
+        // An overflow menu: its items, each opening its link or sending its action.
+        let menu = onClick.overflowMenu.items.compactMap { item -> Card.MenuItem? in
+            guard !item.text.isEmpty, let link = link(onClick: item.onClick, title: item.text, chat: chat, disabled: item.disabled) else { return nil }
+            return Card.MenuItem(title: item.text, link: link)
+        }
+        guard let url = openLink(onClick) ?? (onClick.hasAction || disabled || !menu.isEmpty ? chat : nil) else { return nil }
+        let action = onClick.hasAction && openLink(onClick) == nil ? try? Dynamite_CardAction(serializedBytes: onClick.action) : nil
+        let required = action.map { $0.allWidgetsAreRequired ? ["*"] : $0.requiredWidgets }.flatMap { $0.isEmpty ? nil : $0 }
+        return Card.Link(title: title, url: url, action: action != nil && !disabled ? onClick.action : nil, disabled: disabled ? true : nil,
+                         menu: menu.isEmpty ? nil : menu, required: required, dialog: action?.interaction == 1 && !disabled ? true : nil)
+    }
+    /// SF Symbols for the Material Symbols apps' buttons name; nil for others (their picture is loaded instead).
+    static func symbol(_ material: String) -> String? {
+        guard !material.isEmpty else { return nil }
+        return [
+            "more_vert": "ellipsis", "more_horiz": "ellipsis", "link": "link", "thumb_up": "hand.thumbsup", "thumb_up_alt": "hand.thumbsup",
+            "thumb_down": "hand.thumbsdown", "thumb_down_alt": "hand.thumbsdown", "delete": "trash", "edit": "pencil", "add": "plus",
+            "close": "xmark", "check": "checkmark", "done": "checkmark", "settings": "gearshape", "person": "person", "group": "person.2",
+            "schedule": "clock", "event": "calendar", "mail": "envelope", "email": "envelope", "call": "phone", "videocam": "video",
+            "search": "magnifyingglass", "info": "info.circle", "warning": "exclamationmark.triangle", "open_in_new": "arrow.up.right.square",
+            "visibility": "eye", "visibility_off": "eye.slash", "refresh": "arrow.clockwise", "send": "paperplane", "star": "star",
+            "share": "square.and.arrow.up", "help": "questionmark.circle", "how_to_vote": "checkmark.square", "poll": "chart.bar",
+        ][material]
     }
     private struct CardText {
         var text = "", formatting: [TextStyleRange] = []
@@ -373,9 +563,7 @@ enum DynamiteMapper {
         mutating func add(_ formatted: Dynamite_FormattedText, bold: Bool = false, link: URL? = nil, over: [TextRunStyle] = []) {
             let start = length
             var colours: [TextStyleRange] = []
-            if formatted.segments.isEmpty {
-                add(DynamiteMapper.strippingTags(formatted.html), bold: bold)
-            }
+            if formatted.segments.isEmpty { addHTML(formatted.html, bold: bold) }
             for segment in formatted.segments {
                 if segment.hasLink {
                     let target = segment.link.originalHref.isEmpty ? segment.link.href : segment.link.originalHref
@@ -394,11 +582,11 @@ enum DynamiteMapper {
                     }
                 }
                 let runStart = length
-                add(run.text, bold: bold || run.weight == 2, styles: styles)
+                add(run.text, bold: bold || run.weight >= 2, styles: styles)   // 2 on button labels, 3 for the HTML's <b>
                 // A coloured run ("Open" in green) keeps its colour; grey runs take the text's own colour.
                 // ponytail: the light theme's colour in both themes; use `dark` too if a colour reads badly on dark.
-                let light = run.colorPair.light, (r, g, b) = (light >> 16 & 0xFF, light >> 8 & 0xFF, light & 0xFF)
-                if run.hasColorPair, !(r == g && g == b), length > runStart {
+                let light = run.colorPair.light
+                if run.hasColorPair, !Self.grey(light), length > runStart {
                     colours.append(TextStyleRange(style: .color(0xFF00_0000 | light), start: runStart, length: length - runStart))
                 }
                 if run.styles.contains(.br) { text += "\n" }
@@ -407,6 +595,46 @@ enum DynamiteMapper {
             if length > start { formatting += over.map { TextStyleRange(style: $0, start: start, length: length - start) } }
             formatting += colours   // after `over`, so a run's colour wins over the label's grey
         }
+        /// Card text that came only as HTML, with the subset Google Chat's cards allow: <b>, <i>, <u>, <s>, <font
+        /// color>, <a href>, <br>, lists. Other tags are dropped, their text kept.
+        mutating func addHTML(_ html: String, bold: Bool) {
+            var open: [String: Int] = [:], colours: [UInt32?] = [], links: [URL?] = []
+            var rest = html[...]
+            func emit(_ piece: Substring) {
+                let string = DynamiteMapper.strippingTags(String(piece))   // entities only: `piece` has no tags
+                guard !string.isEmpty else { return }
+                let start = length
+                add(string, bold: bold || open["b", default: 0] > 0, link: links.last ?? nil,
+                    styles: Self.htmlStyles.compactMap { open[$0.tag, default: 0] > 0 ? $0.style : nil })
+                if let colour = colours.last ?? nil, !Self.grey(colour) { formatting.append(TextStyleRange(style: .color(colour), start: start, length: length - start)) }
+            }
+            let tag = /<(\/?)([a-zA-Z]+)([^>]*)>/
+            while let match = rest.firstMatch(of: tag) {
+                emit(rest[..<match.range.lowerBound])
+                rest = rest[match.range.upperBound...]
+                let closing = !match.output.1.isEmpty, attributes = String(match.output.3)
+                let name = switch match.output.2.lowercased() { case "strong": "b"; case "em": "i"; case "strike", "del": "s"; case let other: other }
+                switch name {
+                case "br": text += "\n"
+                case "li" where !closing: newline(); text += "• "
+                case "ul", "ol", "p", "div": newline()
+                case "font":
+                    if closing { _ = colours.popLast() }
+                    else {
+                        let hex = attributes.firstMatch(of: /color\s*=\s*["']?#([0-9a-fA-F]{6})/).flatMap { UInt32($0.output.1, radix: 16) }
+                        colours.append(hex.map { 0xFF00_0000 | $0 } ?? colours.last ?? nil)
+                    }
+                case "a":
+                    if closing { _ = links.popLast() }
+                    else { links.append(attributes.firstMatch(of: /href\s*=\s*["']([^"']+)["']/).flatMap { URL(string: DynamiteMapper.strippingTags(String($0.output.1))) }) }
+                default: open[name, default: 0] += closing ? -1 : 1
+                }
+            }
+            emit(rest)
+        }
+        private static let htmlStyles: [(tag: String, style: TextRunStyle)] = [("i", .italic), ("u", .underline), ("s", .strike), ("code", .code)]
+        /// A grey takes the text's own colour, so it reads in both themes.
+        static func grey(_ colour: UInt32) -> Bool { colour >> 16 & 0xFF == colour >> 8 & 0xFF && colour >> 8 & 0xFF == colour & 0xFF }
         typealias TextRunStyle = TextStyleRange.Style
     }
     /// A Google Meet call, as the chip Google Chat shows: its status, opening the meeting.
@@ -512,7 +740,8 @@ enum DynamiteMapper {
                 func affected(first: Bool) -> String? {
                     ids.isEmpty ? nil : ListFormatter.localizedString(byJoining: ids.enumerated().map { name($1, snapshots[$1] ?? "", first: first && $0 == 0) })
                 }
-                let actor = name(change.initiator.id.isEmpty ? proto.creator.userID.id : change.initiator.id, first: true)
+                // An admin is not named, as for a room update.
+                let actor = change.initiatorType == 2 ? "An admin" : name(change.initiator.id.isEmpty ? proto.creator.userID.id : change.initiator.id, first: true)
                 switch change.type {
                 case .added, .botAdded: return affected(first: false).map { "\(actor) added \($0)" }
                 case .invited: return affected(first: false).map { "\(actor) invited \($0)" }
@@ -613,7 +842,9 @@ enum DynamiteMapper {
                 case .underline: style = .underline
                 case .monospace: style = .code
                 case .monospaceBlock: style = .codeBlock
-                case .bulletedListItem: style = .listItem
+                case .bulletedListItem:   // nested or numbered ones say so; a plain bullet stays the composer's own style
+                    let level = Int(min(max(format.list.nestingLevel, 0), 4)), numbered = format.list.listType == 2
+                    style = level == 0 && !numbered ? .listItem : .list(level: level, number: numbered ? 0 : nil)
                 case .heading: style = .heading
                 case .quoteBlock: style = .quote
                 case .fontColor: style = .color(format.fontColor)
@@ -632,9 +863,22 @@ enum DynamiteMapper {
             }
         }
         func shift(_ offset: Int) -> Int { offset - hidden.count(in: 0..<offset) }
-        let formatting = styles.compactMap { style, range -> TextStyleRange? in
+        var formatting = styles.compactMap { style, range -> TextStyleRange? in
             let start = shift(range.location), end = shift(NSMaxRange(range))
             return end > start ? TextStyleRange(style: style, start: start, length: end - start) : nil
+        }
+        // Numbered items count up within their list and level; a deeper level starts again under each item.
+        var counts: [Int] = [], end = -1
+        for index in formatting.indices.sorted(by: { formatting[$0].start < formatting[$1].start }) {
+            let item = formatting[index]
+            guard case .list(let level, let number) = item.style else {
+                if case .listItem = item.style { counts = [0]; end = item.start + item.length }
+                continue
+            }
+            if item.start > end + 1 { counts = [] }   // a new list
+            counts = Array(counts.prefix(level + 1)) + Array(repeating: 0, count: max(0, level + 1 - counts.count))
+            if number != nil { counts[level] += 1; formatting[index].style = .list(level: level, number: counts[level]) } else { counts[level] = 0 }
+            end = item.start + item.length
         }
         let visible = NSMutableString(string: text)
         for cut in hidden.rangeView.reversed() { visible.deleteCharacters(in: NSRange(cut)) }
@@ -671,13 +915,17 @@ enum DynamiteMapper {
             case .code: type = .monospace
             case .codeBlock: type = .monospaceBlock
             case .quote: type = .quoteBlock
-            case .listItem:
+            case .listItem, .list:
                 type = .bulletedListItem
                 if let last = lists.last, last.end == range.start { lists[lists.count - 1].end = range.start + range.length }
                 else { lists.append((range.start, range.start + range.length)) }
-            case .heading, .mention, .link, .customEmoji, .color, .chip, .small, .nowrap: continue
+            case .heading, .mention, .link, .customEmoji, .color, .chip, .small, .nowrap, .slashCommand: continue   // a command: `slashCommand(_:)`, on send only
             }
-            annotations.append(annotation(type, range.start, range.length))
+            var made = annotation(type, range.start, range.length)
+            if case .list(let level, let number) = range.style {   // kept as it came, so an edit doesn't flatten it
+                made.formatMetadata.list.nestingLevel = Int32(level); made.formatMetadata.list.listType = number == nil ? 1 : 2
+            }
+            annotations.append(made)
         }
         // A message with a space chip says so, as Google Chat's composer does: clients without group smart chips (6) then
         // show it as they can, and web Chat draws the chip only with it.
@@ -896,7 +1144,8 @@ enum DynamiteMapper {
                             notificationLevel: item.readState.notificationSettings.hasLevel ? level(item.readState.notificationSettings.level) : nil,
                             app: kind != .direct ? nil : item.groupType == 11 ? .gemini
                                 : item.groupType == 2 || item.dmMembers.members.contains { $0.type == .bot } ? .bot : nil,
-                            activity: item.sortTimestamp > 0 ? date(item.sortTimestamp) : nil)
+                            activity: item.sortTimestamp > 0 ? date(item.sortTimestamp) : nil,
+                            hidden: item.readState.hideTimestamp > 0 ? date(item.readState.hideTimestamp) : nil)
     }
 
     static func level(_ wire: Dynamite_GroupNotificationSettings.Level) -> NotificationLevel {

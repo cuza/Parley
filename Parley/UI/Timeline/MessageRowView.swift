@@ -6,7 +6,7 @@ struct MessageRowActions {
     var react: (String, Message) -> Void = { _, _ in }
     var toggleTranscript: (Message) -> Void = { _ in }
     var dismissCard: (Message) -> Void = { _ in }
-    var clickCard: (Message, Data, [Card.Input]) async -> Void = { _, _, _ in }   // a card button's action   // a card's dismiss button (an app suggestion's "Don't install")
+    var clickCard: (Message, String?, Data, [Card.Input]) async -> Void = { _, _, _, _ in }   // a card button's action   // a card's dismiss button (an app suggestion's "Don't install")
     var reactCustom: (CustomEmoji, Message) -> Void = { _, _ in }
     /// The organisation's custom emoji, which the picker offers; nil: none.
     var customEmoji: (() async -> [CustomEmoji])? = nil
@@ -44,6 +44,8 @@ struct MessageRowActions {
 final class MessageRowView: NSTableRowView {
     private(set) var row: TimelineRow?
     private(set) var rowLayout: RowLayout?
+    /// Where a timeline's row view gets its layout when its width changes: the table's cache. Without one, it measures.
+    var layoutFor: (@MainActor (TimelineRow) -> RowLayout?)?
     private(set) var style = TimelineStyle.bubbles
     private var own = false
     private var kind = ConversationKind.direct
@@ -166,7 +168,9 @@ final class MessageRowView: NSTableRowView {
         bubbleView.fill = own ? BubblePalette.own : BubblePalette.incoming; bubbleView.own = own; bubbleView.tail = row.ends; bubbleView.highlighted = highlighted
         nameLabel.text = RowLayout.nameText(message.sender.name, color: senderColor)
         viaLabel.text = RowLayout.viaText(message.via ?? "")
-        viaLabel.toolTip = message.via.map { "Posted by \($0) on \(message.sender.name)’s behalf" }
+        // Only an app that posted for a person says so; "App" and "Only visible to you" say it themselves.
+        let acting = message.via?.components(separatedBy: " · ").first { $0 != "App" && $0 != "Only visible to you" }
+        viaLabel.toolTip = acting.map { "Posted by \($0) on \(message.sender.name)’s behalf" }
         if let quote = message.quote {
             let quoteColor = own ? ink : Self.color(for: quote.sender)
             quoteView.bar = quoteColor
@@ -185,7 +189,7 @@ final class MessageRowView: NSTableRowView {
             let content = AttachmentView(attachment: attachment, load: actions.loadAttachment, own: own, transcriptOpen: row.transcriptOpen,
                                          toggleTranscript: { [weak self] in self?.actions.toggleTranscript(message) },
                                          dismissCard: { [weak self] in self?.actions.dismissCard(message) },
-                                         clickCard: { [weak self] action, inputs in await self?.actions.clickCard(message, action, inputs) })
+                                         clickCard: { [weak self] card, action, inputs in await self?.actions.clickCard(message, card, action, inputs) })
             if index < attachmentViews.count { attachmentViews[index].rootView = content }
             else {
                 let host = AttachmentHostView(rootView: content)
@@ -274,7 +278,9 @@ final class MessageRowView: NSTableRowView {
         placeReplyArrow()
         super.layout()
         guard let row else { return }
-        if rowLayout?.width != bounds.width { rowLayout = RowLayout.make(row, width: bounds.width, own: own, kind: kind, style: style) }
+        if rowLayout?.width != bounds.width {
+            rowLayout = layoutFor.map { $0(row) ?? rowLayout } ?? RowLayout.make(row, width: bounds.width, own: own, kind: kind, style: style)
+        }
         guard let layout = rowLayout else { return }
         place(dateLabel, layout.dateHeader)
         place(avatarView, layout.avatar)
@@ -596,6 +602,7 @@ extension MessageRowView {
             item.image = NSImage(systemSymbolName: RowLayout.symbol(source.kind), accessibilityDescription: nil)
             if #available(macOS 27, *) { item.preferredImageVisibility = .visible }   // menus hide item images unless asked
             item.toolTip = source.url.host()
+            item.subtitle = source.detail   // a line from it, as Google Chat's source chips show
             menu.addItem(item)
         }
         return menu

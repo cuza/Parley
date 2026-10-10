@@ -64,6 +64,7 @@ actor DynamiteBackend: ChatBackend {
             "get_self_user_status", Dynamite_GetSelfUserStatusRequest.with { $0.requestHeader = DynamiteClient.header })
         guard !status.userStatus.userID.id.isEmpty else { throw AuthFailure.malformedProto }
         selfID = status.userStatus.userID.id
+        continuation.yield(.ownStatusChanged(DynamiteMapper.ownStatus(status.userStatus)))
         readyBefore = false   // a fresh load follows every connect
         await resolve([selfID])
         continuation.yield(.connectionChanged(.connecting))
@@ -192,7 +193,10 @@ actor DynamiteBackend: ChatBackend {
             guard sections.allSatisfy({ seen.insert($0.paginationToken).inserted }) else { throw AuthFailure.malformedProto }
         }
         var unique: [ConversationID: Dynamite_WorldItemLite] = [:]
-        for item in items { if let id = DynamiteID.conversation(item.groupID), unique[id] == nil { unique[id] = item } }
+        // Hidden conversations come back too, marked by their hide time (`Conversation.hidden`); Google Chat leaves them off the sidebar.
+        for item in items {
+            if let id = DynamiteID.conversation(item.groupID), unique[id] == nil { unique[id] = item }
+        }
         return (unique.values.sorted { $0.sortTimestamp > $1.sortTimestamp }, topics)
     }
 
@@ -241,8 +245,10 @@ actor DynamiteBackend: ChatBackend {
         // Uploaded files (picked GIFs too) ride in the same field 3, as UPLOAD_METADATA chips.
         let uploads = draft.uploads.compactMap(DynamiteMapper.uploadAnnotation)
         guard uploads.count == draft.uploads.count else { throw AuthFailure.malformedProto }
-        let annotations = formats + uploads + extras
-        do { return try await create(draft, annotations: annotations, formatted: formatted, in: conversation, group: group, thread: thread) }
+        // A picked slash command goes as its annotation, and Google Chat then sends the format flag as well.
+        let command = draft.formatting.compactMap(DynamiteMapper.slashCommand)
+        let annotations = command + formats + uploads + extras
+        do { return try await create(draft, annotations: annotations, formatted: formatted || !command.isEmpty, in: conversation, group: group, thread: thread) }
         catch {
             // The id is derived from the local id, so a retry whose first attempt reached the server is refused as a duplicate;
             // if that message has already arrived (pushed or loaded), the send did happen.
@@ -358,6 +364,32 @@ actor DynamiteBackend: ChatBackend {
         watched = conversations
         await realtimeChannel?.subscribe(conversations)
     }
+    // Own status, as Google Chat's status menu sets it. Each answer is the status as saved.
+    func setDoNotDisturb(for duration: TimeInterval) async throws -> OwnStatus {
+        try await setStatus("set_dnd_duration", Dynamite_SetDndDurationRequest.with {
+            $0.durationUsec = Int64(duration * 1_000_000); $0.requestHeader = DynamiteClient.header
+        })
+    }
+    func setAway(_ away: Bool) async throws -> OwnStatus {
+        try await setStatus("set_presence_shared", Dynamite_SetPresenceSharedRequest.with {
+            $0.presenceShared = !away; $0.requestHeader = DynamiteClient.header
+        })
+    }
+    /// Always with an absolute expiry (the server also takes a duration); clearing is a zero duration and no status.
+    func setCustomStatus(_ status: CustomStatus?) async throws -> OwnStatus {
+        try await setStatus("set_custom_status", Dynamite_SetCustomStatusRequest.with { r in
+            if let status {
+                r.customStatus.statusText = status.text
+                r.customStatus.emoji.unicode = status.emoji
+                if let expires = status.expires { r.expiryTimestampUsec = Int64(expires.timeIntervalSince1970 * 1_000_000) }
+            } else { r.durationUsec = 0 }
+            r.requestHeader = DynamiteClient.header
+        })
+    }
+    private func setStatus(_ method: String, _ request: some SwiftProtobuf.Message) async throws -> OwnStatus {
+        let response: Dynamite_SetUserStatusResponse = try await rpc(method, request)
+        return DynamiteMapper.ownStatus(response.userStatus)
+    }
     /// `get_user_presence`: 1 is active, any other value away; DND wins. Self is never asked for.
     func fetchPresence(_ ids: [String]) async throws {
         let ids = ids.filter { !$0.isEmpty && $0 != selfID }
@@ -442,12 +474,55 @@ actor DynamiteBackend: ChatBackend {
     }
     /// Removes my own membership, as Google Chat leaves a space.
     func leave(_ conversation: ConversationID) async throws {
+        guard try await removeMembership(selfID, conversation) else { throw DynamiteError.leaveRefused }
+    }
+    func removeMember(_ person: PersonID, from conversation: ConversationID) async throws {
+        guard try await removeMembership(person, conversation) else { throw DynamiteError.removeRefused }
+    }
+    /// `remove_memberships` with one member; false when the server refused.
+    private func removeMembership(_ person: PersonID, _ conversation: ConversationID) async throws -> Bool {
         let response: Dynamite_RemoveMembershipsResponse = try await rpc("remove_memberships", try Dynamite_RemoveMembershipsRequest.with { r in
             r.requestHeader = DynamiteClient.header
-            r.memberIds = [.with { $0.userID.id = selfID }]
+            r.memberIds = [.with { $0.userID.id = person }]
             r.groupID = try DynamiteID.group(conversation)
         })
-        if response.results.contains(where: \.hasFailureReason) { throw DynamiteError.leaveRefused }
+        return !response.results.contains(where: \.hasFailureReason)
+    }
+    /// `create_membership` with invitees, as web Chat's "Add people" sends it (a space invites them).
+    func addMembers(_ people: [PersonID], to conversation: ConversationID) async throws {
+        let response: Dynamite_CreateMembershipResponse = try await rpc("create_membership", try Dynamite_CreateMembershipRequest.with { r in
+            r.requestHeader = DynamiteClient.header
+            r.groupID = try DynamiteID.group(conversation)
+            r.invitees = people.map { id in .with { $0.invitee = invitee(id); $0.field4 = 1; $0.field5 = 1 } }
+        })
+        if response.results.contains(where: \.hasFailureReason) { throw DynamiteError.addRefused }
+    }
+    /// `update_group` with only the changed fields named in its mask, as web Chat's space details save.
+    func updateProfile(_ conversation: ConversationID, name: String?, emoji: String?) async throws {
+        let _: Dynamite_UpdateGroupResponse = try await rpc("update_group", try Dynamite_UpdateGroupRequest.with { r in
+            r.requestHeader = DynamiteClient.header
+            if let name { r.name = name; r.updateMasks.append(.name) }
+            if let emoji { r.avatarInfo.emoji.unicode = emoji; r.updateMasks.append(.avatar) }
+            r.groupID = try DynamiteID.group(conversation)
+        })
+    }
+    func setHidden(_ hidden: Bool, conversation: ConversationID) async throws {
+        let _: Dynamite_HideGroupResponse = try await rpc("hide_group", try Dynamite_HideGroupRequest.with { r in
+            r.requestHeader = DynamiteClient.header
+            r.groupID = try DynamiteID.group(conversation)
+            r.hidden = hidden
+        })
+    }
+    /// `get_group_scoped_capabilities` for my membership, as web Chat asks when a conversation opens.
+    func permissions(in conversation: ConversationID) async throws -> ConversationPermissions {
+        let group = try DynamiteID.group(conversation)
+        let response: Dynamite_GetGroupScopedCapabilitiesResponse = try await rpc("get_group_scoped_capabilities",
+            Dynamite_GetGroupScopedCapabilitiesRequest.with { r in
+                r.requestHeader = DynamiteClient.header
+                r.membershipIds = [.with { $0.memberID.userID.id = selfID; $0.groupID = group }]
+            })
+        let caps = response.entries.first?.capabilities
+        return ConversationPermissions(editProfile: caps?.canEditSpaceProfile == true, manageMembers: caps?.canManageMembers == true)
     }
 
     func edit(_ id: MessageID, text: String, formatting: [TextStyleRange] = []) async throws {
@@ -565,19 +640,63 @@ actor DynamiteBackend: ChatBackend {
         update(id) { $0.starred = starred }
     }
     /// `click_card`, as Google Chat sends a card button's action: the message, the action as the button carried it, every
-    /// input of the card. The app answers with the message, its card updated.
-    func clickCard(_ id: MessageID, action: Data, inputs: [Card.Input]) async throws -> Message? {
+    /// input of the card, the card's id. The app answers with the message, its card updated, or with nothing (its answer
+    /// comes as a new message); a refusal (status 4, with why) throws `DynamiteError.appRefused`.
+    func clickCard(_ id: MessageID, card: String?, action: Data, inputs: [Card.Input]) async throws -> Message? {
         let request = try Dynamite_ClickCardRequest.with { r in
             r.messageID = try DynamiteID.protoMessageID(id)
             r.action = action
             r.formInputs = inputs.map { input in .with { $0.name = input.name; $0.value = input.value; $0.field4 = 1 } }
-            r.field4 = ""
+            r.cardID = card ?? ""
             r.requestHeader = DynamiteClient.header
         }
         let response: Dynamite_ClickCardResponse = try await rpc("click_card", request)
+        if response.hasField1, response.field1 != 1 { throw DynamiteError.appRefused(response.status.message) }
         guard response.hasMessage else { return nil }
         let conversation = String(id.split(separator: "/").prefix(2).joined(separator: "/"))
         return place(response.message, in: conversation).first
+    }
+    /// A dialog's requests, as Google Chat sends them: `submit_form_action` type 3 with the card button's action and
+    /// the card's inputs to open one, type 1 with the pressed button's action and every input to submit, type 2 with
+    /// nothing else to close it; `invoke_dialog` for a slash command's (no action). A quick command's requests name
+    /// its conversation and the command where the others name a message. On close the app's answer is not read: Google
+    /// Chat closes the dialog whatever it says.
+    func dialog(_ step: DialogStep, _ context: DialogContext, action: Data?, inputs: [Card.Input]) async throws -> DialogAnswer {
+        let app = Dynamite_UserId.with { $0.id = context.app; $0.type = .bot }
+        var message: Dynamite_MessageId?, group: Dynamite_GroupId?
+        if context.command == nil { message = try DynamiteID.protoMessageID(context.message) } else { group = try DynamiteID.group(context.message) }
+        let command = context.command.map { id in Dynamite_AppCommandRef.with { $0.id = Int32(truncatingIfNeeded: id); $0.kind = 2; $0.invocation = 2 } }
+        if step == .open, action == nil {
+            let response: Dynamite_InvokeDialogResponse = try await rpc("invoke_dialog", Dynamite_InvokeDialogRequest.with { r in
+                if let message { r.messageID = message }
+                r.appID = app
+                if let group, let command { r.groupID = group; r.command = command }
+                r.requestHeader = DynamiteClient.header
+            })
+            return Self.answer(setup: response.hasSetup ? response.setup : nil, status: response.status,
+                               dialog: response.hasDialog ? response.dialog : nil, url: response.url, message: context.message)
+        }
+        let request = Dynamite_SubmitFormActionRequest.with { r in
+            r.type = switch step { case .open: 3; case .submit: 1; case .cancel: 2 }
+            if let message { r.messageID = message }
+            r.appID = app
+            if step != .cancel, let action { r.action = action }
+            if step != .cancel { r.formInputs = inputs.map { input in .with { $0.name = input.name; $0.value = input.value; $0.field4 = 1 } } }
+            if let group, let command { r.groupID = group; r.command = command }
+            r.requestHeader = DynamiteClient.header
+        }
+        let response: Dynamite_SubmitFormActionResponse = try await rpc("submit_form_action", request)
+        if step == .cancel { return .close(nil) }
+        return Self.answer(setup: response.hasSetup ? response.setup : nil, status: response.status,
+                           dialog: response.hasDialog ? response.dialog : nil, url: response.url, message: context.message)
+    }
+    /// An app's answer to a dialog request: set up first or sign in (its page, from the setup or in place of the
+    /// dialog), what's wrong (a status other than OK), the next card, or done (with the status's note).
+    static func answer(setup: Dynamite_DialogSetup?, status: Dynamite_ActionStatus, dialog: Dynamite_Card?, url: String = "", message: MessageID) -> DialogAnswer {
+        for page in [setup?.setupURL ?? "", url] { if let link = URL(string: page), link.scheme == "https" { return .configure(link) } }
+        if status.code != 0 { return .invalid(status.message) }
+        if let dialog { return .show(DynamiteMapper.dialog(dialog, message: message)) }
+        return .close(status.message.isEmpty ? nil : status.message)
     }
     /// A Mentions or Starred shortcut. Google Chat keeps each as a hidden space ("Shortcut-MENTIONS", "Shortcut-STARRED")
     /// of copies, each naming its original message; `paginated_world` with the shortcut's section returns that space,
@@ -867,6 +986,8 @@ actor DynamiteBackend: ChatBackend {
                 deleted(DynamiteID.message(conversation, topic: id.parentID.topicID.topicID, message: id.messageID))
             case .groupUpdated, .membershipChanged, .groupDeleted, .groupNotificationSettingsUpdated:
                 await conversationChanged(event, body)
+            case .groupHideChanged:   // hidden or shown again, here or elsewhere: read back, marked as the event says
+                await conversationChanged(event, body, hidden: body.groupHideChanged.hidden)
             case .topicLabelApplied, .topicLabelRemoved:
                 let label = body.topicLabel, topic = label.topicID
                 guard label.label.type == .threadFollowed, !topic.topicID.isEmpty,
@@ -912,6 +1033,8 @@ actor DynamiteBackend: ChatBackend {
             case .userStatusUpdatedEvent:
                 let status = body.userStatusUpdated.userStatus
                 guard !status.userID.id.isEmpty else { continue }
+                // Mine changed here or on another device: the whole status comes along.
+                if status.userID.id == selfID { continuation.yield(.ownStatusChanged(DynamiteMapper.ownStatus(status))); continue }
                 continuation.yield(.presenceChanged(status.userID.id, status.dndSettings.dndState == .dnd ? .doNotDisturb : nil,
                                                     status: DynamiteMapper.customStatus(status)))
             case .unsentMessageCreated, .unsentMessageUpdated, .unsentMessageDeleted:   // a draft saved or dropped, here or elsewhere
@@ -930,13 +1053,15 @@ actor DynamiteBackend: ChatBackend {
 
     /// A conversation created, renamed, joined, left or deleted elsewhere: gone when we
     /// left it or it was deleted; otherwise its sidebar item, from the event when sent, else from a fresh world read.
-    private func conversationChanged(_ event: Dynamite_Event, _ body: Dynamite_EventBody) async {
+    /// `hidden`: what a hide event says, over the read state, which may not have caught up.
+    private func conversationChanged(_ event: Dynamite_Event, _ body: Dynamite_EventBody, hidden: Bool? = nil) async {
         if body.eventType == .groupDeleted, !body.groupDeleted.groupIds.isEmpty {
             body.groupDeleted.groupIds.compactMap(DynamiteID.conversation).forEach { continuation.yield(.conversationRemoved($0)) }
             return
         }
         let membership = body.membershipChanged.newMembership
-        guard let id = [event.groupID, body.groupUpdated.group.groupID, membership.id.groupID, body.groupNotificationSettingsUpdated.groupID]
+        guard let id = [event.groupID, body.groupUpdated.group.groupID, membership.id.groupID, body.groupNotificationSettingsUpdated.groupID,
+                        body.groupHideChanged.groupID]
             .lazy.compactMap(DynamiteID.conversation).first else { return }
         if body.eventType == .groupDeleted || body.groupUpdated.groupUpdateType == .groupDeleted
             || (membership.id.memberID.userID.id == selfID && membership.membershipState == .memberNotAMember) {
@@ -956,7 +1081,10 @@ actor DynamiteBackend: ChatBackend {
         guard let item else { continuation.yield(.conversationRemoved(id)); return }
         remember(item)
         await resolve(DynamiteMapper.memberIDs(item))
-        if let room = DynamiteMapper.conversation(item, selfID: selfID, people: people) { continuation.yield(.conversationUpserted(room)) }
+        if var room = DynamiteMapper.conversation(item, selfID: selfID, people: people) {
+            if let hidden { room.hidden = hidden ? room.hidden ?? .now : nil }
+            continuation.yield(.conversationUpserted(room))
+        }
     }
 
     /// Emits the deletion; a deleted reply also lowers its head's reply count.
@@ -1099,6 +1227,12 @@ actor DynamiteBackend: ChatBackend {
         }
     }
 
+    func slashCommands(in conversation: ConversationID, matching query: String, toApp: Bool) async throws -> [SlashCommand] {
+        let request = DynamiteMapper.slashCommandSearch(query, in: try DynamiteID.group(conversation), toApp: toApp)
+        let response: Dynamite_SearchIntegrationActionsResponse = try await rpc("search_integration_actions", request)
+        return DynamiteMapper.slashCommands(response)
+    }
+
     /// `list_members` as Google Chat's member-list sync sends it: joined members, 100 a page.
     // ponytail: stops after 10 pages (1,000 members); raise it if a bigger space needs mentions of everyone.
     func members(of conversation: ConversationID) async throws -> [Person] {
@@ -1160,20 +1294,22 @@ actor DynamiteBackend: ChatBackend {
         guard isEmail, !known.contains(where: { $0.email?.caseInsensitiveCompare(query) == .orderedSame }) else { return known }
         return known + [Person.invite(email: query)]
     }
+    /// Someone to invite: by id (with the email when known), or by email only.
+    private func invitee(_ id: PersonID) -> Dynamite_InviteeInfo {
+        .with {
+            if let email = Person.invitedEmail(id) { $0.email = email; $0.invitationMode = 2 }   // EMAIL_ONLY
+            else {
+                $0.userID.id = id; $0.invitationMode = 1   // GAIA_ID
+                if let email = people[id]?.email { $0.email = email }
+            }
+        }
+    }
     /// As web Chat does it: one person through `create_dm_extended`, two or more through `create_group` (a group DM);
     /// both return the conversation these people already share, or create it. People known only by email are invited by email.
     func directMessage(with ids: [PersonID]) async throws -> Conversation {
         let others = ids.filter { $0 != selfID }
         guard !others.isEmpty else { throw DynamiteError.badID }
-        let invitees = others.map { id in
-            Dynamite_InviteeInfo.with {
-                if let email = Person.invitedEmail(id) { $0.email = email; $0.invitationMode = 2 }   // EMAIL_ONLY
-                else {
-                    $0.userID.id = id; $0.invitationMode = 1   // GAIA_ID
-                    if let email = people[id]?.email { $0.email = email }
-                }
-            }
-        }
+        let invitees = others.map(invitee)
         let group: Dynamite_GroupId?
         if others.count == 1 {
             let response: Dynamite_CreateDmResponse = try await rpc("create_dm_extended", Dynamite_CreateDmRequest.with { r in

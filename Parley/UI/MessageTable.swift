@@ -68,11 +68,16 @@ struct MessageTable: NSViewRepresentable {
         weak var scroll: NSScrollView?
         private var parent: MessageTable?
         private(set) var rows: [TimelineRow] = []
-        private var layouts: [TimelineRow: RowLayout] = [:]
+        /// Each row's layouts at its last few widths, the one in use first: going back to a recent width (a pane
+        /// closing again) reuses them.
+        private var layouts: [TimelineRow: [RowLayout]] = [:]
+        static let widthsKept = 3
         private var measuredWidth: CGFloat = 0
         /// A live resize is under way: rows keep their layouts until it ends. Our own flag, because AppKit still reports
         /// `inLiveResize` while it posts the resize's end, which would keep the old layouts for the final re-measure.
         var resizing = false
+        /// After a resize, rows not yet re-measured keep their last layout until `remeasure` reaches them.
+        private var settling = false
         private var wasNearTop = false
         private var rowsAtNearTop = 0   // the row count when the table last asked for older history
         private var keeping = false
@@ -177,14 +182,15 @@ struct MessageTable: NSViewRepresentable {
             guard table.bounds.width != measuredWidth else { if pinnedToBottom { keepingPlace {} }; return }   // grew taller: follow
             measuredWidth = table.bounds.width
             if scroll.inLiveResize { resizing = true }
-            let visible = table.rows(in: scroll.documentVisibleRect)
-            let indexes = resizing ? IndexSet(integersIn: visible.location..<visible.location + visible.length)
-                                   : IndexSet(integersIn: 0..<rows.count)
+            guard resizing else { return remeasure() }
+            remeasuring?.cancel()
             // Mid-resize, as TelegramSwift's TableView does: the rows in view are measured again at the new width and
             // redrawn with it, so none shows clipped; rows out of view keep their layouts until the resize ends.
-            if resizing { for i in indexes where i < rows.count { layouts[rows[i]] = nil } }
+            let visible = table.rows(in: scroll.documentVisibleRect)
+            let indexes = IndexSet(integersIn: visible.location..<min(rows.count, visible.location + visible.length))
+            for i in indexes { _ = fresh(rows[i]) }
             keepingPlace { table.noteHeightOfRows(withIndexesChanged: indexes) }
-            if resizing { indexes.forEach(configureRow) }
+            indexes.forEach(configureRow)
             if scroll.inLiveResize { settleAfterResize() }
         }
         /// An animated resize (a pane opening grows the window, the zoom button) is a live resize that never posts its
@@ -194,15 +200,44 @@ struct MessageTable: NSViewRepresentable {
             settle?.cancel()
             settle = Task { @MainActor [weak self] in
                 try? await Task.sleep(for: .milliseconds(300))
-                guard !Task.isCancelled, let self, let table, let scroll, !scroll.inLiveResize else { return }
-                resizing = false
-                keepingPlace { table.noteHeightOfRows(withIndexesChanged: IndexSet(integersIn: 0..<rows.count)) }
+                guard !Task.isCancelled, let self, let scroll, !scroll.inLiveResize else { return }
+                remeasure()
             }
         }
         @objc func liveResizeEnded(_ note: Notification) {
-            guard let table, let window = scroll?.window, note.object as? NSWindow === window else { return }
+            guard let window = scroll?.window, note.object as? NSWindow === window else { return }
+            remeasure()
+        }
+        /// Re-measures every row at the table's width, nearest the reader first: the rows in view and `chunk` around them
+        /// at once, then as many per turn of the run loop, so a long history doesn't stall the frame where a resize ends.
+        /// A row keeps its last layout until its turn; each chunk keeps the reader's place.
+        private var remeasuring: Task<Void, Never>?
+        static let chunk = 50
+        private func remeasure() {
+            remeasuring?.cancel()
             resizing = false
-            keepingPlace { table.noteHeightOfRows(withIndexesChanged: IndexSet(integersIn: 0..<rows.count)) }
+            settling = true
+            guard measureNext() else { return }
+            remeasuring = Task { @MainActor [weak self] in
+                while !Task.isCancelled {
+                    try? await Task.sleep(for: .milliseconds(1))   // lets the frame draw
+                    guard !Task.isCancelled, let self, measureNext() else { return }
+                }
+            }
+        }
+        /// Measures the next chunk; false once every row is measured at the table's width.
+        private func measureNext() -> Bool {
+            guard let table, let scroll, table.bounds.width > 50 else { settling = false; return false }
+            let width = table.bounds.width
+            let visible = table.rows(in: scroll.documentVisibleRect), middle = visible.location + visible.length / 2
+            let due = rows.indices.filter { layouts[rows[$0]]?.first?.width != width }
+            let next = due.sorted { abs($0 - middle) < abs($1 - middle) }.prefix(visible.length + Self.chunk)
+            for i in next { _ = fresh(rows[i]) }
+            let indexes = IndexSet(next)
+            keepingPlace { table.noteHeightOfRows(withIndexesChanged: indexes) }
+            indexes.forEach(configureRow)
+            settling = due.count > next.count
+            return settling
         }
         /// The clip view's origin with the newest message resting just above the bottom inset.
         private var bottomOrigin: CGFloat {
@@ -278,12 +313,21 @@ struct MessageTable: NSViewRepresentable {
             NSAnimationContext.runAnimationGroup { _ in scroll.contentView.animator().setBoundsOrigin(target) }
         }
 
-        /// The row's layout at the current width. Mid-resize, rows out of view keep their previous layout.
+        /// The row's layout at the current width. During and just after a resize, rows not re-measured yet keep the one in use.
         func layout(_ row: TimelineRow) -> RowLayout? {
+            if resizing || settling, let inUse = layouts[row]?.first { return inUse }
+            return fresh(row)
+        }
+        /// The row's layout at the table's width: a kept one, else measured now.
+        private func fresh(_ row: TimelineRow) -> RowLayout? {
             guard let parent, let table, table.bounds.width > 50 else { return nil }
-            if let cached = layouts[row], cached.width == table.bounds.width || resizing { return cached }
-            let layout = RowLayout.make(row, width: table.bounds.width, own: row.message.sender.id == parent.meID, kind: parent.kind, style: parent.style)
-            layouts[row] = layout
+            let width = table.bounds.width, kept = layouts[row] ?? []
+            if let i = kept.firstIndex(where: { $0.width == width }) {
+                if i > 0 { layouts[row] = [kept[i]] + kept.filter { $0.width != width } }
+                return kept[i]
+            }
+            let layout = RowLayout.make(row, width: width, own: row.message.sender.id == parent.meID, kind: parent.kind, style: parent.style)
+            layouts[row] = [layout] + kept.prefix(Self.widthsKept - 1)
             return layout
         }
         private func configureRow(_ index: Int) {
@@ -295,6 +339,7 @@ struct MessageTable: NSViewRepresentable {
             let row = rows[index]
             var actions = parent.actions
             actions.files = files
+            view.layoutFor = { [weak self] in self?.layout($0) }   // the table's layouts: the row view never measures its own
             view.configure(row, own: row.message.sender.id == parent.meID, kind: parent.kind, meID: parent.meID,
                            layout: layout(row), highlighted: row.id == parent.highlighted, style: parent.style, actions: actions)
         }

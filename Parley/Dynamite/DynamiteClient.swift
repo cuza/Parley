@@ -2,13 +2,17 @@ import Foundation
 import SwiftProtobuf
 
 enum DynamiteError: Error, LocalizedError, Equatable {
-    case notYetSupported(String), badID, joinRefused, leaveRefused
+    case notYetSupported(String), badID, joinRefused, leaveRefused, addRefused, removeRefused
+    case appRefused(String)   // an app (or the server for it) refused a card's action, saying why (may be empty)
     var errorDescription: String? {
         switch self {
         case .joinRefused: "Google Chat didn’t let you join that space."
         case .leaveRefused: "Google Chat didn’t let you leave that conversation."
+        case .addRefused: "Google Chat didn’t let you add that person."
+        case .removeRefused: "Google Chat didn’t let you remove that person."
         case .notYetSupported(let feature): "\(feature) isn’t available with Google Chat yet."
         case .badID: "That isn’t a Google Chat conversation or message ID."
+        case .appRefused(let why): "The app is unable to process your request." + (why.isEmpty ? "" : " " + why)
         }
     }
 }

@@ -20,7 +20,7 @@ struct AppSuggestionTests {
         let card = try #require(card(message))
         let items = card.sections.flatMap { $0 }
         #expect(items.first == .text("Only visible to you", [TextStyleRange(style: .color(Card.secondaryText), start: 0, length: 19)]))
-        #expect(items.contains { if case .row(let icon, _, _, "Example", _, _) = $0 { icon == URL(string: "https://example.com/icon.png") } else { false } })
+        #expect(items.contains { if case .row(let icon, _, _, "Example", _, _, _, _, _) = $0 { icon == URL(string: "https://example.com/icon.png") } else { false } })
         #expect(items.contains(.text("To interactively preview this link, install Example and add it to this conversation.", [])))
         #expect(items.contains(.links([Card.Link(title: "Install", url: ChatLink.url(message: message.id)!)])))
         #expect(card.dismiss == "Don't install")

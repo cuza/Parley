@@ -12,6 +12,20 @@ struct RowLayoutTests {
     }
     static let long = String(repeating: "A long message that wraps when the window is narrow. ", count: 8)
 
+    /// Message text is measured once; only a line broken inside a word (a long URL) is measured again at the narrower
+    /// width the text view takes, where it may break once more.
+    @Test func messageTextIsMeasuredOnceUnlessAWordBreaks() {
+        let url = "https://example.com/" + String(repeating: "averyveryverylongpathsegment", count: 6)
+        for (text, measures) in [("ok", 1), (Self.long, 1), ("see " + url + " now", 2)] {
+            let tally = MeasureTally()
+            let layout = RowLayout.$tally.withValue(tally) { RowLayout.make(Self.row(text), width: 640, own: false, kind: .group) }
+            #expect(tally.texts == measures, "\(text.prefix(12)): \(tally.texts) measures")
+            // As tall as measuring at the fitted width again says.
+            let styled = MessageTextStyle.styled(text, own: false)
+            let inner = layout.text!.width
+            #expect(layout.text!.height >= MessageTextStyle.measure(styled, width: inner).size.height, "\(text.prefix(12))")
+        }
+    }
     @Test func sameInputSameLayout() {
         let row = Self.row(Self.long)
         #expect(RowLayout.make(row, width: 640, own: false, kind: .group) == RowLayout.make(row, width: 640, own: false, kind: .group))

@@ -15,6 +15,9 @@ struct NativeComposer: NSViewRepresentable {
     var needMembers: () -> Void = {}      // asked when a mention starts, to load the full member list
     var customEmoji: [CustomEmoji] = []   // what `:shortcode` suggests
     var needCustomEmoji: () -> Void = {}  // asked when a `:shortcode` starts, to load the organisation's list
+    var slashCommands: [SlashCommand] = []   // what a "/" at the start suggests
+    var needSlashCommands: (String) -> Void = { _ in }   // asked as a "/command" is typed, with the text after the "/"
+    var runCommand: (SlashCommand) -> Void = { _ in }   // a picked quick command or Google Chat action
     var loadImage: (Attachment, Bool) async throws -> Data = { _, _ in throw CancellationError() }   // custom emoji pictures
     var focus: String? = nil              // the field takes focus each time this changes to a new non-nil value
     var handle: ComposerHandle? = nil     // for controls beside the field that act on it
@@ -59,6 +62,9 @@ struct NativeComposer: NSViewRepresentable {
         if view.mentionPeople != members { view.mentionPeople = members }
         view.chipConversations = spaces
         if view.customEmoji != customEmoji { view.customEmoji = customEmoji }
+        view.needSlashCommands = needSlashCommands
+        view.runCommand = runCommand
+        if view.slashCommands != slashCommands { view.slashCommands = slashCommands }
         if focus != context.coordinator.focus {
             context.coordinator.focus = focus
             if focus != nil { view.window?.makeFirstResponder(view) }
@@ -359,6 +365,9 @@ final class ComposerTextView: NSTextView {
         storage.enumerateAttribute(Self.chipKey, in: NSRange(location: 0, length: storage.length)) { value, range, _ in
             if let token = value as? MentionToken { ranges.append(TextStyleRange(style: .chip(token.userID, emoji: token.emoji, link: token.link), start: range.location, length: range.length)) }
         }
+        storage.enumerateAttribute(Self.commandKey, in: NSRange(location: 0, length: storage.length)) { value, range, _ in
+            if let command = value as? SlashCommand { ranges.append(TextStyleRange(style: .slashCommand(command), start: range.location, length: range.length)) }
+        }
         storage.enumerateAttribute(Self.customEmojiKey, in: NSRange(location: 0, length: storage.length)) { value, range, _ in
             guard let emoji = value as? CustomEmoji else { return }   // equal neighbours share a run: one range each
             for i in range.location..<NSMaxRange(range) { ranges.append(TextStyleRange(style: .customEmoji(emoji), start: i, length: 1)) }
@@ -395,6 +404,7 @@ final class ComposerTextView: NSTextView {
             let r = NSRange(location: range.start, length: range.length)
             if case .color(let argb) = range.style { styled.addAttribute(Self.colorKey, value: NSNumber(value: argb), range: r) }
             if case .link(let url) = range.style { styled.addAttribute(Self.linkKey, value: url, range: r) }
+            if case .slashCommand(let command) = range.style { styled.addAttribute(Self.commandKey, value: command, range: r) }
             if case .chip(let room, let emoji, let link) = range.style {   // an edited message's chip stays a chip
                 styled.addAttribute(Self.chipKey, value: MentionToken(userID: room, text: (text as NSString).substring(with: r), emoji: emoji, link: link), range: r)
             }
@@ -446,7 +456,7 @@ final class ComposerTextView: NSTextView {
         }
         visual[.font] = font
         visual[.foregroundColor] = NSColor.textColor
-        if visual[mentionKey] != nil || visual[chipKey] != nil { visual[.foregroundColor] = NSColor.controlAccentColor }
+        if visual[mentionKey] != nil || visual[chipKey] != nil || visual[commandKey] != nil { visual[.foregroundColor] = NSColor.controlAccentColor }
         if visual[customEmojiKey] != nil { visual[.attachment] = attributes[.attachment] }
         if has(.strike) { visual[.strikethroughStyle] = NSUnderlineStyle.single.rawValue }
         if has(.underline) { visual[.underlineStyle] = NSUnderlineStyle.single.rawValue }
@@ -470,6 +480,13 @@ final class ComposerTextView: NSTextView {
     static let mentionKey = NSAttributedString.Key("Parley.composer.mention")
     /// A conversation chip: a `MentionToken` whose id is the conversation's.
     static let chipKey = NSAttributedString.Key("Parley.composer.chip")
+    /// A picked slash command (a `SlashCommand`) over its name at the start.
+    static let commandKey = NSAttributedString.Key("Parley.composer.command")
+    /// The conversation's apps' commands, for a "/" at the start; `needSlashCommands` asks for those matching what's typed.
+    var slashCommands: [SlashCommand] = [] { didSet { updateMention() } }
+    var needSlashCommands: ((String) -> Void)?
+    /// A picked entry that isn't sent as a "/name" (a quick command, "Send a Meet link").
+    var runCommand: ((SlashCommand) -> Void)?
     /// Conversations a pasted Chat link can become the chip of: the account's.
     var chipConversations: [Conversation] = [] { didSet { if chipConversations != oldValue { updateMention() } } }
     var mentionPeople: [Person] = [] { didSet { updateMention() } }
@@ -506,11 +523,23 @@ final class ComposerTextView: NSTextView {
         setSelectedRange(NSRange(location: range.location + token.length, length: 0))
         didChangeText()
     }
+    /// Replaces `range` (the "/" query) with the command's name and a space; the message then invokes the command.
+    func insertCommand(_ command: SlashCommand, replacing range: NSRange) {
+        guard let storage = textStorage else { return }
+        var attributes = typingAttributes
+        attributes[Self.commandKey] = command
+        let token = NSMutableAttributedString(string: command.name, attributes: Self.visual(attributes))
+        token.append(NSAttributedString(string: " ", attributes: typingAttributes))
+        guard shouldChangeText(in: range, replacementString: token.string) else { return }
+        storage.replaceCharacters(in: range, with: token)
+        setSelectedRange(NSRange(location: range.location + token.length, length: 0))
+        didChangeText()
+    }
     /// What is typed next never extends a token.
     override var typingAttributes: [NSAttributedString.Key: Any] {
         get { super.typingAttributes }
         set {
-            let tokens: Set<NSAttributedString.Key> = [Self.mentionKey, Self.chipKey, Self.customEmojiKey, .attachment]
+            let tokens: Set<NSAttributedString.Key> = [Self.mentionKey, Self.chipKey, Self.commandKey, Self.customEmojiKey, .attachment]
             super.typingAttributes = newValue.keys.contains(where: tokens.contains) ? Self.visual(newValue.filter { !tokens.contains($0.key) }) : newValue
         }
     }
@@ -528,17 +557,19 @@ final class ComposerTextView: NSTextView {
     private func mentionRange(at index: Int) -> NSRange? {
         guard let storage = textStorage, index < storage.length else { return nil }
         var range = NSRange()
-        for key in [Self.mentionKey, Self.chipKey]
+        for key in [Self.mentionKey, Self.chipKey, Self.commandKey]
         where storage.attribute(key, at: index, longestEffectiveRange: &range, in: NSRange(location: 0, length: storage.length)) != nil { return range }
         return nil
     }
     override func didChangeText() {
         defer { reportHeight() }
         if let storage = textStorage {   // a token edited inside, or cut in part, becomes plain text
-            for key in [Self.mentionKey, Self.chipKey] {
+            for key in [Self.mentionKey, Self.chipKey, Self.commandKey] {
                 var broken: [NSRange] = []
                 storage.enumerateAttribute(key, in: NSRange(location: 0, length: storage.length)) { value, range, _ in
-                    if let token = value as? MentionToken, (storage.string as NSString).substring(with: range) != token.text { broken.append(range) }
+                    // A command is one only as the message's first word.
+                    let text = (value as? MentionToken)?.text ?? (value as? SlashCommand).flatMap { range.location == 0 ? $0.name : nil }
+                    if value != nil, (storage.string as NSString).substring(with: range) != text { broken.append(range) }
                 }
                 for range in broken {
                     storage.removeAttribute(key, range: range)
@@ -565,16 +596,18 @@ final class ComposerTextView: NSTextView {
     /// Finds the `@` query at the caret (not one inside a token), filters `mentionPeople`, and shows or hides the list.
     func updateMention() {
         let caret = selectedRange()
-        var query = caret.length == 0 ? MentionQuery.nearest(in: string, caret: caret.location) : nil
+        var query = caret.length == 0 ? MentionQuery.slash(in: string, caret: caret.location) ?? MentionQuery.nearest(in: string, caret: caret.location) : nil
         if query?.range.location != dismissedMention { dismissedMention = nil }
-        if let found = query, dismissedMention != nil || textStorage?.attribute(Self.mentionKey, at: found.range.location, effectiveRange: nil) != nil { query = nil }
-        if let query, mentionQuery?.shortcode != query.shortcode { query.shortcode ? needCustomEmoji?() : needMembers?() }
+        if let found = query, dismissedMention != nil || [Self.mentionKey, Self.commandKey].contains(where: { textStorage?.attribute($0, at: found.range.location, effectiveRange: nil) != nil }) { query = nil }
+        if let query, query.command, mentionQuery?.command != true || mentionQuery?.text != query.text { needSlashCommands?(query.text) }
+        else if let query, mentionQuery?.shortcode != query.shortcode || mentionQuery?.command == true { query.shortcode ? needCustomEmoji?() : needMembers?() }
         if query == nil, caret.length == 0, let link = MentionQuery.chatLink(in: string, caret: caret.location, among: chipConversations),
            link.range.location != dismissedMention, textStorage?.attribute(Self.chipKey, at: link.range.location, effectiveRange: nil) == nil {
             query = link
         }
         let matches: [Suggestion] = query.map { query in
             if let room = query.chip { return [.space(room)] }
+            if query.command { return SlashCommand.filter(slashCommands, by: query.text).map(Suggestion.command) }
             return query.shortcode ? Array((MentionQuery.filter(customEmoji, by: query.text).map(Suggestion.emoji) + Self.standardEmoji(query.text)).prefix(8))
                 : MentionQuery.filter(mentionPeople, by: query.text).map(Suggestion.person)
         } ?? []
@@ -596,6 +629,10 @@ final class ComposerTextView: NSTextView {
         case .emoji(let emoji): insertCustomEmoji(emoji, replacing: range, space: true)
         case .unicode(let emoji): insertText(emoji.character + " ", replacementRange: range)
         case .space(let room): insertChip(room, replacing: range)
+        case .command(let command) where command.action != nil:   // runs now: the "/" query goes
+            insertText("", replacementRange: range)
+            runCommand?(command)
+        case .command(let command): insertCommand(command, replacing: range)
         }
     }
     /// Standard emoji for a `:shortcode` of two letters or more (one would catch ":D"), as the picker's search finds
@@ -742,13 +779,13 @@ enum MessageTextStyle {
     static func jumboFont(_ count: Int) -> NSFont { .systemFont(ofSize: [56, 48, 40][min(max(count, 1), 3) - 1]) }
     /// The used size of `styled` wrapped at `width` (TextKit 1 with no line-fragment padding, like the message text view),
     /// and how far its last line reaches. A last line inside a block (code, quote) reports the full width.
-    static func measure(_ styled: NSAttributedString, width: CGFloat, lines: Int = 0) -> (size: CGSize, lastLine: CGFloat) {
-        let storage = NSTextStorage(attributedString: styled)
-        let manager = NSLayoutManager()
-        let container = NSTextContainer(size: NSSize(width: width, height: .greatestFiniteMagnitude))
-        container.lineFragmentPadding = 0
+    /// `brokeWord`: a line ends inside a word (one too long for the line), so the text may wrap differently at any narrower width.
+    static func measure(_ styled: NSAttributedString, width: CGFloat, lines: Int = 0) -> (size: CGSize, lastLine: CGFloat, brokeWord: Bool) {
+        RowLayout.tally?.texts += 1
+        let stack = TextStack.current, manager = stack.manager, container = stack.container
+        container.size = NSSize(width: width, height: .greatestFiniteMagnitude)
         container.maximumNumberOfLines = lines
-        storage.addLayoutManager(manager); manager.addTextContainer(container)
+        stack.storage.setAttributedString(styled)
         manager.ensureLayout(for: container)
         let used = manager.usedRect(for: container).size
         var lastLine: CGFloat = 0   // 0 after a trailing newline: the last line is empty
@@ -757,7 +794,29 @@ enum MessageTextStyle {
             lastLine = style?.textBlocks.isEmpty == false ? width
                 : manager.lineFragmentUsedRect(forGlyphAt: manager.numberOfGlyphs - 1, effectiveRange: nil).maxX
         }
-        return (CGSize(width: ceil(used.width), height: ceil(used.height)), ceil(lastLine))
+        var brokeWord = false
+        let text = styled.string as NSString
+        func breaks(_ unit: unichar) -> Bool { UnicodeScalar(unit).map(CharacterSet.whitespacesAndNewlines.contains) ?? false }
+        manager.enumerateLineFragments(forGlyphRange: NSRange(location: 0, length: manager.numberOfGlyphs)) { _, _, _, glyphs, stop in
+            let end = NSMaxRange(manager.characterRange(forGlyphRange: glyphs, actualGlyphRange: nil))
+            if end > 0, end < text.length, !breaks(text.character(at: end - 1)), !breaks(text.character(at: end)) { brokeWord = true; stop.pointee = true }
+        }
+        return (CGSize(width: ceil(used.width), height: ceil(used.height)), ceil(lastLine), brokeWord)
+    }
+    /// One TextKit stack per thread, reused by every `measure` on it instead of one built and freed per measure.
+    private final class TextStack {
+        let storage = NSTextStorage(), manager = NSLayoutManager(), container = NSTextContainer()
+        init() {
+            container.lineFragmentPadding = 0
+            manager.backgroundLayoutEnabled = false
+            storage.addLayoutManager(manager); manager.addTextContainer(container)
+        }
+        static var current: TextStack {
+            let key = "Parley.MessageTextStyle.stack"
+            if let stack = Thread.current.threadDictionary[key] as? TextStack { return stack }
+            let stack = TextStack(); Thread.current.threadDictionary[key] = stack
+            return stack
+        }
     }
     /// Message text with its `TextStyleRange`s applied (ranges past the end are skipped), list bullets, and the quoted message on top.
     /// Blocks use TextKit 1 `NSTextBlock`s (borders, padding, backgrounds), which both the view and `measure` lay out.
@@ -798,6 +857,12 @@ enum MessageTextStyle {
                 let indent = NSMutableParagraphStyle(); indent.headIndent = 12
                 styled.addAttribute(.paragraphStyle, value: indent, range: paragraph)
                 bullets.insert(paragraph.location)
+            case .list(let level, let number):   // as web draws nested lists: deeper, then ◦ and ▪; numbers stay numbers
+                let marker = number.map { "\($0). " } ?? ["• ", "◦ ", "▪ "][min(level, 2)]
+                let indent = NSMutableParagraphStyle(); indent.firstLineHeadIndent = CGFloat(level) * 16
+                indent.headIndent = indent.firstLineHeadIndent + (marker as NSString).size(withAttributes: [.font: font]).width
+                styled.addAttribute(.paragraphStyle, value: indent, range: paragraph)
+                inserts.append((paragraph.location, marker, paragraph.location))
             case .mention(let id):   // one person's mention carries their id, for the card a click shows
                 if !own { styled.addAttribute(.foregroundColor, value: NSColor.controlAccentColor, range: r) }
                 if let id, id != TextStyleRange.everyone { styled.addAttributes([mentionKey: id, .cursor: NSCursor.pointingHand], range: r) }
@@ -808,6 +873,7 @@ enum MessageTextStyle {
                 inserts.append((NSMaxRange(r), "\u{2009}", r.location + r.length - 1))
                 inserts.append((r.location, "\u{2009}" + (emoji.map { $0 + "\u{2009}" } ?? ""), r.location))
             case .bold, .italic: break
+            case .slashCommand: break   // the command as typed, as Google Chat shows it
             }
         }
         for range in ranges {

@@ -51,14 +51,15 @@ struct CardTests {
         ])
         #expect(shown.attachments.first?.name == "Plan")   // what Home and notifications summarise it as
     }
-    /// An app's welcome message in its DM: the text, and a card whose only button sends an action to the app
-    /// ("Sign in"). Parley can't send it, so the button opens the message in Google Chat.
-    @Test func anActionButtonOpensTheMessageInGoogleChat() throws {
+    /// An app's welcome message in its DM: the text, and a card whose only button opens the app's dialog ("Sign in"):
+    /// it carries its action, marked as a dialog's, with the message in Google Chat as its link.
+    @Test func aDialogButtonCarriesItsAction() throws {
         let card = Dynamite_Card.with { $0.sections = [.with { $0.widgets = [.with { $0.buttons = [
             .with { $0.textButton = .with { $0.label = text("Sign in"); $0.onClick = .with { $0.action = Data([10, 4, 0x6C, 0x69, 0x73, 0x74, 0x40, 1]) } } },   // interaction 1: a dialog
         ] }] }] }
         let shown = try mapped(message(card: card, body: "Connect your account. To get started, click *Sign in*."))
-        #expect(shown.attachments.first?.card?.sections == [[.links([Card.Link(title: "Sign in", url: ChatLink.url(message: shown.id)!)])]])
+        #expect(shown.attachments.first?.card?.sections == [[.links([Card.Link(title: "Sign in", url: ChatLink.url(message: shown.id)!,
+                                                                               action: Data([10, 4, 0x6C, 0x69, 0x73, 0x74, 0x40, 1]), dialog: true)])]])
     }
     /// A link an app in the space previews: its card in web's small type (the row's bottom label small and grey, the
     /// description cut to the lines the card asks for), and under it the app that made it ("By <app>", an App badge).
@@ -104,7 +105,7 @@ struct CardTests {
         func row(wrap: Bool) throws -> [TextStyleRange] {
             let card = Dynamite_Card.with { $0.sections = [.with { $0.widgets = [.with { $0.decoratedText = .with {
                 $0.text = text("A pull request title"); $0.bottomLabel = text("Open"); $0.wrapText = wrap } }] }] }
-            guard case .row(_, _, _, _, let formatting, _)? = try mapped(message(card: card)).attachments.first?.card?.sections.first?.first else { return [] }
+            guard case .row(_, _, _, _, let formatting, _, _, _, _)? = try mapped(message(card: card)).attachments.first?.card?.sections.first?.first else { return [] }
             return formatting
         }
         #expect(try row(wrap: false).contains(TextStyleRange(style: .nowrap, start: 0, length: 20)))
@@ -121,7 +122,7 @@ struct CardTests {
         let card = Dynamite_Card.with { $0.sections = [.with { $0.widgets = [.with { $0.decoratedText = .with {
             $0.text = text("Title"); $0.wrapText = true
             $0.bottomLabel = .with { $0.segments = [run("Open", light: 0x1AA64A, dark: 0x6AF69A), run(" · repo", light: 0x212121, dark: 0xD5D5D5)] } } }] }] }
-        guard case .row(_, _, _, let string, let formatting, _)? = try mapped(message(card: card)).attachments.first?.card?.sections.first?.first else { Issue.record("no row"); return }
+        guard case .row(_, _, _, let string, let formatting, _, _, _, _)? = try mapped(message(card: card)).attachments.first?.card?.sections.first?.first else { Issue.record("no row"); return }
         #expect(string == "Title\nOpen · repo")
         #expect(formatting.last == TextStyleRange(style: .color(0xFF1AA64A), start: 6, length: 4))   // after the label's grey, so it wins
         #expect(formatting.filter { if case .color = $0.style { true } else { false } }.count == 2)
@@ -222,12 +223,13 @@ struct CardTests {
         }
     }
     /// An app's card can carry the same id as Gemini's feedback row ("accessory_actions"): a reminder's "Manage
-    /// reminder" button. It shows, opening the message in Google Chat.
+    /// reminder" button. It shows, opening the app's dialog.
     @Test func anAccessoryCardWithATextButtonIsShown() throws {
         let card = Dynamite_Card.with { $0.sections = [.with { $0.widgets = [.with { $0.buttons = [
             .with { $0.textButton = .with { $0.label = text("Manage reminder"); $0.onClick = .with { $0.action = Data([10, 1, 0x65, 0x40, 1]) } } }] }] }] }   // a dialog, as the reminder's is
         let shown = try mapped(message(card: card, body: "Scheduled reminder", id: "accessory_actions"))
-        #expect(shown.attachments.first?.card?.sections == [[.links([Card.Link(title: "Manage reminder", url: ChatLink.url(message: shown.id)!)])]])
+        #expect(shown.attachments.first?.card?.sections == [[.links([Card.Link(title: "Manage reminder", url: ChatLink.url(message: shown.id)!,
+                                                                               action: Data([10, 1, 0x65, 0x40, 1]), dialog: true)])]])
     }
     @Test func geminisFeedbackRowIsNotShown() throws {
         let feedback = Dynamite_Card.with { $0.sections = [.with { $0.widgets = [.with { $0.buttons = [.init(), .init()] }] }] }   // icon-only buttons

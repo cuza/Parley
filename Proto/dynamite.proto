@@ -181,6 +181,9 @@ message ContextSource {
   optional string url = 3;        // the source on the web
   optional string icon_url = 6;   // a site's favicon, for a kind with no icon of its own
   optional Kind kind = 7;
+  message Snippet { optional string text = 1; }
+  optional Snippet snippet = 4;   // a line from the source, under its title
+  optional Snippet footer = 5;    // a line under the source (only `text`)
 }
 message Annotation {                                  // the oneof case, not type(1), picks the kind
   enum Type {                                         // complete
@@ -213,6 +216,7 @@ message Annotation {                                  // the oneof case, not typ
     VideoCallMetadata video_call_metadata = 12;   // VIDEO_CALL: a Google Meet link
     ContextSourceMetadata context_source_metadata = 37;   // CONTEXT_SOURCE: a Gemini answer's sources
     ActivityMetadata activity_metadata = 43;              // ACTIVITY: the steps behind a Gemini answer ("Show thinking")
+    SlashCommandMetadata slash_command_metadata = 15;     // SLASH_COMMAND: over the command's name at the text's start
   }
   enum ChipRenderType { UNKNOWN = 0; RENDER = 1; RENDER_IF_POSSIBLE = 2; DO_NOT_RENDER = 3; }
   optional ChipRenderType chip_render_type = 20;
@@ -240,6 +244,7 @@ message MembershipChangedMetadata {
   optional UserId initiator = 2;
   repeated MemberId affected_members = 3;
   repeated Member affected_member_profiles = 5;       // may carry names
+  optional int32 initiator_type = 7;                  // as RoomUpdatedMetadata's: 2 = an admin
 }
 message RoomRenameMetadata {
   optional string new_name = 1;
@@ -290,6 +295,7 @@ message Message {
   optional ShortcutSource shortcut_source = 42;       // on a copy in a shortcut's hidden space: the original message
   repeated MessageLabel message_labels = 43;
   repeated BotResponse bot_responses = 19;            // an app that couldn't answer: not responding, or needs configuring
+  optional int32 message_state = 20;                  // 1 visible to the space; 2 only I see it (a slash command, an app's private answer)
   optional Tombstone tombstone = 31;                  // deleted, shown in its place
   optional TombstoneMetadata tombstone_metadata = 32; // who deleted it
   repeated PrivateMessageViewer private_message_viewers = 35;   // only these people see it          // my labels on it: STAR when I starred it
@@ -337,6 +343,7 @@ message GroupReadState {
   optional int64 unread_message_count = 4;           // (purple) absent today; kept for older servers
   optional bool starred = 5;
   optional int64 unread_subscribed_topic_count = 7;
+  optional int64 hide_timestamp = 9;                 // µs; set while hidden from my sidebar, 0 when shown
   optional GroupNotificationSettings notification_settings = 12;
   optional int64 mark_as_unread_timestamp = 18;      // µs
   optional int64 last_head_message_create_time = 29; // µs
@@ -458,7 +465,11 @@ message UserStatus {
   optional CustomStatus custom_status = 6;
 }
 enum DndState { DND_STATE_UNKNOWN = 0; DND_STATE_AVAILABLE = 1; DND_STATE_DND = 2; }
-message DndSettings { optional DndState dnd_state = 1; }   // expiry (2) and remaining (3) not used
+message DndSettings {
+  optional DndState dnd_state = 1;
+  optional int64 dnd_expiry_time_usec = 2;            // 0 when off
+  optional int64 state_remaining_duration_usec = 3;   // -1 when off
+}
 message CustomStatus {                                // purple's status_emoji(2) string is gone
   optional string status_text = 1;
   optional int64 state_expiry_timestamp_usec = 3;
@@ -466,6 +477,23 @@ message CustomStatus {                                // purple's status_emoji(2
 }
 message GetSelfUserStatusRequest { optional RequestHeader request_header = 100; }
 message GetSelfUserStatusResponse { optional UserStatus user_status = 1; }
+// Own status. Automatic, DND and away exclude each other on the server: set_presence_shared(true) also ends DND.
+message SetDndDurationRequest {
+  optional int64 duration_usec = 1;                   // the server turns DND on; no state needed
+  optional RequestHeader request_header = 100;
+}
+message SetPresenceSharedRequest {
+  optional bool presence_shared = 1;                  // true: automatic, false: away
+  optional RequestHeader request_header = 100;
+}
+message SetCustomStatusRequest {
+  optional CustomStatus custom_status = 1;            // absent, with duration_usec 0: clear it
+  optional int64 expiry_timestamp_usec = 2;           // absolute; the server copies it into custom_status
+  optional int64 duration_usec = 3;
+  optional RequestHeader request_header = 100;
+}
+// The answer to all three: the status as saved.
+message SetUserStatusResponse { optional UserStatus user_status = 1; }
 
 // get_members: the current API uses field 2 both ways; purple's field 1 is absent.
 message MemberId { optional UserId user_id = 1; }                 // (oneof user_id / roster_id)
@@ -704,6 +732,7 @@ message EventBody {
     UNSENT_MESSAGE_DELETED = 88;
     UNSENT_MESSAGE_UPDATED = 89;
     ACTIVITY_INDICATOR_CHANGED = 96;                  // an agent (Ask Gemini) working on an answer
+    GROUP_HIDE_CHANGED = 16;                          // hidden from my sidebar, or shown again
   }
   optional GroupUpdatedEvent group_updated = 5;
   optional MessageEvent message_posted = 6;          // also carries MESSAGE_UPDATED
@@ -720,6 +749,11 @@ message EventBody {
   optional BatchReactionsUpdatedEvent batch_reactions_updated = 50;
   optional TopicLabelEvent topic_label = 54;            // TOPIC_LABEL_APPLIED and TOPIC_LABEL_REMOVED
   optional UnsentMessageEvent unsent_message = 67;      // UNSENT_MESSAGE_CREATED, _DELETED and _UPDATED
+  optional GroupHideChangedEvent group_hide_changed = 15;
+}
+message GroupHideChangedEvent {
+  optional GroupId group_id = 1;
+  optional bool hidden = 2;
 }
 message GroupNotificationSettingsUpdatedEvent {
   optional GroupId group_id = 1;
@@ -892,9 +926,10 @@ message SearchSpaceDirectoryResponse {
   repeated SpaceDirectoryEntry spaces = 2;
 }
 message CreateMembershipRequest {
-  repeated MemberId member_ids = 2;
+  repeated MemberId member_ids = 2;           // joining: me
   optional Membership.State membership_state = 3;
   optional GroupId group_id = 4;
+  repeated SpaceInvitee invitees = 8;         // adding people: as create_group invites them
   optional RequestHeader request_header = 100;
 }
 message CreateMembershipResult {
@@ -902,6 +937,38 @@ message CreateMembershipResult {
   optional int32 failure_reason = 2;          // set: this membership was refused
 }
 message CreateMembershipResponse { repeated CreateMembershipResult results = 2; }
+
+// --- Managing a space or group: rename, emoji, hide, what I may change ---
+message UpdateGroupRequest {
+  enum Field { FIELD_UNSPECIFIED = 0; NAME = 1; AVATAR = 3; DETAILS = 4; }   // the fields this request changes
+  optional string name = 2;
+  repeated Field update_masks = 4;
+  optional AvatarInfo avatar_info = 6;        // the emoji
+  optional GroupId group_id = 11;
+  optional RequestHeader request_header = 100;
+}
+message UpdateGroupResponse {}                // the updated Group(1) and its system message(3) not used
+message HideGroupRequest {
+  optional GroupId group_id = 1;
+  optional bool hidden = 2;                   // false: show it again
+  optional RequestHeader request_header = 100;
+}
+message HideGroupResponse {}
+// What the server lets me do in one conversation; only the flags Parley offers are listed.
+message GroupScopedCapabilities {
+  optional bool can_edit_description = 7;
+  optional bool can_edit_space_profile = 9;   // name and emoji
+  optional bool can_manage_members = 14;      // add and remove people
+}
+message GetGroupScopedCapabilitiesRequest {
+  repeated MembershipId membership_ids = 1;   // mine in the group
+  optional RequestHeader request_header = 100;
+}
+message GroupScopedCapabilitiesEntry {
+  optional MembershipId membership_id = 1;
+  optional GroupScopedCapabilities capabilities = 3;
+}
+message GetGroupScopedCapabilitiesResponse { repeated GroupScopedCapabilitiesEntry entries = 1; }
 
 // --- Shared media, files and links (list_attachments) ---
 // What Google Chat's Shared panel lists, without loading the history. Categories are sent in their legacy numbers.
@@ -1004,11 +1071,34 @@ message AppAttachment {
 message Card {
   optional CardHeader header = 1;
   repeated CardSection sections = 2;
+  repeated int32 required_features = 10;       // what a client must draw to show the card whole (CardFeature numbers)
+  optional CardFixedFooter fixed_footer = 5;   // a dialog's buttons, fixed at its bottom
+  optional int32 section_divider_style = 13;   // 0/1 a line between sections, 2 none
 }
-message CardHeader { optional FormattedText title = 1; optional FormattedText subtitle = 2; }
+message CardFixedFooter {
+  optional TextButton primary_button = 2;
+  optional TextButton secondary_button = 3;
+}
+message CardHeader {
+  optional FormattedText title = 1;
+  optional FormattedText subtitle = 2;
+  optional int32 image_type = 3;               // 2: round
+  optional string image_url = 4;
+  optional string image_alt_text = 5;
+}
 message CardSection {
   optional string header = 1;
   repeated CardWidget widgets = 2;
+  optional bool collapsible = 3;               // only the first `uncollapsible_widgets_count` widgets show until expanded
+  optional int32 uncollapsible_widgets_count = 4;
+  optional FormattedText formatted_header = 5; // the header with its formatting, when `header` is empty
+  optional CollapseControl collapse_control = 7;
+}
+/// A collapsible section's toggle: the buttons whose labels say "show more" and "show less".
+message CollapseControl {
+  optional int32 horizontal_alignment = 1;
+  optional CardButton expand_button = 2;
+  optional CardButton collapse_button = 3;
 }
 message CardWidget {
   optional TextParagraph text_paragraph = 3;
@@ -1018,25 +1108,109 @@ message CardWidget {
   optional CardDivider divider = 16;
   optional CardColumns columns = 18;
   optional TextInput text_input = 11;          // a text field whose value a button's action sends (a Drive comment's Reply)
+  optional SelectionInput selection_input = 12;
+  optional DateTimePicker date_time_picker = 14;
 }
-message TextInput { optional string name = 1; optional string label = 3; optional string value = 4; }
+message TextInput {
+  optional string name = 1;
+  optional string label = 3;
+  optional string value = 4;
+  optional string hint_text = 6;               // under the field
+  optional int32 type = 7;                     // 0 one line, 1 several lines
+  optional InputValidation validation = 13;
+  optional string placeholder_text = 15;
+}
+message InputValidation {
+  optional int32 character_limit = 2;
+  optional int32 input_type = 3;               // 1 text, 2 integer, 3 float, 4 email, 5 emoji picker (0 unset)
+}
+message SelectionInput {
+  optional string name = 1;
+  optional int32 type = 2;                     // 0 check boxes, 1 radio buttons, 2 switches, 3 a drop-down, 4 multi-select
+  repeated SelectionItem items = 3;
+  optional string label = 5;
+  optional int32 multi_select_max_selected_items = 7;
+}
+message SelectionItem {
+  optional string text = 1;
+  optional bool selected = 2;
+  optional string value = 3;
+  optional string bottom_text = 6;
+}
+message DateTimePicker {
+  optional string name = 1;
+  optional string label = 2;
+  optional int32 type = 3;                     // 1 date and time, 2 date only, 3 time only (0 unset: date and time)
+  optional int64 value_ms_epoch = 4;           // 0: none chosen
+  optional int32 timezone_offset_date = 5;     // minutes
+}
+/// A switch or check box at a decorated text's end.
+message SwitchControl {
+  optional string name = 1;
+  optional string value = 2;                   // what goes with the card's actions while it is on
+  optional bool selected = 3;
+  optional int32 control_type = 6;             // 0 switch, 1 checkbox (drawn as a switch by Google Chat), 2 check box
+}
 /// A button's action as an app's card carries it (`CardOnClick.action`), only what Parley reads.
 message CardAction {
   optional string function = 1;
-  optional int32 interaction = 8;              // 1: opens a dialog (Google Chat draws it; Parley opens the message there)
+  optional int32 interaction = 8;              // 1: opens the app's dialog (`submit_form_action` type 3)
+  repeated string required_widgets = 9;        // inputs (by name) that must be filled before the action is sent
+  optional bool all_widgets_are_required = 10;
 }
 /// click_card: a card button's action sent back to its app with the card's input values, as Google Chat sends it.
 message ClickCardRequest {
   optional MessageId message_id = 1;
   optional bytes action = 2;                   // the button's action, as the card carried it
   repeated FormInput form_inputs = 3;          // every input in the card, empty ones too
-  optional string field_4 = 4;                 // "", as Google Chat sends it
+  optional string card_id = 4;                 // the clicked card's `AppAttachment.attachment_id`
   optional RequestHeader request_header = 100;
 }
 message FormInput { optional string name = 1; optional string value = 2; optional int32 field_4 = 4; }   // 4: 1, as Google Chat sends it
 message ClickCardResponse {
   optional int32 field_1 = 1;                  // 1 when the app answered with the updated message
   optional Message message = 2;                // the message, its card updated
+  optional ActionStatus status = 6;            // when the app or the server refused (field 1 is then not 1)
+}
+message ActionStatus { optional int32 code = 1; optional string message = 2; }   // code: a canonical error code, 0 OK
+/// submit_form_action: a dialog opened from a card's button (type 3), a dialog's button pressed (1, with every input), or
+/// the dialog closed (2, nothing else), as Google Chat sends them.
+message SubmitFormActionRequest {
+  optional int32 type = 1;                     // 1 submit, 2 cancel, 3 open a dialog
+  optional MessageId message_id = 2;
+  optional UserId app_id = 3;
+  optional bytes action = 4;                   // the button's action, as the card carried it
+  repeated FormInput form_inputs = 5;
+  optional GroupId group_id = 6;               // a quick command's dialog: its conversation, in place of a message
+  optional AppCommandRef command = 7;          // and the command
+  optional RequestHeader request_header = 9;
+}
+/// A quick command, as its dialog's requests name it: Google Chat sends {id, 2, 2} for one of an app in the conversation.
+message AppCommandRef {
+  optional int32 id = 1;
+  optional int32 kind = 2;
+  optional int32 invocation = 3;
+}
+message SubmitFormActionResponse {
+  optional DialogSetup setup = 1;              // the app needs setting up first
+  optional ActionStatus status = 2;            // code 0: done (message: a note to show); else what's wrong
+  optional Card dialog = 3;                    // the dialog, or its next step
+  optional string url = 4;                     // instead of a dialog: a page to open (an app's sign-in)
+}
+message DialogSetup { optional int32 type = 1; optional int32 required_action = 3; optional string setup_url = 4; }
+/// invoke_dialog: the dialog a slash command opens, after its message is sent, or a quick command's (no message).
+message InvokeDialogRequest {
+  optional MessageId message_id = 1;           // the command's message
+  optional UserId app_id = 2;
+  optional GroupId group_id = 3;               // a quick command's conversation
+  optional AppCommandRef command = 4;          // a quick command
+  optional RequestHeader request_header = 6;
+}
+message InvokeDialogResponse {
+  optional DialogSetup setup = 1;
+  optional Card dialog = 2;
+  optional string url = 3;                     // instead of a dialog: a page to open
+  optional ActionStatus status = 4;
 }
 message CardImage {
   optional string image_url = 1;
@@ -1052,26 +1226,66 @@ message DecoratedText {
   optional FormattedText text = 3;
   optional FormattedText bottom_label = 4;
   optional CardOnClick on_click = 5;           // the whole row
+  optional CardButton button = 6;              // the button at the row's end
+  optional SwitchControl switch_control = 7;   // a switch at the row's end
   optional bool wrap_text = 8;                 // false (or absent): the text stays on one line, cut with "…"
+  optional string start_icon_alt_text = 9;     // legacy copy of icon.alt_text
   optional int32 start_icon_image_type = 10;   // 2: round (an avatar)
   optional CardIcon icon = 11;
+  optional CardButton end_button = 21;         // the button at the row's end, as newer cards carry it
+  optional SwitchControl end_switch_control = 22;   // the switch, as newer cards carry it
 }
 message CardIcon {
   optional string url = 1;
+  optional string alt_text = 2;
   optional int32 image_type = 3;               // 1 square, 2 round
+  optional MaterialIcon material_icon = 4;
 }
+/// A Material Symbols icon by name ("visibility", "more_vert").
+message MaterialIcon { optional string name = 1; }
 message CardColumns { repeated CardColumn columns = 2; }
 message CardColumn { optional int32 horizontal_alignment = 2; repeated CardColumnWidget widgets = 4; }   // alignment: 1 start, 2 center, 3 end
 message CardColumnWidget {
+  optional DateTimePicker date_time_picker = 1;
+  optional CardImage image = 2;
   optional DecoratedText decorated_text = 3;
+  optional SelectionInput selection_input = 4;
+  optional TextInput text_input = 5;
   optional TextParagraph text_paragraph = 6;
   repeated CardButton buttons = 7;
 }
-message CardButton { optional TextButton text_button = 1; }
-message TextButton { optional FormattedText label = 1; optional CardOnClick on_click = 2; optional int32 type = 5; }   // type: 1 outlined, 2 filled, 3 filled tonal, 4 borderless
+message CardButton { optional TextButton text_button = 1; optional ImageButton image_button = 2; }
+message TextButton {
+  optional FormattedText label = 1;
+  optional CardOnClick on_click = 2;
+  optional bool disabled = 4;
+  optional int32 type = 5;                     // 1 outlined, 2 filled, 3 filled tonal, 4 borderless
+  optional ColorPair color = 7;                // a filled button's colour
+  optional string alt_text = 8;
+  optional string icon_url = 9;                // the icon before the label, as a picture
+  optional MaterialIcon material_icon = 10;    // the same icon by name
+}
+/// An icon-only button.
+message ImageButton {
+  optional string icon_url = 1;
+  optional CardOnClick on_click = 2;
+  optional string alt_text = 3;
+  optional bool disabled = 5;
+  optional MaterialIcon material_icon = 6;
+}
 message CardOnClick {
   optional bytes action = 2;                   // a form action sent back to the app: not available read-only
   optional OpenLink open_link = 5;
+  optional OverflowMenu overflow_menu = 15;    // a menu of items, each with its own on-click
+}
+message OverflowMenu {
+  message Item {
+    optional CardIcon start_icon = 1;
+    optional string text = 2;
+    optional CardOnClick on_click = 3;
+    optional bool disabled = 4;
+  }
+  repeated Item items = 1;
 }
 message OpenLink {
   optional string url = 1;                     // a google.com redirect
@@ -1143,4 +1357,55 @@ message MeetCallMetadata {
   optional Meeting meeting = 1;
   enum Status { CALL_STATUS_UNSPECIFIED = 0; CALL_STARTED = 1; CALL_MISSED = 2; CALL_ENDED = 3; }
   optional Status status = 2;
+}
+
+// ---- Slash commands ----
+/// The command a message invokes, as Google Chat's composer sends it over the command's name; the server keeps 1–4 and 6.
+message SlashCommandMetadata {
+  optional UserId app_id = 1;
+  optional int32 type = 2;                     // 2: invoke; 1: add the app to the conversation and invoke
+  optional string name = 3;                    // "/help"
+  optional int64 command_id = 4;
+  optional string arguments_hint = 5;          // sent empty
+  optional bool opens_dialog = 6;
+  optional string description = 7;
+  optional string app_name = 8;
+  optional string app_avatar_url = 9;
+  optional bool hidden = 10;                   // sent false
+}
+/// search_integration_actions: the apps' commands a conversation offers, matching the text typed after "/".
+message SearchIntegrationActionsRequest {
+  optional string query = 1;
+  optional GroupId group_id = 2;
+  optional int32 page_size = 3;
+  repeated int32 kinds = 4 [packed = true];    // which apps: 1 the DM's app, 2 every app, 3 only the conversation's
+  optional bool flag5 = 5;                     // sent true
+  optional int32 surface = 6;                  // Google Chat sends 3 for a space, 1 for a person's DM, 2 for an app's
+  message Limit { optional int32 value = 1; }
+  optional Limit limit = 7;                    // sent {5}
+  message Features { repeated int32 values = 1 [packed = true]; }
+  optional Features features = 8;              // sent {[8]}
+  optional RequestHeader request_header = 100;
+}
+message SearchIntegrationActionsResponse { repeated IntegrationAction actions = 1; }
+message IntegrationAction {
+  optional AppCommand app_command = 1;
+  optional int32 builtin_kind = 2;
+  message Builtin { optional int32 kind = 1; optional string label = 2; }
+  optional Builtin builtin = 3;                // 1 attach a Drive file, 2 Doc, 3 Slides, 4 Sheet, 5 Calendar invite, 6 Meet link
+  optional bool flag4 = 4;                     // true: listed only when searching (Doc, Slides, Sheet)
+}
+message AppCommand {
+  optional User app = 1;
+  optional AppCommandDetails command = 2;
+  optional bool installed = 3;                 // false: an app not in the conversation (invoking it adds it)
+}
+message AppCommandDetails {
+  optional string name = 1;                    // "/help"; empty for a quick command or a message action
+  optional int64 id = 2;
+  optional string description = 3;
+  optional bool opens_dialog = 5;
+  optional string display_name = 6;
+  message Kind { optional int32 kind = 1; optional int32 detail = 2; }   // kind 2 slash command, 1 quick command; {0, 1} a message action
+  optional Kind kind = 7;
 }

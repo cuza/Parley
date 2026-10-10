@@ -25,9 +25,14 @@ struct InfoPanel: View {
     @State private var tab = SharedCategory.media
     @State private var card: PersonID?
     @State private var files = AttachmentFiles { _, _ in throw CancellationError() }
+    @State private var renaming = false
+    @State private var newName = ""
+    @State private var pickingEmoji = false
+    @State private var addingPeople = false
 
     private var roster: [Person] { store.roster(room) }
     private var partner: Person? { room.kind == .direct ? roster.first { $0.id != store.me.id } : nil }
+    private var allowed: ConversationPermissions { store.permissions[room.id] ?? .init() }
 
     var body: some View {
         // The Divider keeps the Form below the toolbar: a scroll view reaching under it takes over the toolbar's frosted
@@ -48,12 +53,20 @@ struct InfoPanel: View {
         .formStyle(.grouped)
         .background(QuickLookAnchor(files: files))
         .onExitCommand { store.info = false }
+        .alert("Rename “\(room.name)”", isPresented: $renaming) {
+            TextField("Name", text: $newName)
+            Button("Rename") { Task { await store.rename(room.id, to: newName) } }
+            Button("Cancel", role: .cancel) {}
+        }
+        .sheet(isPresented: $addingPeople) { AddPeopleSheet(store: store, room: room, roster: roster) }
         .task(id: room.id) {
             files.load = { [store] attachment, thumbnail in try await store.attachmentData(attachment, thumbnail: thumbnail) }
             files.messages = { [store, id = room.id] in   // Quick Look's ←/→ order: oldest first
                 store.messages.filter { $0.conversationID == id }.sorted { $0.createdAt < $1.createdAt }
             }
+            async let permissions: Void = store.loadPermissions(room.id)
             await store.loadMembers(room.id)
+            await permissions
         }
         .task(id: "\(room.id)/\(tab.rawValue)") { await store.loadShared(tab, in: room.id) }
     }
@@ -61,7 +74,15 @@ struct InfoPanel: View {
     // MARK: Header
     private var header: some View {
         VStack(spacing: 6) {
-            Avatar(name: room.name, space: room.kind == .space, size: 72, url: partner?.avatarURL ?? room.avatarURL, emoji: room.emoji)
+            if room.kind == .space, allowed.editProfile {
+                Button { pickingEmoji = true } label: { avatar }.buttonStyle(.plain).help("Choose an emoji")
+                    .popover(isPresented: $pickingEmoji) {
+                        EmojiPicker(frequent: EmojiUsage().top(EmojiPicker.columns), pick: { emoji in
+                            pickingEmoji = false
+                            Task { await store.setEmoji(emoji, room.id) }
+                        }, close: { pickingEmoji = false })
+                    }
+            } else { avatar }
             Text(room.name).font(.title2.weight(.semibold)).multilineTextAlignment(.center)
             if let partner {
                 if let email = partner.email { Text(email).foregroundStyle(.secondary).textSelection(.enabled) }
@@ -76,6 +97,9 @@ struct InfoPanel: View {
                 Text("\(roster.count) members").font(.callout).foregroundStyle(.secondary)
             }
         }.frame(maxWidth: .infinity).padding(.vertical, 6)
+    }
+    private var avatar: some View {
+        Avatar(name: room.name, space: room.kind == .space, size: 72, url: partner?.avatarURL ?? room.avatarURL, emoji: room.emoji)
     }
     static func text(_ presence: Presence) -> String? {
         switch presence {
@@ -92,6 +116,8 @@ struct InfoPanel: View {
             action(room.muted ? "Unmute" : "Mute", icon: room.muted ? "bell" : "bell.slash") { Task { await store.setMuted(!room.muted, room.id) } }
             action(room.pinned ? "Unpin" : "Pin", icon: room.pinned ? "pin.slash" : "pin") { Task { await store.setPinned(!room.pinned, room.id) } }
             if let search { action("Search", icon: "magnifyingglass", help: "Search messages (⇧⌘F)", search) }
+            if allowed.editProfile { action("Rename", icon: "pencil") { newName = room.name; renaming = true } }
+            if allowed.manageMembers { action("Add people", icon: "person.badge.plus") { addingPeople = true } }
         }
     }
     private func action(_ title: String, icon: String, help: String? = nil, _ run: @escaping () -> Void) -> some View {
@@ -116,6 +142,13 @@ struct InfoPanel: View {
             }.contentShape(Rectangle())
         }
         .buttonStyle(.plain).disabled(isMe)
+        .contextMenu {
+            if allowed.manageMembers, !isMe {
+                Button("Remove from \(room.kind == .space ? "space" : "group")", role: .destructive) {
+                    Task { await store.removeMember(person.id, from: room.id) }
+                }
+            }
+        }
         .popover(isPresented: Binding(get: { card == person.id }, set: { if !$0 { card = nil } }), arrowEdge: .leading) {
             VStack(alignment: .leading, spacing: 8) {
                 PersonCard(person: person)
@@ -191,6 +224,50 @@ struct InfoPanel: View {
                 }
             }.font(.caption).foregroundStyle(.secondary)
         }
+    }
+}
+
+/// People to add to a space or group: search by name or email, tick several, add them together.
+struct AddPeopleSheet: View {
+    let store: ChatStore
+    let room: Conversation
+    let roster: [Person]
+    @State private var query = ""
+    @State private var found: [Person] = []
+    @State private var picked: [Person] = []
+    @Environment(\.dismiss) private var dismiss
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Add people to “\(room.name)”").font(.headline)
+            TextField("Name or email", text: $query).textFieldStyle(.roundedBorder)
+            List(found.filter { person in !roster.contains { $0.id == person.id } }) { person in
+                Toggle(isOn: Binding(get: { picked.contains(person) }, set: { on in
+                    if on { picked.append(person) } else { picked.removeAll { $0 == person } }
+                })) {
+                    HStack(spacing: 8) {
+                        Avatar(name: person.name, size: 22, url: person.avatarURL)
+                        VStack(alignment: .leading, spacing: 1) {
+                            Text(person.name).lineLimit(1)
+                            if let email = person.email, email != person.name { Text(email).font(.caption).foregroundStyle(.secondary).lineLimit(1) }
+                        }
+                    }
+                }.toggleStyle(.checkbox)
+            }.frame(height: 260)
+            HStack {
+                Text(picked.map(\.name).joined(separator: ", ")).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                Spacer()
+                Button("Cancel") { dismiss() }.keyboardShortcut(.cancelAction)
+                Button("Add") {
+                    dismiss()
+                    Task { await store.addMembers(picked, to: room.id) }
+                }.keyboardShortcut(.defaultAction).disabled(picked.isEmpty)
+            }
+        }.padding(18).frame(width: 420)
+            .task(id: query) {
+                try? await Task.sleep(for: .milliseconds(250))   // one search per pause in typing
+                guard !Task.isCancelled else { return }
+                found = (try? await store.searchPeople(query)) ?? []
+            }
     }
 }
 

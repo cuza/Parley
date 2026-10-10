@@ -30,7 +30,7 @@ struct RowLayout: Equatable, Sendable {
     var retry: CGRect?             // under the bubble when the send failed
     var service: CGRect?           // a system event's centered line ("Ana added Ben"); then there is no bubble
     var seen: CGRect?              // "Seen" / "Seen by …" under my message, when readers' receipts end here
-    var bare = false               // large emoji: no bubble, and the time on a pill
+    var bare = false               // no bubble: large emoji (the time on a pill), or a message of cards only
 
     static let margin: CGFloat = 14, avatarSize: CGFloat = 28, avatarGap: CGFloat = 6, tailWidth: CGFloat = 6
     static let padX: CGFloat = 11, padY: CGFloat = 6, spacing: CGFloat = 4, timeGap: CGFloat = 8, maxBubble: CGFloat = 500
@@ -38,6 +38,8 @@ struct RowLayout: Equatable, Sendable {
     static let serviceInset = NSSize(width: 10, height: 3)
     static let serviceLines = 6   // a longer service line (a space description) is cut; the row's tooltip has all of it
     static let viaInset = NSSize(width: 5, height: 1), viaGap: CGFloat = 6
+    /// Counts measuring work on the task that binds it (tests): each layout made, as "id@width", and each text measure.
+    @TaskLocal static var tally: MeasureTally?
 
     /// Sender names show on the first bubble of a run in groups and spaces; avatars sit beside the run's last
     /// incoming bubble there (Telegram shows neither in one-to-one chats).
@@ -46,6 +48,7 @@ struct RowLayout: Equatable, Sendable {
         let plain = style == .plain, readersKind = kind
         let own = own && !plain, kind: ConversationKind = plain ? .space : kind
         let message = row.message
+        tally?.rows.append("\(row.id)@\(width)")
         var layout = RowLayout(width: width)
         var y: CGFloat = 0
         if row.newDay {
@@ -77,7 +80,11 @@ struct RowLayout: Equatable, Sendable {
             cy += size.height; contentWidth = max(contentWidth, size.width)
             return rect
         }
-        if !own && row.begins && kind != .direct {
+        // A message that is only cards has no bubble: its sender, badge and time make one line over the card, as Google
+        // Chat draws it, in a DM too.
+        let cardOnly = message.text.isEmpty && message.quote == nil && message.thinking.isEmpty && !message.attachments.isEmpty
+            && message.attachments.allSatisfy { $0.card != nil }
+        if !own && (row.begins && kind != .direct || cardOnly) {
             var name = measure(nameText(message.sender.name), width: inner)
             if let via = message.via {   // the name gives way to the badge, which keeps its size
                 let text = measure(viaText(via), width: inner / 2)
@@ -90,7 +97,8 @@ struct RowLayout: Equatable, Sendable {
             } else {
                 layout.name = place(name)
             }
-            lastLine = nil
+            let line = layout.name.map { CGRect(x: $0.minX, y: $0.minY, width: (layout.via?.maxX ?? $0.maxX) - $0.minX, height: max($0.height, layout.via?.height ?? 0)) }
+            lastLine = cardOnly ? line.map { ($0.width, $0.maxY) } : nil   // the time follows the name
         }
         if !message.thinking.isEmpty {
             layout.thinking = place(measure(thinkingText(), width: inner)); lastLine = nil
@@ -108,11 +116,14 @@ struct RowLayout: Equatable, Sendable {
             let styled = MessageTextStyle.styled(message.text, message.formatting, own: own, jumbo: message.jumboEmoji)
             var measured = MessageTextStyle.measure(styled, width: inner)
             // The text view is only as wide as the widest measured line; a long word broken mid-way (a URL) can break again
-            // at that width and take another line, so the text is measured again there.
+            // at that width and take another line, so such text is measured again there. Lines broken between words
+            // still fit at that width and break the same.
             // Keeps that width (the view's) and takes the height measured at it.
-            let fitted = MessageTextStyle.measure(styled, width: measured.size.width)
-            if fitted.size.height > measured.size.height {
-                measured = (CGSize(width: measured.size.width, height: fitted.size.height), fitted.lastLine)
+            if measured.brokeWord {
+                let fitted = MessageTextStyle.measure(styled, width: measured.size.width)
+                if fitted.size.height > measured.size.height {
+                    measured = (CGSize(width: measured.size.width, height: fitted.size.height), fitted.lastLine, true)
+                }
             }
             let rect = place(measured.size)
             layout.text = rect
@@ -168,8 +179,8 @@ struct RowLayout: Equatable, Sendable {
         layout.bubble = bubble
         layout.tail = row.ends && !plain
         layout.time = CGRect(x: bubble.maxX - padX - time.width, y: bubble.minY + timeTop, width: time.width, height: time.height)
-        layout.bare = message.jumboEmoji != nil
-        if layout.bare { layout.time = layout.time.insetBy(dx: -serviceInset.width / 2, dy: -serviceInset.height / 2) }   // room for the pill
+        layout.bare = message.jumboEmoji != nil || cardOnly
+        if message.jumboEmoji != nil { layout.time = layout.time.insetBy(dx: -serviceInset.width / 2, dy: -serviceInset.height / 2) }   // room for the pill
         let offset = { (rect: CGRect) in rect.offsetBy(dx: bubble.minX, dy: bubble.minY) }
         layout.name = layout.name.map(offset); layout.via = layout.via.map(offset)
         layout.quote = layout.quote.map(offset); layout.quoteSender = layout.quoteSender.map(offset); layout.quoteText = layout.quoteText.map(offset)
@@ -265,9 +276,19 @@ struct RowLayout: Equatable, Sendable {
         return body
     }
     static func timeText(_ message: Message, color: NSColor = .secondaryLabelColor) -> NSAttributedString {
-        let time = message.delivery == .pending ? "Sending…" : message.createdAt.formatted(date: .omitted, time: .shortened)
+        let time = message.delivery == .pending ? "Sending…" : shortTime(message.createdAt)
         return styled((message.starred ? "★ " : "") + (message.edited ? "edited " : "") + time, .systemFont(ofSize: 11), color, oneLine: true)
     }
+    /// Formatted once per date: every layout and every row view needs its message's time.
+    /// ponytail: a time zone or 12/24-hour change shows in newly formatted times only; key by both if it matters.
+    private static func shortTime(_ date: Date) -> String {
+        let key = NSNumber(value: date.timeIntervalSinceReferenceDate)
+        if let cached = times.object(forKey: key) { return cached as String }
+        let time = date.formatted(date: .omitted, time: .shortened)
+        times.setObject(time as NSString, forKey: key)
+        return time
+    }
+    nonisolated(unsafe) private static let times = NSCache<NSNumber, NSString>()   // NSCache is thread-safe
     static func pillText(_ reaction: Reaction, color: NSColor = .labelColor) -> NSAttributedString {
         let text = styled("\(reaction.custom == nil ? reaction.emoji : "\u{FFFD}") \(reaction.people.count)", .systemFont(ofSize: 12), color, oneLine: true)
         guard let custom = reaction.custom else { return text }
@@ -360,6 +381,10 @@ struct RowLayout: Equatable, Sendable {
         }
         return CGSize(width: min(width, ceil(rect.width)), height: height)
     }
+}
+
+final class MeasureTally: @unchecked Sendable {   // written only by the task that binds it
+    var rows: [String] = [], texts = 0
 }
 
 private extension NSFont {

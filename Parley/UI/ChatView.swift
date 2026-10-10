@@ -62,11 +62,23 @@ struct ChatView: View {
     @State private var searching = false
     @State private var columns: NavigationSplitViewVisibility
     @State private var sidebarAutoHidden = false   // hidden by us for a narrow window: it comes back when there is room
-    @State private var width: CGFloat = 0
+    @State private var width = WidthRef()   // read only by actions, so kept out of state: it changes every frame of a resize
     @State private var sidebarWidth: CGFloat = 230   // as last measured while shown
     @State private var hostWindow = WindowRef()   // this view's own window
     @State private var leaving: Conversation?   // asks before leaving
     @AppStorage("collapsedSidebarSections") private var collapsedSections = ""   // titles, one per line
+    @AppStorage(SidebarLimit.enabledKey) private var limitSections = false
+    @AppStorage(SidebarLimit.countKey) private var sectionLimit = 10
+    @AppStorage(SidebarLimit.expandedKey) private var expandedSections = ""   // "Show all" sections' titles, one per line
+    private var sectionLimitArgs: (limit: Int?, expanded: Set<String>) {
+        (limitSections ? sectionLimit : nil, Set(expandedSections.split(separator: "\n").map(String.init)))
+    }
+    /// `titles` (one per line) with `title` added or removed.
+    private static func lines(_ titles: String, _ title: String, contains: Bool) -> String {
+        var set = Set(titles.split(separator: "\n").map(String.init))
+        if contains { set.insert(title) } else { set.remove(title) }
+        return set.sorted().joined(separator: "\n")
+    }
     @Environment(\.openWindow) private var openWindow
     @Environment(\.dismissWindow) private var dismissWindow
     @Environment(\.openURL) private var openURL
@@ -106,10 +118,10 @@ struct ChatView: View {
         window.setFrame(frame, display: true, animate: animate)
     }
     private func fitSidebar() {
-        let next = Self.sidebar(width: width, paneOpen: store.info || store.threadID != nil, sidebarWidth: sidebarWidth,
+        let next = Self.sidebar(width: width.value, paneOpen: store.info || store.threadID != nil, sidebarWidth: sidebarWidth,
                                 visible: columns != .detailOnly, autoHidden: sidebarAutoHidden)
         if (columns != .detailOnly) != next.visible { columns = next.visible ? .all : .detailOnly }
-        sidebarAutoHidden = next.autoHidden
+        if sidebarAutoHidden != next.autoHidden { sidebarAutoHidden = next.autoHidden }
     }
     @ViewBuilder private var sidebar: some View {
             VStack(spacing: 0) {
@@ -125,13 +137,12 @@ struct ChatView: View {
                     if let shortcut = Shortcut.allCases.first(where: { Self.tag($0) == id }) { Task { await store.openShortcut(shortcut) } }
                     else { Task { await store.select(id) } }
                 })) {
-                    ForEach(Conversation.sidebarSections(store.conversations), id: \.title) { section($0.title, rooms: $0.rooms) }
+                    ForEach(Conversation.sidebarSections(store.conversations, limit: sectionLimitArgs.limit, expanded: sectionLimitArgs.expanded,
+                                                         selected: fixedConversation ?? store.selectedID), id: \.title) {
+                        section($0.title, rooms: $0.rooms, hidden: $0.hidden)
+                    }
                 }.listStyle(.sidebar).accessibilityIdentifier("sidebar")
-                HStack(spacing: 7) {
-                    Circle().fill(store.connection == .connected ? .green : .orange).frame(width: 6, height: 6)
-                    Text(store.connection.rawValue).font(.caption)
-                    Spacer()
-                }.foregroundStyle(.secondary).padding(14)
+                OwnStatusFooter(store: store)
             }
             .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { if $0 > 0 { sidebarWidth = $0 } }
             .navigationSplitViewColumnWidth(min: Self.sidebarMinWidth, ideal: 230, max: Self.sidebarMaxWidth)
@@ -205,9 +216,9 @@ struct ChatView: View {
         }
         .frame(minWidth: Self.minWidth(paneOpen: store.info || store.threadID != nil, sidebar: 0), minHeight: 480)
         .onChange(of: store.info || store.threadID != nil) { _, open in
-            if open { Self.makeRoom(Self.widthForPane(window: width, sidebar: Self.shownSidebar(fixedConversation: fixedConversation, columns: columns, measured: sidebarWidth)), in: hostWindow.window) }
+            if open { Self.makeRoom(Self.widthForPane(window: width.value, sidebar: Self.shownSidebar(fixedConversation: fixedConversation, columns: columns, measured: sidebarWidth)), in: hostWindow.window) }
         }
-        .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { width = $0; fitSidebar() }
+        .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { width.value = $0; fitSidebar() }
         .background(WindowReader(ref: hostWindow))
         .onChange(of: store.info || store.threadID != nil) { fitSidebar() }
         .onChange(of: columns) { _, shown in
@@ -230,7 +241,8 @@ struct ChatView: View {
                 }.keyboardShortcut("i")
                 Button("") { searching = true }.keyboardShortcut("f", modifiers: [.command, .shift]).disabled(fixedConversation != nil)
                 ForEach(1...9, id: \.self) { number in
-                    Button("") { if let room = Conversation.atShortcut(number, in: store.conversations) { Task { await store.select(room.id) } } }
+                    Button("") { if let room = Conversation.atShortcut(number, in: store.conversations, limit: sectionLimitArgs.limit,
+                                                                       expanded: sectionLimitArgs.expanded, selected: store.selectedID) { Task { await store.select(room.id) } } }
                         .keyboardShortcut(KeyEquivalent(Character(String(number))), modifiers: .command)
                 }
                 Button("") { if let room = Conversation.nextUnread(after: store.selectedID, in: store.conversations, forward: true) { Task { await store.select(room.id) } } }
@@ -258,6 +270,22 @@ struct ChatView: View {
         .confirmationDialog("Leave “\(leaving?.name ?? "")”?", isPresented: Binding(get: { leaving != nil }, set: { if !$0 { leaving = nil } })) {
             Button("Leave", role: .destructive) { if let room = leaving { Task { await store.leave(room.id) } } }
         } message: { Text("It leaves your sidebar. You can be added again later.") }
+        // An app's dialog, over the main window (ponytail: one sheet for all windows; a dialog opened from a
+        // conversation's own window shows in the main one).
+        .sheet(isPresented: Binding(get: { fixedConversation == nil && store.dialog != nil },
+                                    set: { if !$0 { Task { await store.cancelDialog() } } })) {
+            if let open = store.dialog {
+                DialogSheet(open: open, submit: { await store.submitDialog(action: $0, inputs: $1) }, cancel: { Task { await store.cancelDialog() } })
+            }
+        }
+        .overlay(alignment: .bottom) {   // an app's note, for a moment ("Poll started.")
+            if let toast = store.toast {
+                Text(toast).font(.callout).padding(.horizontal, 14).padding(.vertical, 8)
+                    .background(.regularMaterial, in: Capsule()).overlay { Capsule().strokeBorder(.separator) }
+                    .padding(.bottom, 80).transition(.opacity).allowsHitTesting(false)
+            }
+        }
+        .animation(.default, value: store.toast)
         .alert("Something went wrong",isPresented: Binding(get: { store.error != nil }, set: { if !$0 { store.error = nil } })) { Button("OK") { store.error = nil } } message: { Text(store.error ?? "") }
         .task(id: fixedConversation.flatMap(store.hasConversation)) {
             if let fixedConversation {   // a restored window: loads, or closes when the conversation isn't this account's
@@ -280,13 +308,11 @@ struct ChatView: View {
     /// A shortcut's sidebar row tag; conversation ids never start with it.
     private static func tag(_ shortcut: Shortcut) -> String { "shortcut:" + shortcut.rawValue }
     /// A collapsible section; which ones are collapsed is remembered across launches. Shortcuts lead with Mentions and Starred.
-    @ViewBuilder private func section(_ title: String, rooms: [Conversation]) -> some View {
+    /// Collapsed, its header counts its unread messages, as web Chat. `hidden`: rows Limit sidebar sections leaves out.
+    @ViewBuilder private func section(_ title: String, rooms: [Conversation], hidden: [Conversation]) -> some View {
         if !rooms.isEmpty || (title == "Shortcuts" && fixedConversation == nil) {
-            Section(title, isExpanded: Binding(get: { !collapsedSections.split(separator: "\n").contains { $0 == title } }, set: { expanded in
-                var titles = Set(collapsedSections.split(separator: "\n").map(String.init))
-                if expanded { titles.remove(title) } else { titles.insert(title) }
-                collapsedSections = titles.sorted().joined(separator: "\n")
-            })) {
+            let collapsed = collapsedSections.split(separator: "\n").contains { $0 == title }
+            Section(isExpanded: Binding(get: { !collapsed }, set: { collapsedSections = Self.lines(collapsedSections, title, contains: !$0) })) {
                 if title == "Shortcuts" && fixedConversation == nil {
                     ForEach(Shortcut.allCases, id: \.self) { shortcut in
                         HStack {
@@ -316,12 +342,28 @@ struct ChatView: View {
                             Button(room.muted ? "Unmute" : "Mute") { Task { await store.setMuted(!room.muted, room.id) } }
                             NotificationLevelPicker(store: store, room: room)
                             Button("Open in new window") { openWindow(value: room.id) }
+                            Button("Hide") { Task { await store.hide(room.id) } }
                             if room.kind != .direct {
                                 Divider()
                                 Button("Leave…", role: .destructive) { leaving = room }
                             }
                         }
                         .accessibilityElement(children: .ignore).accessibilityLabel("\(room.name), \(room.unread) unread")
+                }
+                if !hidden.isEmpty {
+                    let open = sectionLimitArgs.expanded.contains(title)
+                    Button { expandedSections = Self.lines(expandedSections, title, contains: !open) } label: {
+                        Label(open ? "Show less" : "Show all", systemImage: "chevron.up.chevron.down").font(.system(size: 13)).foregroundStyle(.secondary)
+                    }.buttonStyle(.plain)
+                }
+            } header: {
+                HStack {
+                    Text(title)
+                    if collapsed, case let unread = rooms.filter { !$0.muted }.reduce(0, { $0 + $1.unread }), unread > 0 {
+                        Spacer(minLength: 0)
+                        Text("\(unread)").font(.system(size: 11, weight: .semibold, design: .rounded)).foregroundStyle(.secondary)
+                            .accessibilityLabel("\(unread) unread")
+                    }
                 }
             }
         }
@@ -377,7 +419,7 @@ struct TimelineView: View {
         MessageRowActions(react: { emoji, message in Task { await store.react(emoji, to: message) } },
                           toggleTranscript: { store.toggleTranscript($0.id) },
                           dismissCard: { store.dismissCard(of: $0) },
-                          clickCard: { message, action, inputs in await store.clickCard(message, action: action, inputs: inputs) },
+                          clickCard: { message, card, action, inputs in await store.clickCard(message, card: card, action: action, inputs: inputs) },
                           reactCustom: { emoji, message in Task { await store.react(emoji.text, custom: emoji, to: message) } },
                           customEmoji: { await store.loadCustomEmoji(); return store.customEmoji },
                           reactors: { reaction, message in await store.reactorsLine(reaction, on: message.id) },
@@ -670,6 +712,9 @@ struct ComposerBar: View {
             }, attach: attach,
                members: store.mentionCandidates(conversation.id), spaces: store.conversations, needMembers: { Task { await store.loadMembers(conversation.id) } },
                customEmoji: store.customEmoji, needCustomEmoji: { Task { await store.loadCustomEmoji() } },
+               slashCommands: store.slashCommands[conversation.id] ?? [],
+               needSlashCommands: { query in Task { await store.loadSlashCommands(conversation.id, query: query) } },
+               runCommand: { command in Task { await store.run(command, in: conversation.id) } },
                loadImage: { try await store.attachmentData($0, thumbnail: $1) },
                focus: store.quoting[scope]?.id, handle: composerHandle, height: { if fieldHeight != $0 { fieldHeight = $0 } })
             .frame(minWidth: 60).frame(height: min(130, max(Self.control, fieldHeight)))
@@ -717,12 +762,19 @@ struct ThreadPane: View {
             }
             if let parent = store.messages.first(where: { $0.id == thread }) {
                 // A long first message would push the replies out of the pane: four lines, a click shows the rest.
-                VStack(alignment: .leading) {
-                    Text(parent.sender.name).font(.caption).foregroundStyle(.secondary)
-                    // The timeline's own text: formatting, mentions, links and custom emoji as in the bubble.
-                    NativeMessageText(text: parent.text, formatting: parent.formatting, own: false, lines: parentExpanded ? 0 : 4,
-                                      maxWidth: .infinity, redraw: emojiLoads)
-                        .task(id: parent.id) { await loadEmoji(in: parent) }
+                // A message with no text shows its picture and what it carried ("Photo", the file's name…), as quotes do.
+                HStack(alignment: .top, spacing: 8) {
+                    if let media = parent.attachments.first(where: { $0.kind == .image || $0.kind == .video }) {
+                        Thumbnail(attachment: media, load: { try await store.attachmentData($0, thumbnail: $1) }).frame(width: 40, height: 40)
+                    }
+                    VStack(alignment: .leading) {
+                        Text(parent.sender.name).font(.caption).foregroundStyle(.secondary)
+                        // The timeline's own text: formatting, mentions, links and custom emoji as in the bubble.
+                        NativeMessageText(text: parent.text.isEmpty ? QuotedMessage.summary(text: "", attachments: parent.attachments) : parent.text,
+                                          formatting: parent.text.isEmpty ? [] : parent.formatting, own: false, lines: parentExpanded ? 0 : 4,
+                                          maxWidth: .infinity, redraw: emojiLoads)
+                            .task(id: parent.id) { await loadEmoji(in: parent) }
+                    }
                 }
                 .frame(maxWidth: .infinity, alignment: .leading).padding()
                 .contentShape(Rectangle()).onTapGesture { parentExpanded.toggle() }
@@ -884,7 +936,8 @@ struct SidePaneSplit<Main: View, Pane: View>: View {
                 pane.frame(width: width)
             }
         }
-        .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { room = $0 }
+        // Past the room for the widest pane beside the narrowest timeline, more room changes nothing: no redraw per frame of a resize.
+        .onGeometryChange(for: CGFloat.self) { min($0.size.width, ChatView.paneMaxWidth + ChatView.timelineMinWidth + 1) } action: { room = $0 }
     }
 }
 
@@ -952,6 +1005,7 @@ extension ToolbarContent {
 
 /// The window a view is in, held weakly.
 final class WindowRef { weak var window: NSWindow? }
+final class WidthRef { var value: CGFloat = 0 }
 /// Records its view's window in `ref` once it is in one.
 private struct WindowReader: NSViewRepresentable {
     let ref: WindowRef

@@ -21,10 +21,10 @@ struct BotSetupAndTranslationTests {
         let (shown, items) = try card(setup(2), people: ["bot1": Person(id: "bot1", name: "Example", avatarURL: icon)])
         #expect(shown.text == "See https://example.com/x")
         #expect(items.first == .text("Only visible to you", [TextStyleRange(style: .color(Card.secondaryText), start: 0, length: 19)]))
-        #expect(items.contains { if case .row(icon, _, _, "Example", _, _) = $0 { true } else { false } })
+        #expect(items.contains { if case .row(icon, _, _, "Example", _, _, _, _, _) = $0 { true } else { false } })
         #expect(items.contains(.text("Example requires authentication", [])))
         #expect(items.contains(.links([Card.Link(title: "Sign in", url: URL(string: "https://example.com/setup")!)])))
-        #expect(DynamiteMapper.undrawn(setup(2), selfID: "me").isEmpty)
+        #expect(MessageCoverage.gaps(setup(2), selfID: "me").isEmpty)
     }
     @Test func configureAndNotRespondingFollowTheRequiredAction() throws {
         let (_, configure) = try card(setup(1))
@@ -36,9 +36,14 @@ struct BotSetupAndTranslationTests {
         #expect(!insecure.contains { if case .links = $0 { true } else { false } })   // https only
         #expect(DynamiteMapper.cardAppIDs(setup(2)).contains("bot1"))   // looked up as a bot
     }
-    @Test func withoutTextTheCouldNotRespondRowStays() throws {
-        var empty = setup(2); empty.textBody = ""
-        #expect(try card(empty).0.text.hasSuffix("couldn’t respond"))
+    /// Without text, an app that needs setting up says so as with text (Google Chat words both alike); with no action
+    /// asked, the "couldn't respond" row stays.
+    @Test func withoutTextTheSetupCardStillShows() throws {
+        var empty = setup(1); empty.textBody = ""
+        let (shown, items) = try card(empty)
+        #expect(shown.text.isEmpty && items.contains(.text("App requires configuration", [])))
+        var silent = setup(1); silent.textBody = ""; silent.botResponses[0].clearRequiredAction()
+        #expect(try card(silent).0.text.hasSuffix("couldn’t respond"))
     }
     @Test func aTranslatedMessageShowsTheTranslationAndCanShowTheOriginal() throws {
         let proto = message(text: "Hola, ¿cómo estás?") { $0.translation = .with { t in
@@ -48,7 +53,7 @@ struct BotSetupAndTranslationTests {
         #expect(shown.text == "Hola, ¿cómo estás?")   // the original stays the message's text (notifications, Home, quotes)
         #expect(shown.translation?.text == "Hello, how are you?" && shown.translation?.from == "es")
         #expect(shown.translation?.formatting.contains(TextStyleRange(style: .bold, start: 0, length: 5)) == true)
-        #expect(DynamiteMapper.undrawn(proto, selfID: "me").isEmpty)
+        #expect(MessageCoverage.gaps(proto, selfID: "me").isEmpty)
         // The timeline shows the translation, and the original once opened.
         let translated = TimelineRow.rows([shown])[0], original = TimelineRow.rows([shown], transcripts: [shown.id])[0]
         #expect(translated.message.text == "Hello, how are you?" && original.message.text == "Hola, ¿cómo estás?")

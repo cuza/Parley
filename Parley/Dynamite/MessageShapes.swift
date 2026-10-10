@@ -3,14 +3,14 @@ import Foundation
 import Synchronization
 import UniformTypeIdentifiers
 
-/// An anonymous record of the messages Parley doesn't fully draw (see `DynamiteMapper.undrawn`), which a user can
-/// export from the Help menu and send: each message's protobuf field tree, read from its wire bytes, with no values.
+/// An anonymous record of the messages Parley doesn't fully draw (see `MessageCoverage`), which a user can export from
+/// the Help menu or Settings and send: each message's protobuf field tree, read from its wire bytes, with no values.
 /// A skeleton names field numbers and nesting; `N:v` is a varint, `N:f32`/`N:f64` a fixed number, `N:Lk` a run of k
 /// bytes (text, ids, links), `N{…}` a nested message, `×k` k equal repeats. Varints keep their value (`N=v`) only at
 /// `enumPaths`. Kept in memory for the launch.
 enum MessageShapes {
     struct Entry: Codable, Hashable, Sendable {
-        var fields: [String]   // what the guard found undrawn, e.g. "19.1=9"
+        var fields: [String]   // the gaps `MessageCoverage` found, e.g. "15.7.2.2.13.?6", "19.1=9"
         var skeleton: String   // the first such message's whole tree
         var count = 1          // messages seen with this gap
     }
@@ -22,12 +22,10 @@ enum MessageShapes {
     struct Store: Sendable {
         private(set) var entries: [Entry] = []
         private var index: [String: Int] = [:]
-        /// Counts the message under its gap: the undrawn fields and the shapes of the undrawn parts (`parts`, from
-        /// `DynamiteMapper.undrawnParts`), lengths and repeat counts aside, not the rest of the message. A new gap adds
-        /// an entry with the message's whole tree, unless the store is full. True when added.
-        @discardableResult mutating func record(_ proto: Dynamite_Message, fields: [String], parts: [String] = []) -> Bool {
-            let plain = parts.map { $0.replacingOccurrences(of: #":L\d+|×\d+"#, with: "", options: .regularExpression) }
-            let key = fields.joined(separator: ",") + "|" + Set(plain).sorted().joined(separator: "|")
+        /// Counts the message under its gap (`fields`), not the rest of the message. A new gap adds an entry with the
+        /// message's whole tree, unless the store is full. True when added.
+        @discardableResult mutating func record(_ proto: Dynamite_Message, fields: [String]) -> Bool {
+            let key = fields.joined(separator: ",")
             if let at = index[key] { entries[at].count += 1; return false }
             guard entries.count < cap, let bytes: [UInt8] = try? proto.serializedBytes() else { return false }
             index[key] = entries.count
@@ -43,7 +41,7 @@ enum MessageShapes {
 
     /// The tree of `bytes` as a protobuf message, or nil when they don't read as one.
     static func skeleton(_ bytes: ArraySlice<UInt8>, path: [Int]) -> String? {
-        var reader = Reader(bytes: bytes), parts: [String] = []
+        var reader = WireReader(bytes: bytes), parts: [String] = []
         while !reader.done {
             guard let key = reader.varint(), key >> 3 > 0, key >> 3 < 1 << 29 else { return nil }
             let field = Int(key >> 3), here = path + [field], name = here.map(String.init).joined(separator: ".")
@@ -73,36 +71,29 @@ enum MessageShapes {
         guard let string = String(bytes: bytes, encoding: .utf8) else { return false }
         return string.unicodeScalars.allSatisfy { $0.value >= 0x20 || $0 == "\n" || $0 == "\t" || $0 == "\r" }
     }
-    private struct Reader {
-        var bytes: ArraySlice<UInt8>
-        var done: Bool { bytes.isEmpty }
-        mutating func varint() -> UInt64? {
-            var value: UInt64 = 0, shift: UInt64 = 0
-            while let byte = bytes.popFirst() {
-                guard shift < 64 else { return nil }
-                value |= UInt64(byte & 0x7F) << shift
-                if byte & 0x80 == 0 { return value }
-                shift += 7
-            }
-            return nil
-        }
-        mutating func take(_ count: Int) -> ArraySlice<UInt8>? {
-            guard count >= 0, count <= bytes.count else { return nil }
-            defer { bytes = bytes.dropFirst(count) }
-            return bytes.prefix(count)
-        }
-        mutating func skip(_ count: Int) -> Bool { take(count) != nil }
+    /// One line per gap, the most seen first: "15.7.2.2.13.?6 — 3 messages".
+    static func summary(_ entries: [Entry]) -> [String] {
+        var counts: [String: Int] = [:]
+        for entry in entries { for field in entry.fields { counts[field, default: 0] += entry.count } }
+        return counts.sorted { $0.value != $1.value ? $0.value > $1.value : $0.key < $1.key }
+            .map { "\($0.key) — \($0.value) message\($0.value == 1 ? "" : "s")" }
     }
 
     static func export(_ entries: [Entry], app: String, os: String, date: Date) -> Data {
-        struct File: Encodable { var app: String; var macOS: String; var date: Date; var entries: [Entry] }
+        struct File: Encodable { var app: String; var macOS: String; var date: Date; var summary: [String]; var entries: [Entry] }
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]
         encoder.dateEncodingStrategy = .iso8601
-        return (try? encoder.encode(File(app: app, macOS: os, date: date, entries: entries))) ?? Data()
+        return (try? encoder.encode(File(app: app, macOS: os, date: date, summary: summary(entries), entries: entries))) ?? Data()
     }
 
-    /// Help ▸ Export Unsupported Message Shapes…: a JSON file to send to the developer, or a note when there is none.
+    /// Settings ▸ Advanced ▸ Copy Summary: the summary lines on the clipboard.
+    @MainActor static func copySummary() {
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(summary(shared.withLock { $0.entries }).joined(separator: "\n"), forType: .string)
+    }
+
+    /// Help ▸ Export Unsupported Message Shapes… and Settings ▸ Advanced ▸ Export…: a JSON file to send to the developer, or a note when there is none.
     @MainActor static func saveExport() {
         let entries = shared.withLock { $0.entries }
         guard !entries.isEmpty else {
@@ -121,4 +112,26 @@ enum MessageShapes {
         do { try export(entries, app: app, os: ProcessInfo.processInfo.operatingSystemVersionString, date: .now).write(to: url) }
         catch { NSAlert(error: error).runModal() }
     }
+}
+
+/// Reads protobuf wire bytes: varints and runs of bytes.
+struct WireReader {
+    var bytes: ArraySlice<UInt8>
+    var done: Bool { bytes.isEmpty }
+    mutating func varint() -> UInt64? {
+        var value: UInt64 = 0, shift: UInt64 = 0
+        while let byte = bytes.popFirst() {
+            guard shift < 64 else { return nil }
+            value |= UInt64(byte & 0x7F) << shift
+            if byte & 0x80 == 0 { return value }
+            shift += 7
+        }
+        return nil
+    }
+    mutating func take(_ count: Int) -> ArraySlice<UInt8>? {
+        guard count >= 0, count <= bytes.count else { return nil }
+        defer { bytes = bytes.dropFirst(count) }
+        return bytes.prefix(count)
+    }
+    mutating func skip(_ count: Int) -> Bool { take(count) != nil }
 }

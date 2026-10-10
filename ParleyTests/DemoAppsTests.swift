@@ -17,9 +17,9 @@ import Testing
         let links = card.sections.flatMap { $0 }.compactMap { if case .links(let links) = $0 { links } else { nil } }.flatMap { $0 }
         let reply = try #require(links.first { $0.title == "Reply" }?.action)
         #expect(links.first { $0.title == "Open" }?.trailing == true && links.first { $0.title == "Resolve" }?.action != nil)
-        await store.clickCard(message, action: reply, inputs: [Card.Input(name: "REPLY_TO_COMMENT", value: "Thursday works for me.")])
+        await store.clickCard(message, card: card.id, action: reply, inputs: [Card.Input(name: "REPLY_TO_COMMENT", value: "Thursday works for me.")])
         let updated = try #require(store.messages.first { $0.id == message.id }?.attachments.first?.card)
-        #expect(updated.sections.flatMap { $0 }.contains { if case .row(_, _, "Dave", "Thursday works for me.", _, _) = $0 { true } else { false } })
+        #expect(updated.sections.flatMap { $0 }.contains { if case .row(_, _, "Dave", "Thursday works for me.", _, _, _, _, _) = $0 { true } else { false } })
         #expect(store.error == nil)
     }
     @Test func theDesignSpaceShowsALinkPreviewAndATranslation() async throws {

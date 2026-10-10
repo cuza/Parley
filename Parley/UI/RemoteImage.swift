@@ -13,9 +13,10 @@ import AppKit
         return URLSession(configuration: config)
     }()
 
-    /// FIFE hosts take a size suffix: `=s<px>-c` (square crop) replaces any existing `=…` options. Other hosts are unchanged.
+    /// FIFE hosts take a size suffix: `=s<px>-c` (square crop) replaces any existing `=…` options. Other hosts, and `px` 0
+    /// (as named: a card's picture, whose proxy would crop and enlarge a GIF), are unchanged.
     nonisolated static func sized(_ url: URL, px: Int) -> URL {
-        guard let host = url.host(), host.hasSuffix(".googleusercontent.com") || host.hasSuffix(".ggpht.com"),
+        guard px > 0, let host = url.host(), host.hasSuffix(".googleusercontent.com") || host.hasSuffix(".ggpht.com"),
               var parts = URLComponents(url: url, resolvingAgainstBaseURL: false) else { return url }
         var path = parts.percentEncodedPath
         if let options = path.lastIndex(of: "="), !path[options...].contains("/") { path = String(path[..<options]) }

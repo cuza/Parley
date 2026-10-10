@@ -9,6 +9,7 @@ struct MentionQuery: Equatable {
     var text: String
     var shortcode = false
     var chip: Conversation? = nil   // a Chat link to this conversation, offered as its chip
+    var command = false             // a "/command" at the message's start (`slash(in:caret:)`)
 
     static func find(in string: String, caret: Int, shortcode: Bool = false) -> MentionQuery? {
         let ns = string as NSString
@@ -63,11 +64,12 @@ struct MentionQuery: Equatable {
 
 /// A row of the composer's suggestion list: someone to @-mention, or a custom emoji for a `:shortcode`.
 enum Suggestion: Hashable {
-    case person(Person), emoji(CustomEmoji), unicode(Emoji), space(Conversation)
+    case person(Person), emoji(CustomEmoji), unicode(Emoji), space(Conversation), command(SlashCommand)
     var id: String {
         switch self {
         case .person(let person): "p:" + person.id; case .emoji(let emoji): "e:" + emoji.id; case .unicode(let emoji): "u:" + emoji.character
         case .space(let room): "s:" + room.id
+        case .command(let command): "c:\(command.appID):\(command.id)"
         }
     }
 }
@@ -80,7 +82,8 @@ enum Suggestion: Hashable {
     func show(_ items: [Suggestion], selected: Int, above anchor: NSRect, in parent: NSWindow,
               loadImage: @escaping (Attachment, Bool) async throws -> Data, pick: @escaping (Suggestion) -> Void) {
         let list = MentionList(items: items, selected: selected, loadImage: loadImage, pick: pick)
-        let size = NSSize(width: 260, height: CGFloat(items.count) * MentionList.rowHeight + 8)
+        let commands = items.contains { if case .command = $0 { true } else { false } }   // a description and the app's name too
+        let size = NSSize(width: commands ? 440 : 260, height: CGFloat(items.count) * MentionList.rowHeight + 8)
         let panel = self.panel ?? {
             let panel = NSPanel(contentRect: .zero, styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: true)
             panel.isOpaque = false; panel.backgroundColor = .clear; panel.hasShadow = true
@@ -130,6 +133,13 @@ struct MentionList: View {
                         if let emoji = room.emoji { Text(emoji).font(.system(size: 16)).frame(width: 20, height: 20) }
                         else { Avatar(name: room.name, size: 20, url: room.avatarURL) }
                         Text(room.name).lineLimit(1)
+                    case .command(let command):   // as Google Chat lists them: the app's icon, the command, what it does, the app
+                        if command.action == .meetLink { Image(systemName: "video").frame(width: 22, height: 22) }
+                        else { Avatar(name: command.appName, size: 22, url: command.appAvatar) }
+                        Text(command.label).lineLimit(1).fixedSize()
+                        Text(command.description).foregroundStyle(index == selected ? .white : .secondary).lineLimit(1)
+                        Spacer(minLength: 4)
+                        Text(command.appName).font(.caption).foregroundStyle(index == selected ? .white : .secondary).lineLimit(1).fixedSize()
                     }
                     Spacer(minLength: 0)
                 }
@@ -150,6 +160,7 @@ struct MentionList: View {
         switch item {
         case .person(let person): "Mention \(person.name)"; case .emoji(let emoji): "Insert \(emoji.text)"; case .unicode(let emoji): "Insert \(emoji.character)"
         case .space(let room): "Replace the link with \(room.name)"
+        case .command(let command): "\(command.label), \(command.appName): \(command.description)"
         }
     }
 }
