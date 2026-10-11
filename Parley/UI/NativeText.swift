@@ -639,7 +639,7 @@ final class ComposerTextView: NSTextView {
     /// them; "thumbs_up" and "folded-hands" read as words.
     private static func standardEmoji(_ text: String) -> [Suggestion] {
         guard text.count >= 2 else { return [] }
-        return EmojiCatalog.search(text.replacingOccurrences(of: "_", with: " ").replacingOccurrences(of: "-", with: " ")).prefix(8).map(Suggestion.unicode)
+        return EmojiCatalog.search(text.replacingOccurrences(of: "_", with: " ").replacingOccurrences(of: "-", with: " "), frequent: EmojiUsage().top(.max)).prefix(8).map(Suggestion.unicode)
     }
 
     // MARK: Custom emoji

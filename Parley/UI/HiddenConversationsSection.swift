@@ -4,7 +4,7 @@ import SwiftUI
 struct HiddenConversationsSection: View {
     let store: ChatStore
     var body: some View {
-        LabeledContent("Hidden conversations") {
+        Section("Hidden conversations") {
             if store.hidden.isEmpty {
                 Text("No hidden conversations").foregroundStyle(.secondary)
             } else {

@@ -353,7 +353,8 @@ struct ChatView: View {
                 if !hidden.isEmpty {
                     let open = sectionLimitArgs.expanded.contains(title)
                     Button { expandedSections = Self.lines(expandedSections, title, contains: !open) } label: {
-                        Label(open ? "Show less" : "Show all", systemImage: "chevron.up.chevron.down").font(.system(size: 13)).foregroundStyle(.secondary)
+                        Label { Text(open ? "Show less" : "Show all") } icon: { ShowAllIcon(open: open) }
+                            .font(.system(size: 13)).foregroundStyle(.secondary)
                     }.buttonStyle(.plain).selectionDisabled()   // a click on the row toggles it, never selects it
                 }
             } header: {
@@ -1016,5 +1017,19 @@ private struct WindowReader: NSViewRepresentable {
         init(ref: WindowRef) { self.ref = ref; super.init(frame: .zero) }
         required init?(coder: NSCoder) { fatalError() }
         override func viewDidMoveToWindow() { super.viewDidMoveToWindow(); ref.window = window }
+    }
+}
+
+/// The sidebar's Show all / Show less icon, as web Chat draws it: chevrons pointing apart to show more, together to show
+/// less. SF Symbols has only the first, so the second is two chevrons stacked.
+struct ShowAllIcon: View {
+    let open: Bool
+    var body: some View {
+        if open {
+            VStack(spacing: -3) { Image(systemName: "chevron.down"); Image(systemName: "chevron.up") }
+                .font(.system(size: 8, weight: .semibold)).foregroundStyle(.secondary)
+        } else {
+            Image(systemName: "chevron.up.chevron.down").foregroundStyle(.secondary)
+        }
     }
 }

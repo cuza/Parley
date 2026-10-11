@@ -37,13 +37,119 @@ struct BubbleColorPicker: View {
     }
 }
 
-/// Parley ▸ Settings (⌘,).
+/// The tabs of Parley ▸ Settings, the last one shown remembered.
+enum SettingsTab: String, CaseIterable {
+    case general, appearance, notifications, advanced
+    static let key = "settingsTab"
+    /// Every tab's width: the window keeps it and takes each tab's height, as macOS settings windows do.
+    static let width: CGFloat = 520
+}
+
+/// Parley ▸ Settings (⌘,): one tab per topic.
 struct SettingsView: View {
     let store: ChatStore
+    @AppStorage(SettingsTab.key) private var tab = SettingsTab.general
+    var body: some View {
+        TabView(selection: $tab) {
+            Self.page(.general, store: store).tabItem { Label("General", systemImage: "gearshape") }.tag(SettingsTab.general)
+            Self.page(.appearance, store: store).tabItem { Label("Appearance", systemImage: "paintpalette") }.tag(SettingsTab.appearance)
+            Self.page(.notifications, store: store).tabItem { Label("Notifications", systemImage: "bell.badge") }.tag(SettingsTab.notifications)
+            Self.page(.advanced, store: store).tabItem { Label("Advanced", systemImage: "gearshape.2") }.tag(SettingsTab.advanced)
+        }
+    }
+    /// One tab's content at the settings width: a grouped form, as System Settings draws its panes.
+    static func page(_ tab: SettingsTab, store: ChatStore) -> some View {
+        Group {
+            switch tab {
+            case .general: GeneralSettings(store: store)
+            case .appearance: AppearanceSettings()
+            case .notifications: NotificationsSettings()
+            case .advanced: AdvancedSettings()
+            }
+        }
+        .formStyle(.grouped)
+        .scrollDisabled(true).fixedSize(horizontal: false, vertical: true)   // the window takes the tab's height
+        .frame(width: SettingsTab.width)
+    }
+}
+
+/// A section footer: a short caption the form wraps inside its margins.
+private struct Footer: View {
+    let text: String
+    var color: Color = .secondary
+    init(_ text: String, color: Color = .secondary) { self.text = text; self.color = color }
+    var body: some View { Text(text).font(.caption).foregroundStyle(color).fixedSize(horizontal: false, vertical: true) }
+}
+
+/// Settings ▸ General: account, sidebar, hidden conversations, GIPHY key.
+private struct GeneralSettings: View {
+    let store: ChatStore
     @Environment(SignInFlow.self) private var signIn: SignInFlow?
-    @Environment(\.openWindow) private var openWindow
     @State private var confirmSignOut = false
     @State private var accountError: String?
+    @State private var giphyKey = Giphy.key ?? ""
+    @State private var keyError: String?
+    @AppStorage(SidebarLimit.enabledKey) private var limitSections = false
+    @AppStorage(SidebarLimit.countKey) private var sectionLimit = 10
+    var body: some View {
+        Form {
+            Section {
+                if store.me.id.isEmpty {
+                    Text("Not signed in").foregroundStyle(.secondary)
+                } else {
+                    HStack(spacing: 10) {
+                        Avatar(name: store.me.name, size: 36, url: store.me.avatarURL)
+                        VStack(alignment: .leading, spacing: 1) {
+                            Text(store.me.name).font(.headline)
+                            if let email = store.me.email { Text(email).font(.caption).foregroundStyle(.secondary) }
+                        }
+                        Spacer()
+                        Button("Sign Out…") { confirmSignOut = true }.disabled(signIn == nil)
+                    }
+                }
+            } header: { Text("Account") } footer: {
+                if let accountError { Footer(accountError, color: .red) }
+            }
+            Section {
+                Toggle("Limit sections", isOn: $limitSections)
+                Picker("Rows per section", selection: $sectionLimit) {
+                    ForEach(SidebarLimit.choices, id: \.self) { Text("\($0) rows").tag($0) }
+                }
+                .disabled(!limitSections)
+            } header: { Text("Sidebar") } footer: {
+                Footer("As in web Chat, each section shows its first rows, then Show all. Unread conversations and the open one always show.")
+            }
+            HiddenConversationsSection(store: store)
+            Section {
+                SecureField("GIPHY API key", text: $giphyKey)
+                    .onChange(of: giphyKey) { _, key in
+                        let key = key.trimmingCharacters(in: .whitespacesAndNewlines)
+                        do {
+                            try Giphy.keyItem.set(key)
+                            keyError = nil
+                        } catch { keyError = error.localizedDescription }
+                    }
+            } footer: {
+                Footer(keyError ?? "For the composer's GIF picker. Create one at developers.giphy.com. Parley keeps it in your Keychain.",
+                       color: keyError == nil ? .secondary : .red)
+            }
+        }
+        .confirmationDialog("Sign out of Google Chat?", isPresented: $confirmSignOut) {
+            Button("Sign Out", role: .destructive) {
+                Task {
+                    do {
+                        try await signIn?.signOut()
+                        store.signedOut()
+                        accountError = nil
+                    } catch { accountError = error.localizedDescription }
+                }
+            }
+        } message: { Text("Parley forgets this Google session. Your drafts stay on this Mac.") }
+    }
+}
+
+/// Settings ▸ Appearance: light or dark, wallpaper and bubble colour per appearance, message style.
+private struct AppearanceSettings: View {
     @AppStorage("timelineStyle") private var style = TimelineStyle.bubbles
     @AppStorage(AppearanceMode.key) private var appearance = AppearanceMode.auto
     @AppStorage(Wallpaper.key(dark: false)) private var wallpaper = Wallpaper.none
@@ -51,20 +157,6 @@ struct SettingsView: View {
     @AppStorage(Wallpaper.doodlesKey) private var doodles = true
     @AppStorage(BubblePalette.colorKey(dark: false)) private var bubbleColor = ""
     @AppStorage(BubblePalette.colorKey(dark: true)) private var darkBubbleColor = ""
-    @State private var giphyKey = Giphy.key ?? ""
-    @State private var keyError: String?
-    @AppStorage(NotificationSettings.enabledKey) private var notify = true
-    @AppStorage(SidebarLimit.enabledKey) private var limitSections = false
-    @AppStorage(SidebarLimit.countKey) private var sectionLimit = 10
-    @AppStorage(NotificationSound.key) private var sound = NotificationSound.standard.stored
-    @State private var sounds = NotificationSound.available()
-    @State private var notificationStatus = UNAuthorizationStatus.notDetermined
-    @MainActor private static var playing: NSSound?
-    private static func play(_ sound: NotificationSound) {
-        playing?.stop()   // one at a time, as System Settings plays them
-        playing = sound.preview
-        playing?.play()
-    }
     /// One appearance's wallpaper and bubble colour.
     private func look(_ title: String, wallpaper: Binding<Wallpaper>, bubble: Binding<String>) -> some View {
         LabeledContent(title) {
@@ -81,122 +173,110 @@ struct SettingsView: View {
     }
     var body: some View {
         Form {
-            LabeledContent("Account") {
-                if store.me.id.isEmpty {
-                    Text("Not signed in").foregroundStyle(.secondary)
-                } else {
-                    HStack(spacing: 10) {
-                        Avatar(name: store.me.name, size: 36, url: store.me.avatarURL)
-                        VStack(alignment: .leading, spacing: 1) {
-                            Text(store.me.name).font(.headline)
-                            if let email = store.me.email { Text(email).font(.caption).foregroundStyle(.secondary) }
+            Section {
+                Picker("Appearance", selection: $appearance) {
+                    Text("Auto").tag(AppearanceMode.auto)
+                    Text("Light").tag(AppearanceMode.light)
+                    Text("Dark").tag(AppearanceMode.dark)
+                }
+                .pickerStyle(.segmented)
+                .onChange(of: appearance) { AppearanceMode.apply() }
+            }
+            Section {
+                look("Light mode", wallpaper: $wallpaper, bubble: $bubbleColor)
+                look("Dark mode", wallpaper: $darkWallpaper, bubble: $darkBubbleColor)
+                Toggle("Doodles over the wallpaper", isOn: $doodles).disabled(wallpaper == .none && darkWallpaper == .none)
+            } header: { Text("Wallpaper and bubbles") } footer: {
+                Footer("Text on your bubbles turns white or black, whichever reads better on the colour.")
+            }
+            Section {
+                Picker("Message style", selection: $style) {
+                    Text("Bubbles").tag(TimelineStyle.bubbles)
+                    Text("Plain").tag(TimelineStyle.plain)
+                }
+                .pickerStyle(.radioGroup)
+            } footer: {
+                Footer("Plain lists every message on the left with names and avatars, like Telegram's list mode.")
+            }
+        }
+    }
+}
+
+/// Settings ▸ Notifications: on or off, and the sound.
+private struct NotificationsSettings: View {
+    @AppStorage(NotificationSettings.enabledKey) private var notify = true
+    @AppStorage(NotificationSound.key) private var sound = NotificationSound.standard.stored
+    @State private var sounds = NotificationSound.available()
+    @State private var notificationStatus = UNAuthorizationStatus.notDetermined
+    @MainActor private static var playing: NSSound?
+    private static func play(_ sound: NotificationSound) {
+        playing?.stop()   // one at a time, as System Settings plays them
+        playing = sound.preview
+        playing?.play()
+    }
+    var body: some View {
+        Form {
+            Section {
+                Toggle("Show notifications", isOn: $notify)
+                    .onChange(of: notify) { _, on in if on { Task { notificationStatus = await SystemNotifier.requestAuthorization() } } }
+                    .task { notificationStatus = await UNUserNotificationCenter.current().notificationSettings().authorizationStatus }
+                if notify, notificationStatus == .denied {
+                    LabeledContent {
+                        Button("Open System Settings") {
+                            NSWorkspace.shared.open(URL(string: "x-apple.systempreferences:com.apple.Notifications-Settings.extension")!)
                         }
-                        Spacer()
-                        Button("Sign Out…") { confirmSignOut = true }.disabled(signIn == nil)
+                    } label: { Text("macOS isn't letting Parley show notifications.").foregroundStyle(.orange) }
+                }
+            } footer: {
+                Footer("Each conversation notifies as set in its Notifications menu, as in web and mobile Chat. Muted conversations never notify.")
+            }
+            Section {
+                // As System Settings ▸ Sound offers its alert sound: the Mac's sounds, the choice played, a button to hear it again.
+                LabeledContent("Sound") {
+                    HStack {
+                        Picker("Sound", selection: $sound) { ForEach(sounds, id: \.self) { Text($0.name).tag($0.stored) } }
+                            .labelsHidden().fixedSize()
+                            .onChange(of: sound) { _, sound in Self.play(NotificationSound(stored: sound)) }
+                        Button { Self.play(NotificationSound(stored: sound)) } label: { Image(systemName: "play.circle") }
+                            .buttonStyle(.borderless).help("Play the sound").accessibilityLabel("Play the sound")
+                            .disabled(NotificationSound(stored: sound).preview == nil)
                     }
                 }
+                .disabled(!notify)
+            } footer: {
+                Footer((NotificationSound(stored: sound).playedByParley
+                        ? "Parley plays this sound itself, even during Focus. macOS would play only its default sound."
+                        : "macOS plays its default sound and follows your Focus settings.")
+                       + " Banners and sounds are also set in System Settings ▸ Notifications.")
             }
-            if let accountError { Text(accountError).font(.caption).foregroundStyle(.red).fixedSize(horizontal: false, vertical: true) }
-            Divider()
-            Picker("Appearance", selection: $appearance) {
-                Text("Auto").tag(AppearanceMode.auto)
-                Text("Light").tag(AppearanceMode.light)
-                Text("Dark").tag(AppearanceMode.dark)
-            }
-            .pickerStyle(.segmented).fixedSize()
-            .onChange(of: appearance) { AppearanceMode.apply() }
-            look("Light mode", wallpaper: $wallpaper, bubble: $bubbleColor)
-            look("Dark mode", wallpaper: $darkWallpaper, bubble: $darkBubbleColor)
-            Toggle("Doodles over the wallpaper", isOn: $doodles).disabled(wallpaper == .none && darkWallpaper == .none)
-            Text("Wallpaper and the colour of your bubbles, for each appearance. Text on your bubbles turns white or black, whichever reads better on the colour.")
-                .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)   // wraps instead of truncating
-            Picker("Message style", selection: $style) {
-                Text("Bubbles").tag(TimelineStyle.bubbles)
-                Text("Plain").tag(TimelineStyle.plain)
-            }
-            .pickerStyle(.radioGroup)
-            Text("Plain lists every message on the left, with names and avatars, like Telegram's list mode.")
-                .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)   // wraps instead of truncating
-            Divider()
-            LabeledContent("Sidebar") {
-                HStack {
-                    Toggle("Limit sections to", isOn: $limitSections)
-                    Picker("Rows", selection: $sectionLimit) { ForEach(SidebarLimit.choices, id: \.self) { Text("\($0) rows").tag($0) } }
-                        .labelsHidden().fixedSize().disabled(!limitSections)
-                }
-            }
-            Text("As web Chat: Direct messages, Spaces and Apps show their first rows, then Show all. Unread conversations and the open one always show.")
-                .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)   // wraps instead of truncating
-            Divider()
-            Toggle("Show notifications", isOn: $notify)
-                .onChange(of: notify) { _, on in if on { Task { notificationStatus = await SystemNotifier.requestAuthorization() } } }
-                .task { notificationStatus = await UNUserNotificationCenter.current().notificationSettings().authorizationStatus }
-            // As System Settings ▸ Sound offers its alert sound: the Mac's sounds, the choice played, a button to hear it again.
-            LabeledContent("Sound") {
-                HStack {
-                    Picker("Sound", selection: $sound) { ForEach(sounds, id: \.self) { Text($0.name).tag($0.stored) } }
-                        .labelsHidden().fixedSize()
-                        .onChange(of: sound) { _, sound in Self.play(NotificationSound(stored: sound)) }
-                    Button { Self.play(NotificationSound(stored: sound)) } label: { Image(systemName: "play.circle") }
-                        .buttonStyle(.borderless).help("Play the sound").disabled(NotificationSound(stored: sound).preview == nil)
-                }
-            }
-            .disabled(!notify)
-            Text(NotificationSound(stored: sound).playedByParley
-                 ? "Parley plays this sound itself, during Focus too, as Slack does: macOS plays only its default sound for apps."
-                 : "macOS plays its default sound, following your Focus and notification settings.")
-                .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)   // wraps instead of truncating
-            if notify, notificationStatus == .denied {
-                HStack {
-                    Text("macOS isn't letting Parley show notifications.").font(.caption).foregroundStyle(.orange).fixedSize(horizontal: false, vertical: true)
-                    Button("Open System Settings") {
-                        NSWorkspace.shared.open(URL(string: "x-apple.systempreferences:com.apple.Notifications-Settings.extension")!)
-                    }.controlSize(.small)
-                }
-            }
-            Text("Each conversation notifies as set in its Notifications menu, the same setting web and mobile Chat use. Muted conversations never notify. Banners and sounds are also set in System Settings ▸ Notifications.")
-                .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)   // wraps instead of truncating
-            Divider()
-            HiddenConversationsSection(store: store)
-            Divider()
-            SecureField("GIPHY API key", text: $giphyKey)
-                .onChange(of: giphyKey) { _, key in
-                    let key = key.trimmingCharacters(in: .whitespacesAndNewlines)
-                    do {
-                        try Giphy.keyItem.set(key)
-                        keyError = nil
-                    } catch { keyError = error.localizedDescription }
-                }
-            Text(keyError ?? "For the composer's GIF picker. Create one at developers.giphy.com. It is kept in your Keychain.")
-                .font(.caption).foregroundStyle(keyError == nil ? Color.secondary : Color.red).fixedSize(horizontal: false, vertical: true)
-            Divider()
-            LabeledContent("Advanced") {
-                Button("Connection Diagnostics…") { openWindow(id: "connection-diagnostics") }
-            }
-            Text("Connection status, the saved session and read checks, with a report to copy.")
-                .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)   // wraps instead of truncating
-            // ponytail: the count is read when Settings draws; it doesn't follow new messages while it is open.
-            let kinds = MessageShapes.shared.withLock { $0.entries.count }
-            LabeledContent("Unsupported content") {
-                HStack {
-                    Button("Export…") { MessageShapes.saveExport() }
-                    Button("Copy Summary") { MessageShapes.copySummary() }
-                }.disabled(kinds == 0)
-            }
-            Text("\(kinds) kind\(kinds == 1 ? "" : "s") seen this session. Message content Parley can't draw yet, as field numbers only: no text, names or ids.")
-                .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
         }
-        .confirmationDialog("Sign out of Google Chat?", isPresented: $confirmSignOut) {
-            Button("Sign Out", role: .destructive) {
-                Task {
-                    do {
-                        try await signIn?.signOut()
-                        store.signedOut()
-                        accountError = nil
-                    } catch { accountError = error.localizedDescription }
+    }
+}
+
+/// Settings ▸ Advanced: connection diagnostics and the unsupported-content report.
+private struct AdvancedSettings: View {
+    @Environment(\.openWindow) private var openWindow
+    var body: some View {
+        // ponytail: the count is read when Settings draws; it doesn't follow new messages while it is open.
+        let kinds = MessageShapes.shared.withLock { $0.entries.count }
+        Form {
+            Section {
+                LabeledContent("Connection") {
+                    Button("Connection Diagnostics…") { openWindow(id: "connection-diagnostics") }
                 }
+            } footer: {
+                Footer("Shows the connection, the saved session and read checks, with a report to copy.")
             }
-        } message: { Text("Parley forgets this Google session. Your drafts stay on this Mac.") }
-        .padding(20).frame(width: 420)
+            Section {
+                LabeledContent("Unsupported content") {
+                    HStack {
+                        Button("Export…") { MessageShapes.saveExport() }
+                        Button("Copy Summary") { MessageShapes.copySummary() }
+                    }.disabled(kinds == 0)
+                }
+            } footer: {
+                Footer("\(kinds) kind\(kinds == 1 ? "" : "s") seen this session. The report lists message content Parley can't draw yet, by field number only, with no text, names or ids.")
+            }
+        }
     }
 }

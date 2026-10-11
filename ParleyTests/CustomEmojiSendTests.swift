@@ -167,4 +167,11 @@ struct CustomEmojiAnnotationTests {
         view.insertText(":D", replacementRange: view.selectedRange())
         #expect(view.mentionMatches.isEmpty)
     }
+    @Test func aColonShortcodeFindsFacepalm() {
+        let view = ComposerTextView(usingTextLayoutManager: false)
+        view.load("", [])
+        view.insertText(":facepalm", replacementRange: view.selectedRange())
+        #expect(view.mentionMatches.first == .unicode(EmojiCatalog.emoji("🤦")))
+        #expect(view.mentionMatches.contains(.unicode(EmojiCatalog.emoji("🤦\u{200D}♂\u{FE0F}"))))
+    }
 }

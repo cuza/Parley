@@ -5,6 +5,7 @@ struct GifPicker: View {
     let pick: (Attachment) -> Void
     let close: () -> Void
     @State private var key = Giphy.key
+    @Environment(\.openSettings) private var openSettings
     @State private var query = ""
     @State private var gifs: [Giphy.Gif] = []
     @State private var status: String?
@@ -16,7 +17,10 @@ struct GifPicker: View {
                 } description: {
                     Text("Add your key in Settings to search GIFs.")
                 } actions: {
-                    SettingsLink { Text("Open Settings…") }
+                    Button("Open Settings…") {   // at General, where the key goes
+                        UserDefaults.standard.set(SettingsTab.general.rawValue, forKey: SettingsTab.key)
+                        openSettings()
+                    }
                 }
             } else {
                 TextField("Search GIPHY", text: $query).textFieldStyle(.roundedBorder)

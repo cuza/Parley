@@ -66,6 +66,14 @@ enum EmojiCatalog {
     ]
     /// Skin-tone swatches, lone regional indicator letters and hair components only make sense inside sequences.
     private static let parts: [ClosedRange<UInt32>] = [0x1F3FB...0x1F3FF, 0x1F1E6...0x1F1FF, 0x1F9B0...0x1F9B3]
+    /// People who also come as a man and a woman (a ZWJ sequence with ♂ or ♀), which follow them in the grid.
+    // ponytail: skin tones and the 🧑‍💻-style professions aren't generated; add them from the same bases if wanted.
+    private static let gendered: Set<UInt32> = [
+        0x1F64D, 0x1F64E, 0x1F645, 0x1F646, 0x1F481, 0x1F64B, 0x1F9CF, 0x1F647, 0x1F926, 0x1F937, 0x1F46E, 0x1F575,
+        0x1F482, 0x1F477, 0x1F473, 0x1F9D4, 0x1F471, 0x1F9B8, 0x1F9B9, 0x1F9D9, 0x1F9DA, 0x1F9DB, 0x1F9DC, 0x1F9DD,
+        0x1F9DE, 0x1F9DF, 0x1F486, 0x1F487, 0x1F6B6, 0x1F9CD, 0x1F9CE, 0x1F3C3, 0x1F46F, 0x1F9D6, 0x1F9D7, 0x1F3CC,
+        0x1F3C4, 0x1F6A3, 0x1F3CA, 0x26F9, 0x1F3CB, 0x1F6B4, 0x1F6B5, 0x1F938, 0x1F93C, 0x1F93D, 0x1F93E, 0x1F939, 0x1F9D8,
+    ]
 
     private static func build() -> [Category] {
         var claimed = Set<UInt32>()
@@ -77,7 +85,11 @@ enum EmojiCatalog {
             guard properties.isEmoji, value > 0xFF, !parts.contains(where: { $0.contains(value) }) else { return }
             claimed.insert(value)
             let character = properties.isEmojiPresentation ? String(scalar) : String(scalar) + "\u{FE0F}"
-            groups[group].append(Emoji(character: character, name: (properties.name ?? "").lowercased()))
+            let name = (properties.name ?? "").lowercased()
+            groups[group].append(Emoji(character: character, name: name))
+            guard gendered.contains(value) else { return }
+            groups[group].append(Emoji(character: character + "\u{200D}♂\u{FE0F}", name: "man " + name))
+            groups[group].append(Emoji(character: character + "\u{200D}♀\u{FE0F}", name: "woman " + name))
         }
         for (range, group) in ranges { for value in range { add(value, to: group) } }
         for value in UInt32(0x100)...0x1FAFF { add(value, to: 6) }
@@ -92,24 +104,57 @@ enum EmojiCatalog {
         return zip(names, groups).map { Category(name: $0.name, symbol: $0.symbol, emoji: $1) }
     }
 
-    /// Everyday words the Unicode names don't contain.
+    /// Everyday words and the usual Slack/Google Chat shortcodes the Unicode names don't contain, written without
+    /// spaces or underscores (the query is compared the same way).
     private static let keywords: [String: [String]] = [
-        "lol": ["😂", "🤣"], "haha": ["😂", "😆"], "laugh": ["😂", "🤣", "😆"], "like": ["👍"], "+1": ["👍"], "yes": ["👍", "✅"],
-        "ok": ["👌", "👍"], "no": ["👎", "❌"], "love": ["❤️", "😍", "🥰"], "thanks": ["🙏"], "please": ["🙏"], "party": ["🎉", "🥳"],
-        "congrats": ["🎉", "👏"], "sad": ["😢", "😭"], "wow": ["😮", "🤯"], "done": ["✅"], "happy": ["😀", "😊"], "cool": ["😎"],
+        "lol": ["😂", "🤣"], "haha": ["😂", "😆"], "laugh": ["😂", "🤣", "😆"], "like": ["👍"], "+1": ["👍"], "-1": ["👎"],
+        "yes": ["👍", "✅"], "ok": ["👌", "👍"], "no": ["👎", "❌"], "love": ["❤️", "😍", "🥰"], "thanks": ["🙏"],
+        "please": ["🙏"], "pray": ["🙏"], "party": ["🎉", "🥳"], "tada": ["🎉"], "congrats": ["🎉", "👏"], "sad": ["😢", "😭"],
+        "wow": ["😮", "🤯"], "done": ["✅"], "happy": ["😀", "😊"], "cool": ["😎"], "joy": ["😂"], "rofl": ["🤣"],
+        "thumbsup": ["👍"], "thumbsdown": ["👎"], "heart": ["❤️"], "hearteyes": ["😍"], "smile": ["😄", "🙂"],
+        "slightlysmilingface": ["🙂"], "grin": ["😁"], "sweatsmile": ["😅"], "wink": ["😉"], "sob": ["😭"], "cry": ["😢"],
+        "thinking": ["🤔"], "hmm": ["🤔"], "facepalm": ["🤦"], "shrug": ["🤷"], "muscle": ["💪"], "strong": ["💪"],
+        "clap": ["👏"], "wave": ["👋"], "hi": ["👋"], "bye": ["👋"], "raisedhands": ["🙌"], "hooray": ["🙌", "🎉"],
+        "okhand": ["👌"], "100": ["💯"], "fire": ["🔥"], "lit": ["🔥"], "rocket": ["🚀"], "ship": ["🚀"], "eyes": ["👀"],
+        "look": ["👀"], "skull": ["💀"], "dead": ["💀"], "poop": ["💩"], "angry": ["😠", "😡"], "rage": ["😡"],
+        "mad": ["😠", "😡"], "scream": ["😱"], "shock": ["😱", "😮"], "hug": ["🤗"], "hugs": ["🤗"], "starstruck": ["🤩"],
+        "upsidedown": ["🙃"], "rollingeyes": ["🙄"], "eyeroll": ["🙄"], "seenoevil": ["🙈"], "sparkles": ["✨"],
+        "check": ["✅", "✔️"], "x": ["❌"], "brokenheart": ["💔"], "partyingface": ["🥳"], "nerd": ["🤓"], "sick": ["🤢", "🤒"],
+        "sleep": ["😴"], "zzz": ["😴", "💤"], "money": ["💰", "🤑"], "idea": ["💡"], "coffee": ["☕"], "beer": ["🍺", "🍻"],
+        "cheers": ["🍻", "🥂"], "cake": ["🎂"], "birthday": ["🎂", "🎉"], "warning": ["⚠️"], "pin": ["📌"], "bug": ["🐛"],
     ]
-    /// Emoji whose name has a word starting with each word of `query`; everyday keywords first.
-    static func search(_ query: String) -> [Emoji] {
-        let query = query.lowercased().trimmingCharacters(in: .whitespaces)
-        let words = query.split(separator: " ")
-        guard !words.isEmpty else { return [] }
-        let byKeyword = keywords.filter { $0.key.hasPrefix(query) }.sorted { $0.key < $1.key }.flatMap(\.value).map(emoji)
-        let byName = categories.lazy.flatMap(\.emoji).filter { emoji in
-            let nameWords = emoji.name.split { !$0.isLetter && !$0.isNumber }
-            return words.allSatisfy { word in nameWords.contains { $0.hasPrefix(word) } }
+    private static let all = categories.flatMap(\.emoji)
+    private static let position = Dictionary(all.enumerated().map { ($1.character, $0) }, uniquingKeysWith: { first, _ in first })
+    private static let nameWords = all.map { $0.name.split { !$0.isLetter && !$0.isNumber }.map(String.init) }
+
+    /// Emoji for a search, as Slack and Google Chat find them: the name, or a shortcode, typed exactly (with or without
+    /// spaces: "facepalm" is "face palm"), then names it starts, then names with a word each query word starts or whose
+    /// later words it runs together ("man facepalm", "thumbsup"), then everyday keywords it starts. Among equal
+    /// matches, `frequent` (most used first) leads, then the grid's order.
+    static func search(_ query: String, frequent: [String] = []) -> [Emoji] {
+        let words = query.lowercased().split(separator: " ").map(String.init)
+        let compact = words.joined()
+        guard !compact.isEmpty else { return [] }
+        var rank: [String: (tier: Int, order: Int)] = [:]
+        func found(_ character: String, _ tier: Int, _ order: Int = 0) {
+            if let old = rank[character], old <= (tier, order) { return }
+            rank[character] = (tier, order)
         }
-        var seen = Set<String>()
-        return (byKeyword + byName).filter { seen.insert($0.character).inserted }
+        for (key, emoji) in keywords where key.hasPrefix(compact) {
+            for (order, character) in emoji.enumerated() { found(character, key == compact ? 0 : 3, order) }
+        }
+        for (emoji, name) in zip(all, nameWords) {
+            let joined = name.joined()
+            if joined == compact { found(emoji.character, 0) }
+            else if joined.hasPrefix(compact) { found(emoji.character, 1) }
+            else if words.allSatisfy({ word in name.contains { $0.hasPrefix(word) } })
+                        || name.indices.dropFirst().contains(where: { name[$0...].joined().hasPrefix(compact) }) { found(emoji.character, 2) }
+        }
+        let used = Dictionary(frequent.enumerated().map { ($1, $0) }, uniquingKeysWith: { first, _ in first })
+        return rank.sorted {
+            ($0.value.tier, $0.value.order, used[$0.key] ?? .max, position[$0.key] ?? .max, $0.key)
+                < ($1.value.tier, $1.value.order, used[$1.key] ?? .max, position[$1.key] ?? .max, $1.key)
+        }.map { emoji($0.key) }
     }
 }
 
@@ -180,7 +225,7 @@ struct EmojiPicker: View {
         func cells(_ emoji: [CustomEmoji]) -> [Emoji] { emoji.map { Emoji(character: $0.text, name: $0.shortcode) } }
         let search = query.trimmingCharacters(in: CharacterSet.whitespaces.union(.init(charactersIn: ":")))
         guard search.isEmpty else {
-            return [("Search Results", cells(MentionQuery.filter(customEmoji, by: search, limit: .max)) + EmojiCatalog.search(search))]
+            return [("Search Results", cells(MentionQuery.filter(customEmoji, by: search, limit: .max)) + EmojiCatalog.search(search, frequent: frequent))]
         }
         return [("Frequently Used", frequent.map(EmojiCatalog.emoji)), ("Custom", cells(customEmoji))] + EmojiCatalog.categories.map { ($0.name, $0.emoji) }
     }

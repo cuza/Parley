@@ -39,6 +39,36 @@ struct EmojiCatalogTests {
         #expect(EmojiCatalog.search("zzqx").isEmpty)
         #expect(EmojiCatalog.search("  ").isEmpty)
     }
+    @Test func searchFindsEveryFacepalm() {
+        let found = EmojiCatalog.search("facepalm").map(\.character)
+        #expect(found.first == "🤦")   // the name run together is an exact match
+        #expect(found.contains("🤦\u{200D}♂\u{FE0F}") && found.contains("🤦\u{200D}♀\u{FE0F}"))
+        #expect(EmojiCatalog.search("man facepalm").first?.character == "🤦\u{200D}♂\u{FE0F}")
+        #expect(EmojiCatalog.search("woman shrug").first?.character == "🤷\u{200D}♀\u{FE0F}")
+    }
+    @Test func searchFindsTheCommonShortcodes() {
+        #expect(EmojiCatalog.search("thumbsup").first?.character == "👍")
+        #expect(EmojiCatalog.search("+1").first?.character == "👍")
+        #expect(EmojiCatalog.search("thumbsdown").first?.character == "👎")
+        #expect(EmojiCatalog.search("joy").first?.character == "😂")
+        #expect(EmojiCatalog.search("shrug").first?.character == "🤷")
+        #expect(EmojiCatalog.search("tada").first?.character == "🎉")
+        #expect(EmojiCatalog.search("eyes").first?.character == "👀")
+        #expect(EmojiCatalog.search("heart eyes").first?.character == "😍")
+        #expect(EmojiCatalog.search("fire").first?.character == "🔥")
+    }
+    @Test func searchRanksExactThenPrefixThenWordThenKeyword() {
+        let found = EmojiCatalog.search("cat").map(\.character)
+        #expect(found.first == "🐈")   // "cat" exactly
+        let prefix = found.firstIndex(of: "🐱")!   // "cat face"
+        let word = found.firstIndex(of: "😺")!   // "smiling cat face with open mouth"
+        #expect(prefix < word)
+        // Among equal matches, the ones I use come first.
+        let hearts = EmojiCatalog.search("heart").map(\.character)
+        #expect(hearts.firstIndex(of: "💙")! < hearts.firstIndex(of: "💜")!)
+        let mine = EmojiCatalog.search("heart", frequent: ["💜"]).map(\.character)
+        #expect(mine.firstIndex(of: "💜")! < mine.firstIndex(of: "💙")!)
+    }
 }
 
 struct EmojiUsageTests {
