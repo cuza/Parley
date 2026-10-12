@@ -33,6 +33,23 @@ import Testing
         #expect(bubble.contains(layout.bubble))
     }
 
+    /// A jump to a message flashes its whole row once (Telegram's), not again while it stays highlighted; another row
+    /// shown in the same view doesn't inherit the flash.
+    @Test func aJumpFlashesTheRowOnce() {
+        let view = MessageRowView()
+        view.configure(row, own: false, kind: .space, meID: "me", highlighted: true, actions: MessageRowActions())
+        #expect(view.flash.animation(forKey: "flash") != nil)
+        view.flash.removeAllAnimations()
+        view.configure(row, own: false, kind: .space, meID: "me", highlighted: true, actions: MessageRowActions())
+        #expect(view.flash.animation(forKey: "flash") == nil)
+        view.configure(row, own: false, kind: .space, meID: "me", highlighted: false, actions: MessageRowActions())
+        view.configure(row, own: false, kind: .space, meID: "me", highlighted: true, actions: MessageRowActions())
+        #expect(view.flash.animation(forKey: "flash") != nil)
+        let other = TimelineRow(message: Message(id: "other", conversationID: "c", sender: RowLayoutTests.alex, text: "other", createdAt: .now), begins: true, ends: true, newDay: false)
+        view.configure(other, own: false, kind: .space, meID: "me", actions: MessageRowActions())
+        #expect(view.flash.animation(forKey: "flash") == nil)
+    }
+
     /// The full date shows on the time only: a tooltip over the whole row got in the way of reading.
     @Test func theFullDateIsOnTheTimeNotTheRow() {
         let row = view(width: 600)
@@ -46,9 +63,9 @@ import Testing
     @Test func aWidthChangeMovesTheSubviews() {
         let view = view(width: 900)
         let wideText = view.textView.frame
-        view.setFrameSize(NSSize(width: 460, height: RowLayout.make(row, width: 460, own: false, kind: .space).height))
+        view.setFrameSize(NSSize(width: 340, height: RowLayout.make(row, width: 340, own: false, kind: .space).height))
         view.layoutSubtreeIfNeeded()
-        expectPlaced(view, width: 460)
+        expectPlaced(view, width: 340)
         #expect(view.textView.frame != wideText)
     }
     @Test func noAutoLayout() {

@@ -56,32 +56,40 @@ struct ShortcutList: View {
         }
         .navigationTitle(shortcut.title)
     }
-    /// Name, time and unread count over the newest message, as "You: …" or "Sender: …".
-    private func homeRow(_ room: Conversation, _ last: Message?) -> some View {
+    /// Name and newest message, as "You: …" or "Sender: …", beside a column of time over unread count. The text ends
+    /// `columnGap` before that column, which keeps its own trailing edge.
+    func homeRow(_ room: Conversation, _ last: Message?) -> some View {
         HStack(alignment: .top, spacing: 10) {
             Avatar(name: room.name, space: room.kind == .space, size: 32, url: room.avatarURL, emoji: room.emoji)
-            VStack(alignment: .leading, spacing: 3) {
-                HStack(spacing: 4) {
-                    Text(room.name).font(.system(size: 13, weight: room.unread > 0 ? .semibold : .regular)).lineLimit(1)
-                    if room.muted { Image(systemName: "bell.slash").font(.caption2).foregroundStyle(.secondary) }
-                    Spacer(minLength: 8)
-                    if let time = last?.createdAt ?? room.activity { Text(Self.time(time)).font(.caption).foregroundStyle(.secondary).fixedSize() }
-                }
-                HStack(spacing: 4) {
+            HStack(alignment: .top, spacing: Self.columnGap) {
+                VStack(alignment: .leading, spacing: 3) {
+                    HStack(spacing: 4) {
+                        Text(room.name).font(.system(size: 13, weight: room.unread > 0 ? .semibold : .regular)).lineLimit(1)
+                        if room.muted { Image(systemName: "bell.slash").font(.caption2).foregroundStyle(.secondary) }
+                        Spacer(minLength: 0)
+                    }
                     Group {
                         if let last { line(last) } else { Text(" ") }
                     }
                     .font(.system(size: 13, weight: room.unread > 0 ? .medium : .regular)).lineLimit(2).frame(maxWidth: .infinity, alignment: .leading)
+                    .reportFrame("preview")
+                }
+                VStack(alignment: .trailing, spacing: 3) {
+                    if let time = last?.createdAt ?? room.activity { Text(Self.time(time)).font(.caption).foregroundStyle(.secondary).fixedSize() }
                     if room.unread > 0 {
                         Text("\(room.unread)").font(.system(size: 11, weight: .semibold, design: .rounded)).padding(.horizontal, 6).padding(.vertical, 2)
                             .background(.blue, in: Capsule()).foregroundStyle(.white).fixedSize()
                     }
                 }
+                .reportFrame("column")
             }
         }
+        .coordinateSpace(name: "homeRow")
         .padding(.vertical, 4).contentShape(Rectangle())
         .accessibilityElement(children: .combine)
     }
+    /// The space between a Home row's text and its time and unread column.
+    static let columnGap: CGFloat = 12
     /// "You: " or "Sender: " before a message's summary.
     private func line(_ message: Message) -> Text {
         Text(message.sender.id == store.me.id ? "You: " : "\(message.sender.name): ").foregroundStyle(.secondary)
@@ -95,19 +103,23 @@ struct ShortcutList: View {
                     Image(systemName: "bubble.left.and.text.bubble.right.fill").font(.system(size: 8)).foregroundStyle(.secondary)
                         .padding(2).background(.background, in: Circle()).offset(x: 4, y: 4)
                 }
-            VStack(alignment: .leading, spacing: 3) {
-                HStack(spacing: 4) {
-                    Text(room.name).font(.system(size: 13, weight: thread.unread ? .semibold : .regular)).lineLimit(1)
-                    Text("· Thread").font(.system(size: 12)).foregroundStyle(.secondary).fixedSize()
-                    Spacer(minLength: 8)
+            HStack(alignment: .top, spacing: Self.columnGap) {
+                VStack(alignment: .leading, spacing: 3) {
+                    HStack(spacing: 4) {
+                        Text(room.name).font(.system(size: 13, weight: thread.unread ? .semibold : .regular)).lineLimit(1)
+                        Text("· Thread").font(.system(size: 12)).foregroundStyle(.secondary).fixedSize()
+                        Spacer(minLength: 0)
+                    }
+                    line(thread.head).font(.system(size: 13)).lineLimit(1).frame(maxWidth: .infinity, alignment: .leading)
+                    HStack(alignment: .firstTextBaseline, spacing: 4) {
+                        Text("└").foregroundStyle(.tertiary)
+                        line(thread.latest).font(.system(size: 13, weight: thread.unread ? .medium : .regular)).lineLimit(2)
+                    }.frame(maxWidth: .infinity, alignment: .leading)
+                }
+                VStack(alignment: .trailing, spacing: 5) {   // the time over the unread dot, as a conversation's row has it
                     Text(Self.time(thread.time)).font(.caption).foregroundStyle(.secondary).fixedSize()
                     if thread.unread { Circle().fill(.blue).frame(width: 8, height: 8).accessibilityLabel("Unread") }
                 }
-                line(thread.head).font(.system(size: 13)).lineLimit(1).frame(maxWidth: .infinity, alignment: .leading)
-                HStack(alignment: .firstTextBaseline, spacing: 4) {
-                    Text("└").foregroundStyle(.tertiary)
-                    line(thread.latest).font(.system(size: 13, weight: thread.unread ? .medium : .regular)).lineLimit(2)
-                }.frame(maxWidth: .infinity, alignment: .leading)
             }
         }
         .padding(.vertical, 4).contentShape(Rectangle())
@@ -184,5 +196,16 @@ struct DraftList: View {
         }
         .padding(.vertical, 4).contentShape(Rectangle())
         .accessibilityElement(children: .combine)
+    }
+}
+
+/// Frames of a Home row's parts in its "homeRow" coordinate space, so a test can check the spacing.
+struct RowFrames: PreferenceKey {
+    static let defaultValue: [String: CGRect] = [:]
+    static func reduce(value: inout [String: CGRect], nextValue: () -> [String: CGRect]) { value.merge(nextValue()) { $1 } }
+}
+extension View {
+    func reportFrame(_ id: String) -> some View {
+        background(GeometryReader { Color.clear.preference(key: RowFrames.self, value: [id: $0.frame(in: .named("homeRow"))]) })
     }
 }

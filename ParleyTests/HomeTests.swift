@@ -116,6 +116,30 @@ struct HomeTests {
         #expect(table.numberOfRows == store.homeRows().count)
         #expect(table.frame.width >= 650)
     }
+    /// A long preview ends `columnGap` before the time and unread column, which keeps the row's trailing edge; the row's
+    /// height is its text's, wrapped to two lines.
+    @Test func aLongPreviewEndsBeforeTheTimeAndBadgeColumn() async throws {
+        let (store, _) = await started()
+        var room = try #require(store.conversations.first)
+        room.unread = 3
+        let text = "Absolute Poll: Hi there! I'm here to assist you in creating polls, so tell me the question and the options and I will set it up in this conversation for everyone to vote on right away."
+        let last = Message(id: "m", conversationID: room.id, sender: Person(id: "bot", name: "Absolute Poll"), text: text)
+        final class Box { var frames: [String: CGRect] = [:] }
+        let box = Box()
+        let row = ShortcutList(store: store, shortcut: .home).homeRow(room, last)
+            .frame(width: 360).onPreferenceChange(RowFrames.self) { box.frames = $0 }
+        let host = NSHostingView(rootView: row)
+        host.frame = NSRect(origin: .zero, size: NSSize(width: 360, height: host.fittingSize.height))
+        let window = NSWindow(contentRect: host.frame, styleMask: [.borderless], backing: .buffered, defer: false)
+        window.contentView = host
+        host.layoutSubtreeIfNeeded()
+        for _ in 0..<100 where box.frames["column"] == nil || box.frames["preview"] == nil { try await Task.sleep(for: .milliseconds(10)) }
+        let preview = try #require(box.frames["preview"]), column = try #require(box.frames["column"])
+        #expect(column.minX - preview.maxX >= ShortcutList.columnGap)
+        #expect(column.maxX <= 360 && column.maxX >= 360 - 1)
+        #expect(preview.height < 40)   // two lines, not the whole text
+        #expect(abs(host.fittingSize.height - host.frame.height) < 1 && host.fittingSize.height >= preview.maxY)
+    }
     private static func table(in view: NSView) -> NSTableView? {
         if let table = view as? NSTableView { return table }
         for child in view.subviews { if let found = table(in: child) { return found } }

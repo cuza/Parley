@@ -20,7 +20,7 @@ struct ParleyApp: App {
         var live = false
         // Tests and the demo workspaces keep no pictures on disk: they'd share the Debug build's folder.
         if ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil
-            || ProcessInfo.processInfo.arguments.contains(where: { $0.hasPrefix("-uiTesting") }) { ImageCache.directory = nil }
+            || ProcessInfo.processInfo.arguments.contains(where: { $0.hasPrefix("-uiTesting") }) { ImageCache.directory = nil; CardLayout.sizesFile = nil }
         if ProcessInfo.processInfo.arguments.contains("-uiTestingLongHistory") {
             store = ChatStore(backend: FakeBackend(longHistory: 600, latency: .milliseconds(300)))
         } else if ProcessInfo.processInfo.arguments.contains("-uiTestingFormattedThread") {

@@ -44,6 +44,7 @@ struct MessageRowActions {
 final class MessageRowView: NSTableRowView {
     private(set) var row: TimelineRow?
     private(set) var rowLayout: RowLayout?
+    private var timeOnly = false
     /// Where a timeline's row view gets its layout when its width changes: the table's cache. Without one, it measures.
     var layoutFor: (@MainActor (TimelineRow) -> RowLayout?)?
     private(set) var style = TimelineStyle.bubbles
@@ -51,6 +52,8 @@ final class MessageRowView: NSTableRowView {
     private var kind = ConversationKind.direct
     private var actions = MessageRowActions()
     private var meID = ""
+    private var highlighted = false
+    private var pictures = false   // the time is on a pill over the last picture
 
     let dateLabel = TextLabel()
     let avatarView = AvatarHostView(rootView: Avatar(name: "", size: RowLayout.avatarSize))
@@ -81,6 +84,10 @@ final class MessageRowView: NSTableRowView {
     let retryLink = TextLabel()
     let serviceLabel = TextLabel()   // a system event's pill, instead of the bubble
     let seenLabel = TextLabel()
+    /// Behind the time on a picture: the picture blurred under the pill (Telegram's), made when a row first needs one.
+    private var pillBlur: NSVisualEffectView?
+    /// A jump to this message: the whole row flashes, as Telegram's does, over the picture too.
+    let flash = CALayer()
     /// Beside the last reaction pill while the pointer is over the row: opens the emoji picker (Slack's "add reaction").
     /// Made on the first hover: most rows are never hovered, and a button was most of what a new row cost.
     private(set) lazy var addReactionButton: NSButton = {
@@ -123,6 +130,10 @@ final class MessageRowView: NSTableRowView {
         serviceLabel.inset = RowLayout.serviceInset
         viaLabel.background = .labelColor.withAlphaComponent(0.08)
         viaLabel.inset = RowLayout.viaInset
+        wantsLayer = true
+        flash.backgroundColor = NSColor(srgbRed: 0x68 / 255.0, green: 0xA8 / 255.0, blue: 0xE2 / 255.0, alpha: 1).cgColor
+        flash.opacity = 0; flash.zPosition = 10
+        layer?.addSublayer(flash)
         for view: NSView in [dateLabel, avatarView, bubbleView, quoteView, quoteSenderLabel, quoteTextLabel, nameLabel, viaLabel, textView, repliesLink, sourcesLink, translationLink, thinkingLink, timeLabel, retryLink, serviceLabel, seenLabel] {
             view.autoresizingMask = []
             addSubview(view)
@@ -151,6 +162,11 @@ final class MessageRowView: NSTableRowView {
     func configure(_ row: TimelineRow, own: Bool, kind: ConversationKind, meID: String, layout: RowLayout? = nil,
                    highlighted: Bool = false, style: TimelineStyle = .bubbles, actions: MessageRowActions) {
         let own = own && style == .bubbles   // plain shows everyone like an incoming message
+        let pictures = RowLayout.timeOnPicture(row.message, style: style) && !row.draft   // the time is on a pill over the last picture
+        self.pictures = pictures
+        let flashes = highlighted && !(self.highlighted && self.row?.id == row.id)   // newly jumped to
+        if self.row?.id != row.id { flash.removeAnimation(forKey: "flash") }
+        let lone = RowLayout.mediaOnly(row.message, style: style)   // no bubble: what sits under the pictures is not on mine
         if style != self.style { rowLayout = layout; self.style = style }
         let message = row.message
         if row != self.row || own != self.own || kind != self.kind { rowLayout = layout }
@@ -158,14 +174,16 @@ final class MessageRowView: NSTableRowView {
         self.row = row; self.own = own; self.kind = kind; self.actions = actions
         self.meID = meID
         let ink = BubblePalette.ownInk
-        let secondary: NSColor = own ? ink.withAlphaComponent(0.75) : .secondaryLabelColor
+        let secondary: NSColor = own && !lone ? ink.withAlphaComponent(0.75) : .secondaryLabelColor
         let senderColor = Self.color(for: message.sender.id)
 
         dateLabel.text = RowLayout.dateText(message, color: BubblePalette.serviceText)
         dateLabel.background = BubblePalette.servicePill
         dateLabel.inset = RowLayout.serviceInset
         avatarView.rootView = Avatar(name: message.sender.name, size: RowLayout.avatarSize, url: message.sender.avatarURL)
-        bubbleView.fill = own ? BubblePalette.own : BubblePalette.incoming; bubbleView.own = own; bubbleView.tail = row.ends; bubbleView.highlighted = highlighted
+        bubbleView.fill = lone ? .clear : own ? BubblePalette.own : BubblePalette.incoming; bubbleView.own = own
+        if flashes { flashRow() }
+        self.highlighted = highlighted
         nameLabel.text = RowLayout.nameText(message.sender.name, color: senderColor)
         viaLabel.text = RowLayout.viaText(message.via ?? "")
         // Only an app that posted for a person says so; "App" and "Only visible to you" say it themselves.
@@ -209,8 +227,9 @@ final class MessageRowView: NSTableRowView {
         }
         for (pill, reaction) in zip(reactionPills, message.reactions) {
             let mine = reaction.people.contains(meID)
-            pill.text = RowLayout.pillText(reaction, color: own ? ink : .labelColor)
-            pill.background = own ? ink.withAlphaComponent(mine ? 0.35 : 0.2)
+            let onMine = own && !lone && !pictures   // under a picture's bubble, reactions sit outside it
+            pill.text = RowLayout.pillText(reaction, color: onMine ? ink : .labelColor)
+            pill.background = onMine ? ink.withAlphaComponent(mine ? 0.35 : 0.2)
                 : mine ? .controlAccentColor.withAlphaComponent(0.18) : .labelColor.withAlphaComponent(0.07)
             pill.inset = NSSize(width: 7, height: 3)
             pill.onClick = { [weak self, weak pill] in ReactionCard.shared.hide(pill); self?.actions.react(reaction.emoji, message) }
@@ -231,7 +250,7 @@ final class MessageRowView: NSTableRowView {
             pill.onExit = { [weak pill] in ReactionCard.shared.hide(pill) }
         }
         loadCustomEmoji(message)
-        repliesLink.text = RowLayout.repliesText(message.replyCount, draft: row.draft, color: own ? ink : .controlAccentColor)
+        repliesLink.text = RowLayout.repliesText(message.replyCount, draft: row.draft, color: own && !lone ? ink : .controlAccentColor)
         repliesLink.onClick = { [weak self] in self?.actions.openThread(message) }
         sourcesLink.text = message.sources.isEmpty ? NSAttributedString() : RowLayout.sourcesText(message.sources, color: own ? ink : .controlAccentColor)
         translationLink.text = message.translation.map { RowLayout.translationText($0, showingOriginal: row.transcriptOpen) } ?? NSAttributedString()   // under the bubble: the accent colour
@@ -259,9 +278,10 @@ final class MessageRowView: NSTableRowView {
                 .popUp(positioning: nil, at: NSPoint(x: 0, y: sourcesLink.bounds.maxY + 4), in: sourcesLink)
         }
         let bare = message.jumboEmoji != nil   // large emoji: the time sits on a pill, as on a service line
-        timeLabel.text = RowLayout.timeText(message, color: bare ? BubblePalette.serviceText : secondary)
-        timeLabel.background = bare ? BubblePalette.timePill : nil
-        timeLabel.inset = bare ? NSSize(width: RowLayout.serviceInset.width / 2, height: RowLayout.serviceInset.height / 2) : .zero
+        timeOnly = false
+        timeLabel.text = RowLayout.timeText(message, color: pictures ? .white : bare ? BubblePalette.serviceText : secondary)
+        timeLabel.background = pictures ? BubblePalette.mediaPill : bare ? BubblePalette.timePill : nil
+        timeLabel.inset = pictures ? RowLayout.mediaPillInset : bare ? NSSize(width: RowLayout.serviceInset.width / 2, height: RowLayout.serviceInset.height / 2) : .zero
         retryLink.text = RowLayout.retryText()
         retryLink.onClick = { [weak self] in self?.actions.retry(message) }
         serviceLabel.text = message.isSystem ? RowLayout.serviceText(message.text, color: BubblePalette.serviceText) : NSAttributedString()
@@ -282,12 +302,18 @@ final class MessageRowView: NSTableRowView {
             rowLayout = layoutFor.map { $0(row) ?? rowLayout } ?? RowLayout.make(row, width: bounds.width, own: own, kind: kind, style: style)
         }
         guard let layout = rowLayout else { return }
+        if layout.timeOnly != timeOnly, let message = self.row?.message {   // a picture too narrow for the pill's extras
+            timeOnly = layout.timeOnly
+            timeLabel.text = RowLayout.timeText(message, color: .white, timeOnly: timeOnly)
+        }
         place(dateLabel, layout.dateHeader)
         place(avatarView, layout.avatar)
         // The bubble view also holds the tail, on the sender's side; the shape decides whether to draw it.
         place(bubbleView, CGRect(x: layout.bubble.minX - (own ? 0 : RowLayout.tailWidth), y: layout.bubble.minY,
                                  width: layout.bubble.width + RowLayout.tailWidth, height: layout.bubble.height))
-        bubbleView.isHidden = style == .plain || layout.service != nil || layout.bare   // plain, service lines and large emoji draw none
+        // Plain, service lines, large emoji and lone pictures draw none.
+        bubbleView.tail = layout.tail
+        bubbleView.isHidden = style == .plain || layout.service != nil || layout.bare
         place(serviceLabel, layout.service)
         place(nameLabel, layout.name)
         place(viaLabel, layout.via)
@@ -296,12 +322,16 @@ final class MessageRowView: NSTableRowView {
         place(quoteTextLabel, layout.quoteText)
         place(textView, layout.text)
         for (view, frame) in zip(attachmentViews, layout.attachments) { place(view, frame) }
+        // A picture flush in the bubble is clipped by the bubble's rounded corners (a layout's, as the row is measured).
+        for (view, corners) in zip(attachmentViews, layout.attachmentCorners) where view.rootView.corners != corners { view.rootView.corners = corners }
         for (view, frame) in zip(reactionPills, layout.reactions) { place(view, frame) }
         place(repliesLink, layout.replies)
         place(sourcesLink, layout.sources)
         place(translationLink, layout.translation)
         place(thinkingLink, layout.thinking)
         place(timeLabel, layout.service == nil ? layout.time : nil)
+        if pictures && layout.service == nil { placePillBlur(layout.time) } else if let pillBlur { place(pillBlur, nil) }
+        CATransaction.begin(); CATransaction.setDisableActions(true); flash.frame = bounds; CATransaction.commit()
         place(retryLink, layout.retry)
         place(seenLabel, layout.seen)
         if hovering, let frame = addReactionFrame(layout) { place(addReactionButton, frame) }
@@ -340,6 +370,25 @@ final class MessageRowView: NSTableRowView {
     }
     override func mouseEntered(with event: NSEvent) { super.mouseEntered(with: event); hovering = true }
     override func mouseExited(with event: NSEvent) { super.mouseExited(with: event); hovering = false }
+    private func placePillBlur(_ frame: CGRect) {
+        let blur = pillBlur ?? {
+            let view = NSVisualEffectView()
+            view.blendingMode = .withinWindow; view.state = .active; view.material = .hudWindow
+            view.wantsLayer = true; view.layer?.masksToBounds = true; view.autoresizingMask = []
+            pillBlur = view
+            return view
+        }()
+        // Above the pictures (added under the time as they come), right under the time.
+        if let index = subviews.firstIndex(of: timeLabel), index == 0 || subviews[index - 1] !== blur { addSubview(blur, positioned: .below, relativeTo: timeLabel) }
+        place(blur, frame)
+        blur.layer?.cornerRadius = frame.height / 2
+    }
+    /// Telegram's jump flash: the row tints to half its blue and back.
+    private func flashRow() {
+        let fade = CAKeyframeAnimation(keyPath: "opacity")
+        fade.values = [0, 0.5, 0.5, 0]; fade.keyTimes = [0, 0.15, 0.55, 1]; fade.duration = 1.5
+        flash.add(fade, forKey: "flash")
+    }
     private func place(_ view: NSView, _ frame: CGRect?) {
         view.isHidden = frame == nil
         if let frame, view.frame != frame { view.frame = frame }
@@ -469,7 +518,6 @@ final class BubbleView: NSView {
     var own = false { didSet { if own != oldValue { refresh() } } }
     var fill = NSColor.controlAccentColor { didSet { if fill != oldValue { refresh() } } }
     var tail = false { didSet { if tail != oldValue { refresh() } } }
-    var highlighted = false { didSet { if highlighted != oldValue { refresh() } } }
     override init(frame: NSRect) {
         super.init(frame: frame)
         wantsLayer = true
@@ -487,9 +535,7 @@ final class BubbleView: NSView {
         layer.path = Self.path(size: bounds.size, tail: tail, mirrored: own)
         effectiveAppearance.performAsCurrentDrawingAppearance {   // resolve dynamic colours for light/dark
             layer.fillColor = fill.cgColor   // BubblePalette's
-            layer.strokeColor = highlighted ? NSColor.systemOrange.cgColor : nil
         }
-        layer.lineWidth = highlighted ? 2 : 0
         CATransaction.commit()
     }
     /// In layer coordinates (origin bottom-left). The body leaves `tailWidth` free on the left; `mirrored` puts it on the right.

@@ -1,3 +1,4 @@
+import CoreImage
 import CryptoKit
 import AppKit
 import SwiftUI
@@ -14,6 +15,7 @@ struct AttachmentView: View {
     var toggleTranscript: () -> Void = {}
     var dismissCard: () -> Void = {}
     var clickCard: (String?, Data, [Card.Input]) async -> Void = { _, _, _ in }
+    var corners: RowLayout.Corners?   // a picture filling its bubble: the corners at the bubble's (the others are small)
     @State private var loaded: (key: String, image: NSImage)?
     @State private var failedKey: String?
     /// The row view is recycled: only this attachment's picture or failure shows, and a cached picture shows on the
@@ -61,19 +63,32 @@ struct AttachmentView: View {
         .help(attachment.url?.absoluteString ?? attachment.name)
         .task(id: attachment) { await loadThumbnail() }
     }
+    private func radius(_ corner: RowLayout.Corners) -> CGFloat { corners.map { $0.contains(corner) ? RowLayout.mediaRadius : RowLayout.mediaInnerRadius } ?? RowLayout.mediaRadius }
     private var cardImageHeight: CGFloat { attachment.cardImageHeight }
     private var media: some View {
         ZStack {
-            if let image { AnimatedImage(image: image).transition(.opacity) } else {
+            if let image { MediaPicture(image: image).transition(.opacity) } else {
                 Rectangle().fill(.quaternary)
                 if failed { Image(systemName: "photo").foregroundStyle(.secondary) } else { ProgressView().controlSize(.small) }
             }
             if attachment.kind == .video {
-                Image(systemName: "play.circle.fill").font(.system(size: 40)).foregroundStyle(.white, .black.opacity(0.4))
+                Image(systemName: "play.circle.fill").font(.system(size: 40)).foregroundStyle(.white, .black.opacity(0.6))
+            }
+        }
+        .overlay(alignment: .topLeading) {   // Telegram's badge on an animated picture, on one taller than 80
+            GeometryReader { geometry in
+                if attachment.contentType == "image/gif", geometry.size.height > 80 {
+                    Text("GIF").font(.system(size: 10)).foregroundStyle(.white).padding(.horizontal, 6).padding(.vertical, 3)
+                        .background(.black.opacity(0.6), in: Capsule()).padding(8)
+                }
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)   // the row sizes it: mediaSize, narrowed to fit the bubble
-        .clipShape(RoundedRectangle(cornerRadius: 12))
+        .clipShape(UnevenRoundedRectangle(topLeadingRadius: radius(.topLeft), bottomLeadingRadius: radius(.bottomLeft),
+                                          bottomTrailingRadius: radius(.bottomRight), topTrailingRadius: radius(.topRight), style: .circular))   // circular, as the bubble's arcs: a continuous corner is rounder and leaves a sliver of the bubble
+        .overlay {   // a hairline round a picture with no bubble: a white picture would melt into a white background
+            if corners == nil { RoundedRectangle(cornerRadius: RowLayout.mediaRadius, style: .circular).strokeBorder(Color.primary.opacity(0.15), lineWidth: 1) }
+        }
         .help(attachment.name)
         .task(id: attachment) { await loadThumbnail() }
     }
@@ -142,7 +157,7 @@ extension Attachment {
     var mediaSize: CGSize {
         let w = CGFloat(width ?? 320), h = CGFloat(height ?? 240)
         let scale = min(1, 320 / w, 240 / h)
-        return CGSize(width: max(60, w * scale), height: max(60, h * scale))
+        return CGSize(width: max(60, w * scale).rounded(), height: max(60, h * scale).rounded())   // whole points, so edges land on pixels
     }
     var utType: UTType? { UTType(mimeType: contentType) }
     // ponytail: the wire has no byte size; the chip shows the kind instead.
@@ -263,4 +278,79 @@ struct AnimatedImage: NSViewRepresentable {
         return view
     }
     func updateNSView(_ view: NSImageView, context: Context) { if view.image !== image { view.image = image } }
+}
+
+/// A picture, GIF or video poster filling its frame exactly: stretched by under 2% when its aspect is the frame's (the
+/// frame is rounded to whole points), else aspect-fit and centred over a blurred, enlarged copy of itself (Telegram's
+/// `blurBackground`), so a frame wider or taller than the picture shows no bare bubble; a veil of half the background's colour tones it down.
+/// A GIF's blur is its first frame.
+struct MediaPicture: NSViewRepresentable {
+    let image: NSImage
+    func makeNSView(context: Context) -> MediaPictureView { MediaPictureView() }
+    func updateNSView(_ view: MediaPictureView, context: Context) { view.image = image }
+}
+
+final class MediaPictureView: NSView {
+    private let picture = NSImageView(), blur = CALayer(), veil = CALayer()
+    /// Past this the picture is not taken for the frame's shape: it is fitted and the blur shows beside it.
+    static let stretchTolerance: CGFloat = 0.02
+    var image: NSImage? {
+        didSet {
+            guard image !== oldValue else { return }
+            picture.image = image
+            blur.contents = image.flatMap(Self.blurred)
+            needsLayout = true
+        }
+    }
+    override init(frame: NSRect) {
+        super.init(frame: frame)
+        wantsLayer = true
+        blur.contentsGravity = .resizeAspectFill; blur.masksToBounds = true; blur.magnificationFilter = .linear
+        layer?.addSublayer(blur)
+        blur.addSublayer(veil)   // Telegram's: half the background's colour over the blur, so it reads as fill, not picture
+        picture.animates = !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
+        picture.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        picture.setContentCompressionResistancePriority(.defaultLow, for: .vertical)
+        addSubview(picture)
+    }
+    required init?(coder: NSCoder) { fatalError() }
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
+    override func viewDidChangeEffectiveAppearance() { super.viewDidChangeEffectiveAppearance(); needsLayout = true }
+    override func layout() {
+        super.layout()
+        CATransaction.begin(); CATransaction.setDisableActions(true)
+        blur.frame = bounds; veil.frame = blur.bounds
+        effectiveAppearance.performAsCurrentDrawingAppearance { veil.backgroundColor = NSColor.textBackgroundColor.withAlphaComponent(0.5).cgColor }
+        CATransaction.commit()
+        guard let size = image?.size, size.width > 0, size.height > 0, bounds.width > 0, bounds.height > 0 else { picture.frame = bounds; return }
+        let scale = min(bounds.width / size.width, bounds.height / size.height)
+        let fitted = CGSize(width: size.width * scale, height: size.height * scale)
+        if bounds.width - fitted.width <= bounds.width * Self.stretchTolerance, bounds.height - fitted.height <= bounds.height * Self.stretchTolerance {
+            picture.imageScaling = .scaleAxesIndependently; picture.frame = bounds; blur.isHidden = true
+        } else {
+            picture.imageScaling = .scaleProportionallyUpOrDown; picture.frame = bounds; blur.isHidden = false
+        }
+    }
+
+    /// One per picture, made once: the first frame shrunk to ~32 px, blurred, and kept for as long as the picture is.
+    /// A few hundred microseconds, so it is made where it is first needed, on the main thread.
+    // ponytail: synchronous on first show; move it to the decode step if a profile ever shows it.
+    nonisolated(unsafe) private static let blurs = NSCache<NSImage, CGImage>()
+    private static let context = CIContext(options: [.useSoftwareRenderer: false])
+    static func blurred(_ image: NSImage) -> CGImage? {
+        if let cached = blurs.object(forKey: image) { return cached }
+        var rect = CGRect(origin: .zero, size: image.size)
+        guard let full = image.cgImage(forProposedRect: &rect, context: nil, hints: nil) else { return nil }
+        let side: CGFloat = 32, scale = side / CGFloat(max(full.width, full.height))
+        let w = max(1, Int(CGFloat(full.width) * scale)), h = max(1, Int(CGFloat(full.height) * scale))
+        guard let small = CGContext(data: nil, width: w, height: h, bitsPerComponent: 8, bytesPerRow: 0, space: CGColorSpace(name: CGColorSpace.sRGB)!,
+                                    bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return nil }
+        small.interpolationQuality = .high
+        small.draw(full, in: CGRect(x: 0, y: 0, width: w, height: h))
+        guard let thumb = small.makeImage() else { return nil }
+        let blurred = CIImage(cgImage: thumb).clampedToExtent().applyingGaussianBlur(sigma: 2).cropped(to: CGRect(x: 0, y: 0, width: w, height: h))
+        guard let result = context.createCGImage(blurred, from: blurred.extent) else { return nil }
+        blurs.setObject(result, forKey: image)
+        return result
+    }
 }

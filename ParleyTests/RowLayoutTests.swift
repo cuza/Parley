@@ -118,7 +118,7 @@ struct RowLayoutTests {
     @Test func attachmentsTakeAttachmentViewsSizes() {
         let image = Attachment(name: "a.png", kind: .image, width: 1200, height: 800)
         #expect(RowLayout.attachmentSize(image) == image.mediaSize)
-        #expect(image.mediaSize == CGSize(width: 320, height: CGFloat(800) * 320 / 1200))
+        #expect(image.mediaSize == CGSize(width: 320, height: (CGFloat(800) * 320 / 1200).rounded()))   // whole points
         #expect(RowLayout.attachmentSize(Attachment(name: "x", kind: .link, domain: "e.com")).width == 320)
         #expect(RowLayout.attachmentSize(Attachment(name: String(repeating: "long name ", count: 20), kind: .file)).width == 280)
         // Seen live: in the narrow thread pane an image ran past the bubble's leading edge. Everything fits the bubble.
@@ -126,5 +126,94 @@ struct RowLayoutTests {
         #expect(narrow.width == 200 && abs(narrow.height / narrow.width - 800.0 / 1200) < 0.01)
         #expect(RowLayout.attachmentSize(Attachment(name: "x", kind: .link, domain: "e.com"), maxWidth: 200).width == 200)
         #expect(RowLayout.attachmentSize(Attachment(name: String(repeating: "long name ", count: 20), kind: .file), maxWidth: 200).width == 200)
+    }
+    /// Telegram's media sizes (`ChatLayoutUtils.contentSize`).
+    @Test func mediaIsSizedAsTelegramSizesIt() {
+        func size(_ w: Int?, _ h: Int?, _ kind: Parley.Attachment.Kind = .image, caption: Bool = false, room: CGFloat = 498) -> CGSize {
+            RowLayout.mediaSize(Attachment(name: "x", kind: kind, width: w, height: h), caption: caption, room: room)
+        }
+        #expect(size(1200, 800) == CGSize(width: 320, height: 214))     // fitted into a 320 square
+        #expect(size(60, 60) == CGSize(width: 200, height: 200))        // small: enlarged into 200 x 200
+        #expect(size(400, 1200) == CGSize(width: 107, height: 320))     // tall: 320 high, not more
+        #expect(size(400, 1200, caption: true) == CGSize(width: 320, height: 320))   // a caption: the square's width, a blur at the sides
+        #expect(size(50, 400) == CGSize(width: 100, height: 320))       // at least 100 wide
+        #expect(size(640, 480, .video) == CGSize(width: 420, height: 315))   // landscape video: up to 420 wide
+        #expect(size(160, 90, .video) == CGSize(width: 420, height: 236))    // a small video grows to about 300 on its short side
+        #expect(size(1200, 800, room: 150) == CGSize(width: 150, height: 100))   // a narrow pane
+        #expect(size(nil, nil) == CGSize(width: 320, height: 320))
+    }
+    @Test func aMessageOfPicturesAloneHasNoBubbleNameOrTail() {
+        let image = Attachment(name: "a.png", kind: .image, width: 1200, height: 800)
+        let video = Attachment(name: "b.mp4", kind: .video, width: 640, height: 480)
+        for own in [false, true] {
+            let one = RowLayout.make(Self.row("") { $0.attachments = [image] }, width: 700, own: own, kind: .space)
+            #expect(one.bare && one.mediaOnly && !one.tail && one.name == nil)
+            #expect(one.attachments == [one.bubble] && one.bubble.size == CGSize(width: 320, height: 214))
+            // The time is a pill 5 pt from the picture's right edge and 7 from its bottom.
+            #expect(one.time.maxX == one.bubble.maxX - 5 && one.time.maxY == one.bubble.maxY - 7)
+            let two = RowLayout.make(Self.row("") { $0.attachments = [image, video] }, width: 700, own: own, kind: .direct)
+            #expect(two.attachments[1].minY == two.attachments[0].maxY + RowLayout.mediaGap && two.attachments[1].contains(two.time))
+            // Reactions go 4 pt under the picture, on the sender's side; the time stays on it.
+            let reacted = RowLayout.make(Self.row("") { $0.attachments = [image]; $0.reactions = [Reaction(emoji: "👍", people: ["a"])] },
+                                         width: 700, own: own, kind: .direct)
+            #expect(reacted.reactionsOutside && reacted.reactions[0].minY == reacted.bubble.maxY + 4 && reacted.attachments[0].contains(reacted.time))
+            #expect(own ? reacted.reactions[0].maxX == reacted.bubble.maxX : reacted.reactions[0].minX == reacted.bubble.minX)
+        }
+        // A caption, a quote or another kind of attachment keep the bubble.
+        let file = Attachment(name: "r.pdf", contentType: "application/pdf", kind: .file)
+        for row in [Self.row("caption") { $0.attachments = [image] }, Self.row("") { $0.attachments = [image, file] },
+                    Self.row("") { $0.attachments = [image]; $0.quote = QuotedMessage(sender: "Sam", text: "hi") }] {
+            let layout = RowLayout.make(row, width: 700, own: false, kind: .direct)
+            #expect(!layout.bare && !layout.mediaOnly && layout.tail)
+        }
+        let plain = RowLayout.make(Self.row("") { $0.attachments = [image] }, width: 700, own: false, kind: .direct, style: .plain)
+        #expect(!plain.mediaOnly && plain.attachments[0].minX == plain.bubble.minX + RowLayout.padX)
+    }
+    /// A picture in a bubble sits 1 pt inside it on every side it meets (a thin edge of bubble colour), and sets its width.
+    @Test func aPictureFillsItsBubbleButForAOnePointEdge() {
+        let sam = QuotedMessage(sender: "Sam", text: "hi")
+        let image = Attachment(name: "a.png", kind: .image, width: 1200, height: 800)
+        let video = Attachment(name: "b.mp4", kind: .video, width: 640, height: 480)
+        for own in [false, true] {
+            // A quote above, no caption: the picture ends the bubble, the time on it; the tail still shows on a run's last.
+            let quoted = RowLayout.make(Self.row("") { $0.attachments = [image]; $0.quote = sam }, width: 700, own: own, kind: .direct)
+            let picture = quoted.attachments[0], quote = try! #require(quoted.quote)
+            #expect(quoted.bubble.width == 322 && picture.width == 320 && picture.height == 214)
+            #expect(picture.minX == quoted.bubble.minX + 1 && picture.maxX == quoted.bubble.maxX - 1 && picture.maxY == quoted.bubble.maxY - 1)
+            #expect(picture.minY == quote.maxY + RowLayout.mediaSpacing && quoted.tail)
+            #expect(quoted.time.maxX == picture.maxX - 5 && quoted.time.maxY == picture.maxY - 7)
+            #expect(quoted.attachmentCorners[0] == [.bottomLeft, .bottomRight])
+            // A caption under it: the picture 1 pt from the top and sides, the text 7 pt under it, the time inline with the text.
+            let captioned = RowLayout.make(Self.row(Self.long) { $0.attachments = [image] }, width: 700, own: own, kind: .direct)
+            let top = captioned.attachments[0], text = try! #require(captioned.text)
+            #expect(top.minY == captioned.bubble.minY + 1 && top.minX == captioned.bubble.minX + 1 && captioned.bubble.width == 322)
+            #expect(text.minY == top.maxY + RowLayout.mediaSpacing && text.minX == captioned.bubble.minX + RowLayout.padX)
+            #expect(text.maxX <= captioned.bubble.maxX - RowLayout.padX && !top.contains(captioned.time) && captioned.tail)
+            #expect(captioned.attachmentCorners[0] == [.topLeft, .topRight])
+            // Two pictures stack 4 pt apart, both the widest one's width.
+            let two = RowLayout.make(Self.row("two") { $0.attachments = [image, video] }, width: 700, own: own, kind: .direct)
+            #expect(two.attachments[1].minY == two.attachments[0].maxY + RowLayout.mediaGap && two.attachments[0].width == two.attachments[1].width)
+            #expect(two.attachmentCorners == [[.topLeft, .topRight], []])
+            // Reactions on a caption-less one go outside, the bubble still ending at the picture.
+            let reacted = RowLayout.make(Self.row("") { $0.attachments = [image]; $0.quote = sam; $0.reactions = [Reaction(emoji: "👍", people: ["a"])] },
+                                         width: 700, own: own, kind: .direct)
+            #expect(reacted.reactionsOutside && reacted.attachments[0].maxY == reacted.bubble.maxY - 1 && reacted.reactions[0].minY == reacted.bubble.maxY + 4)
+            // With a caption they stay inside, under it.
+            let inside = RowLayout.make(Self.row("hi") { $0.attachments = [image]; $0.reactions = [Reaction(emoji: "👍", people: ["a"])] },
+                                        width: 700, own: own, kind: .direct)
+            #expect(!inside.reactionsOutside && inside.bubble.contains(inside.reactions[0]))
+        }
+        // No name on a picture in a group, caption or not (Telegram's); other messages keep it.
+        #expect(RowLayout.make(Self.row("caption") { $0.attachments = [image] }, width: 700, own: false, kind: .space).name == nil)
+        #expect(RowLayout.make(Self.row("text"), width: 700, own: false, kind: .space).name != nil)
+        // A run's middle bubble has no tail.
+        #expect(!RowLayout.make(Self.row("caption", ends: false) { $0.attachments = [image] }, width: 700, own: false, kind: .direct).tail)
+        // The widest the bubble gets is what the row has room for.
+        let narrow = RowLayout.make(Self.row("") { $0.attachments = [image]; $0.quote = sam }, width: 300, own: false, kind: .direct)
+        #expect(narrow.attachments[0].maxX == narrow.bubble.maxX - 1 && narrow.bubble.maxX <= 300 - RowLayout.margin)
+        // A file after the picture: the picture is not the last block, the time keeps its own line.
+        let file = Attachment(name: "r.pdf", contentType: "application/pdf", kind: .file)
+        let after = RowLayout.make(Self.row("") { $0.attachments = [image, file] }, width: 700, own: false, kind: .direct)
+        #expect(after.attachments[0].maxY < after.bubble.maxY - 1 && !after.attachments[0].contains(after.time))
     }
 }

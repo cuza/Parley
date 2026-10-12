@@ -138,6 +138,8 @@ enum BubblePalette {
     static let timePill = NSColor(name: nil) {
         Wallpaper.current(dark: $0.isDark) == .none ? resolved(.labelColor.withAlphaComponent(0.06), in: $0) : .black.withAlphaComponent($0.isDark ? 0.5 : 0.25)
     }
+    /// The time over a picture: white on the picture blurred and darkened (Telegram's: black 25% light, 50% dark).
+    static let mediaPill = NSColor(name: nil) { .black.withAlphaComponent($0.isDark ? 0.5 : 0.25) }
     private static func resolved(_ color: NSColor, in appearance: NSAppearance) -> NSColor {
         var result = color
         appearance.performAsCurrentDrawingAppearance { result = color.usingColorSpace(.sRGB) ?? color }

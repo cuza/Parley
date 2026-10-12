@@ -1,3 +1,4 @@
+import os
 import SwiftUI
 
 /// An app's card under its message, as Google Chat draws it: sections split by lines (a collapsible one with its
@@ -79,7 +80,7 @@ struct CardView: View {
         var card = card; card.sections = card.sections.map { $0.map(typed) }; return card
     }
     private var box: some View {
-        let card = drawn, inset = CardLayout.inset(card), bare = card.bare == true, room = CardLayout.sectionRoom(card)
+        let card = drawn, inset = CardLayout.inset(card), bare = card.bare == true, room = CardLayout.sectionRoom(card), hugs = CardLayout.hugs(card)
         return GeometryReader { geometry in
             VStack(alignment: .leading, spacing: 0) {
                 ForEach(Array(card.sections.enumerated()), id: \.offset) { index, section in
@@ -92,7 +93,7 @@ struct CardView: View {
                             // sized for an older, wider card can't push in from the left.
                             itemView(item, width: geometry.size.width - 2 * inset)
                                 .frame(width: geometry.size.width - 2 * inset,
-                                       height: CardLayout.height(item, width: geometry.size.width + 2 * (CardLayout.pad - inset), expanded: expanded), alignment: .topLeading)
+                                       height: CardLayout.height(item, width: geometry.size.width + 2 * (CardLayout.pad - inset), expanded: expanded, hugs: hugs), alignment: .topLeading)
                         }
                     }
                     .padding(inset)
@@ -144,8 +145,8 @@ struct CardView: View {
                 ForEach(links.filter { $0.trailing == true }, id: \.self, content: button)
             }
             .frame(width: width)
-        case .image(let url, _, let click, let alt):
-            CardImage(url: url, alt: alt).frame(width: width)
+        case .image(let url, let aspect, let click, let alt):
+            CardImage(url: url, alt: alt).frame(width: CardLayout.imageSize(url, aspect: aspect, slot: width, hugs: CardLayout.hugs(drawn)).width)
                 .overlay {   // a click opens its link or sends its action
                     if let click {
                         if let action = click.action { Button { send(action, from: click) } label: { Color.clear.contentShape(Rectangle()) }.buttonStyle(.plain) }
@@ -337,7 +338,10 @@ private struct CardImage: View {
         }
         .clipShape(RoundedRectangle(cornerRadius: 6))
         .accessibilityLabel(alt ?? "Picture")
-        .task(id: url) { image = await RemoteImage.image(url, px: 0) }
+        .task(id: url) {
+            image = await RemoteImage.image(url, px: 0)
+            if let image { CardLayout.noteNatural(url, image.size) }
+        }
     }
 }
 extension NSImage {
@@ -414,7 +418,7 @@ enum CardLayout {
         (label ? labelHeight + labelGap : 0) + control + (caption ? labelGap + labelHeight : 0)
     }
     static let more: CGFloat = 18   // a cut paragraph's Show more / Show less
-    static func height(_ item: Card.Item, width cardWidth: CGFloat, expanded: Bool = false) -> CGFloat {
+    static func height(_ item: Card.Item, width cardWidth: CGFloat, expanded: Bool = false, hugs: Bool = false) -> CGFloat {
         switch item {
         case .text(let text, let formatting, let lines):
             let width = textWidth(cardWidth, icon: false)
@@ -429,7 +433,7 @@ enum CardLayout {
             return max(icon == nil ? 0 : Self.icon, button == nil && toggle == nil ? 0 : buttons, (label == nil ? 0 : labelHeight + labelGap) + body)
         case .links: return buttons
         case .collapse: return more
-        case .image(_, let aspect, _, _): return min(240, textWidth(cardWidth, icon: false) / max(0.2, aspect))
+        case .image(let url, let aspect, _, _): return imageSize(url, aspect: aspect, slot: textWidth(cardWidth, icon: false), hugs: hugs).height
         case .divider: return 1 + 2 * dividerPad
         case .field(let field):
             return input(label: !field.label.isEmpty, control: fieldHeight(field, width: textWidth(cardWidth, icon: false)), caption: caption(item))
@@ -466,17 +470,87 @@ enum CardLayout {
         else { while kept.last == " " { kept.removeLast() } }   // "with the…", not "with the …"
         return kept + "…"
     }
+    static let minFit: CGFloat = 120, tallest: CGFloat = 400
+    /// Card pictures' sizes, kept between launches: the pictures are fetched again each launch, and a card that hugs its
+    /// picture is then the right width before it arrives. Set once at launch (nil in tests and the demo workspaces).
+    #if DEBUG
+    nonisolated(unsafe) static var sizesFile: URL? = URL.cachesDirectory.appending(path: "\(Bundle.main.bundleIdentifier ?? "dev.cuza.Parley")/card-picture-sizes-debug.plist")
+    #else
+    nonisolated(unsafe) static var sizesFile: URL? = URL.cachesDirectory.appending(path: "\(Bundle.main.bundleIdentifier ?? "dev.cuza.Parley")/card-picture-sizes.plist")
+    #endif
+    private static let naturals = OSAllocatedUnfairLock<[URL: CGSize]>(initialState: sizes(in: sizesFile))
+    /// The sizes saved in `file`, by picture URL.
+    static func sizes(in file: URL?) -> [URL: CGSize] {
+        guard let file, let data = try? Data(contentsOf: file),
+              let saved = try? PropertyListDecoder().decode([String: [Double]].self, from: data) else { return [:] }
+        return Dictionary(saved.compactMap { key, wh in URL(string: key).flatMap { wh.count == 2 ? ($0, CGSize(width: wh[0], height: wh[1])) : nil } }) { $1 }
+    }
+    // ponytail: past 1,000 pictures the file is cleared, not trimmed by use; an LRU if cards ever churn that much.
+    private static func save(_ sizes: [URL: CGSize]) {
+        guard let file = sizesFile else { return }
+        let saved = Dictionary(uniqueKeysWithValues: (sizes.count > 1_000 ? [:] : sizes).map { ($0.absoluteString, [$1.width, $1.height]) })
+        Task.detached(priority: .background) {
+            try? FileManager.default.createDirectory(at: file.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try? PropertyListEncoder().encode(saved).write(to: file, options: .atomic)
+        }
+    }
+    /// Posted (with the picture's URL) when a card's picture loads at a size not known before: cards that hug it re-measure.
+    static let pictureSized = Notification.Name("CardLayout.pictureSized")
+    /// A loaded picture's own size: what a card that is only a picture is as wide as. Measured with the rows, off the main actor.
+    static func natural(_ url: URL) -> CGSize? { naturals.withLock { $0[url] } }
+    @MainActor static func noteNatural(_ url: URL, _ size: CGSize) {
+        guard size.width > 0, size.height > 0, naturals.withLock({ $0.updateValue(size, forKey: url) }) != size else { return }
+        save(naturals.withLock { $0 })
+        NotificationCenter.default.post(name: pictureSized, object: url)
+    }
+    /// A card of pictures and plain text, every picture's size known, has no more to fill a wide card with (`fitWidth`).
+    static func hugs(_ card: Card) -> Bool {
+        guard card.bare != true else { return false }
+        var pictures = false
+        for item in card.sections.joined() {
+            switch item {
+            case .image(let url, _, _, _): guard natural(url) != nil else { return false }; pictures = true
+            case .text, .divider, .row(nil, _, _, _, _, _, nil, nil, _): continue
+            default: return false
+            }
+        }
+        return pictures
+    }
+    /// A picture's drawn size in a slot: the slot's width at the card's aspect, up to 240 high; in a card that hugs
+    /// it, its own size (never enlarged), scaled down to the slot and to `tallest`.
+    static func imageSize(_ url: URL, aspect: Double, slot: CGFloat, hugs: Bool) -> CGSize {
+        let aspect = CGFloat(max(0.2, aspect))
+        guard hugs, let natural = natural(url) else { return CGSize(width: slot, height: min(240, slot / aspect)) }
+        let width = natural.width * min(1, slot / natural.width, tallest * aspect / natural.width)
+        return CGSize(width: width, height: width / aspect)
+    }
+    /// The width of a card that is only pictures and short text: the widest of them with the card's padding (at least
+    /// `minFit`, at most the usual card width); nil when the card has more in it, or a picture isn't loaded yet.
+    static func fitWidth(_ card: Card, maxWidth: CGFloat) -> CGFloat? {
+        guard hugs(card) else { return nil }
+        let full = width(maxWidth: maxWidth)
+        var inner = minFit - 2 * pad
+        for item in card.sections.joined() {
+            switch item {
+            case .image(let url, let aspect, _, _): inner = max(inner, imageSize(url, aspect: aspect, slot: full - 2 * pad, hugs: true).width)
+            case .text(let text, let formatting, _), .row(_, _, _, let text, let formatting, _, _, _, _):
+                inner = max(inner, NativeMessageText.size(of: text, formatting: formatting, width: .greatestFiniteMagnitude).width)
+            default: break
+            }
+        }
+        return min(full, ceil(inner) + 2 * pad)
+    }
     static let byline: CGFloat = 18   // "By <app>" under a card
     static func size(_ card: Card, maxWidth: CGFloat, expanded: Bool = false) -> CGSize {
-        let width = width(maxWidth: maxWidth)
+        let width = fitWidth(card, maxWidth: maxWidth) ?? width(maxWidth: maxWidth)
         return CGSize(width: width, height: boxHeight(card, width: width, expanded: expanded) + (card.by == nil ? 0 : gap + byline))
     }
     /// The card's own box, without the byline under it.
     static func boxHeight(_ card: Card, width: CGFloat, expanded: Bool = false) -> CGFloat {
-        let inset = inset(card)
+        let inset = inset(card), fit = hugs(card)
         let sections = card.sections.map { section in
             let items = Card.shown(section, expanded: expanded)
-            return 2 * inset + items.map { height($0, width: width + 2 * (pad - inset), expanded: expanded) }.reduce(0, +) + gap * CGFloat(max(0, items.count - 1))
+            return 2 * inset + items.map { height($0, width: width + 2 * (pad - inset), expanded: expanded, hugs: fit) }.reduce(0, +) + gap * CGFloat(max(0, items.count - 1))
         }
         return ceil(sections.reduce(0, +) + CGFloat(max(0, sections.count - 1)) * betweenSections(card))
     }

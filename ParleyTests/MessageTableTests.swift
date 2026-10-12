@@ -288,6 +288,51 @@ import Testing
         #expect(index == row + 50)
         #expect(abs(h.table.rect(ofRow: index).minY - h.visibleTop - offset) < 0.5)
     }
+    @Test func aMessageOfPicturesAloneDrawsNoBubbleAndATimePillOverThePicture() throws {
+        let h = Harness()
+        var shown = messages(0..<2)
+        let image = Attachment(name: "a.png", kind: .image, width: 1200, height: 800)
+        shown.append(Message(id: "m0100", conversationID: "c", sender: me, text: "", createdAt: Date(timeIntervalSince1970: 1_700_009_000), attachments: [image]))
+        shown.append(Message(id: "m0101", conversationID: "c", sender: alex, text: "", createdAt: Date(timeIntervalSince1970: 1_700_009_100), attachments: [image]))
+        h.show(shown)
+        for id in ["m0100", "m0101"] {
+            let index = try #require(h.coordinator.rows.firstIndex { $0.message.id == id })
+            let view = try #require(h.table.rowView(atRow: index, makeIfNecessary: false) as? MessageRowView)
+            let layout = try #require(view.rowLayout)
+            #expect(view.bubbleView.isHidden && layout.mediaOnly)
+            let picture = view.attachmentViews[0].frame
+            #expect(picture == layout.attachments[0] && picture.size == RowLayout.mediaSize(image, caption: false, room: .greatestFiniteMagnitude))
+            #expect(view.timeLabel.frame == layout.time && picture.contains(view.timeLabel.frame))
+            #expect(view.timeLabel.background == BubblePalette.mediaPill && view.timeLabel.frame.maxX > picture.maxX - 20)
+        }
+        let text = try #require(h.table.rowView(atRow: 0, makeIfNecessary: false) as? MessageRowView)
+        #expect(!text.bubbleView.isHidden)
+    }
+    @Test func aPictureFillsTheBubbleOfAQuoteOrCaption() throws {
+        let h = Harness()
+        var shown = messages(0..<2)
+        let image = Attachment(name: "a.png", kind: .image, width: 1200, height: 800)
+        let at = { Date(timeIntervalSince1970: 1_700_009_000 + $0) }
+        shown.append(Message(id: "m0102", conversationID: "c", sender: alex, text: "", createdAt: at(200), attachments: [image], quote: QuotedMessage(sender: "Sam", text: "hi")))
+        shown.append(Message(id: "m0103", conversationID: "c", sender: me, text: "a caption", createdAt: at(300), attachments: [image]))
+        h.show(shown)
+        for id in ["m0102"] {
+            let index = try #require(h.coordinator.rows.firstIndex { $0.message.id == id })
+            let view = try #require(h.table.rowView(atRow: index, makeIfNecessary: true) as? MessageRowView)
+            let layout = try #require(view.rowLayout)
+            let picture = view.attachmentViews[0].frame, bubble = layout.bubble
+            #expect(!view.bubbleView.isHidden && picture == layout.attachments[0])
+            #expect(picture.minX == bubble.minX + 1 && picture.maxX == bubble.maxX - 1 && picture.maxY == bubble.maxY - 1)   // a 1 pt edge of bubble
+            #expect(view.bubbleView.frame.height == bubble.height && view.bubbleView.frame.maxX >= bubble.maxX)
+            #expect(view.timeLabel.frame == layout.time && picture.contains(view.timeLabel.frame))
+            #expect(view.timeLabel.background == BubblePalette.mediaPill && view.timeLabel.frame.maxX == picture.maxX - RowLayout.mediaPillMargin.width)
+            // Its large corners where it meets the bubble's, small ones under the quote; the tail beside it on a run's last.
+            #expect(view.attachmentViews[0].rootView.corners == layout.attachmentCorners[0] && layout.attachmentCorners[0] == [.bottomLeft, .bottomRight])
+            #expect(layout.tail == view.bubbleView.tail)
+        }
+        let text = try #require(h.table.rowView(atRow: 0, makeIfNecessary: true) as? MessageRowView)
+        #expect(!text.bubbleView.isHidden)
+    }
     @Test func ownMessagesRealignWhenTheUserIsKnown() {
         let h = Harness()
         let shown = messages(0..<6)

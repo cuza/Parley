@@ -59,6 +59,7 @@ struct MessageTable: NSViewRepresentable {
         table.postsFrameChangedNotifications = true   // the table's own width, which settles after the clip view's
         NotificationCenter.default.addObserver(coordinator, selector: #selector(Coordinator.tableResized), name: NSView.frameDidChangeNotification, object: table)
         NotificationCenter.default.addObserver(coordinator, selector: #selector(Coordinator.liveResizeEnded), name: NSWindow.didEndLiveResizeNotification, object: nil)
+        NotificationCenter.default.addObserver(coordinator, selector: #selector(Coordinator.pictureSized), name: CardLayout.pictureSized, object: nil)
         coordinator.scroll = scroll
         return scroll
     }
@@ -203,6 +204,17 @@ struct MessageTable: NSViewRepresentable {
                 guard !Task.isCancelled, let self, let scroll, !scroll.inLiveResize else { return }
                 remeasure()
             }
+        }
+        /// A card's picture loaded at a size not known before: the cards that hug it are re-measured, keeping the reader's place.
+        @objc func pictureSized(_ note: Notification) {
+            guard let table, let url = note.object as? URL else { return }
+            let indexes = IndexSet(rows.indices.filter { i in
+                rows[i].message.attachments.contains { $0.card?.sections.joined().contains { if case .image(url, _, _, _) = $0 { true } else { false } } == true }
+            })
+            guard !indexes.isEmpty else { return }
+            for i in indexes { layouts[rows[i]] = nil; _ = fresh(rows[i]) }
+            keepingPlace { table.noteHeightOfRows(withIndexesChanged: indexes) }
+            indexes.forEach(configureRow)
         }
         @objc func liveResizeEnded(_ note: Notification) {
             guard let window = scroll?.window, note.object as? NSWindow === window else { return }
