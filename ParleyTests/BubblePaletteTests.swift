@@ -10,6 +10,14 @@ import Testing
         #expect(BubblePalette.ink(on: NSColor(rgb: 0xFFCC00)) == .black)   // yellow
         #expect(BubblePalette.ink(on: NSColor(rgb: 0xE1FFC7)) == .black)   // Telegram's pale green
     }
+    /// Quotes, times and links on a pale bubble take a deeper shade of it, as Telegram derives them from a picked
+    /// colour; on a dark bubble they stay white.
+    @Test func accentsOnMyBubbleAreItsDeeperShadeOrWhite() throws {
+        let accent = try #require(BubblePalette.accent(on: NSColor(rgb: 0xEEFFDE)).usingColorSpace(.sRGB))
+        #expect(accent.withAlphaComponent(1).hex == "#5C8C31")
+        #expect(abs(accent.alphaComponent - 0.8) < 0.001)
+        #expect(BubblePalette.accent(on: NSColor(rgb: 0x007AFF)) == .white)
+    }
     private func resolved(_ color: NSColor, _ name: NSAppearance.Name) -> NSColor {
         var result = NSColor.clear
         NSAppearance(named: name)!.performAsCurrentDrawingAppearance { result = color.usingColorSpace(.sRGB)! }

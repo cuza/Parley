@@ -36,6 +36,10 @@ final class WebViewSignIn: NSObject, SignInBrowser, WKNavigationDelegate, WKUIDe
     private(set) var presented = false
     /// Google has handed the session to Google Chat: its website (which doesn't support this web view) stays hidden.
     private(set) var handingOff = false
+    /// Google's Workspace access check refused the sign-in (Context-Aware Access). Its page stays (it names the requirement
+    /// that failed) and the sheet's header says what it means: its advice to use Chrome doesn't help here.
+    private(set) var blocked = false
+    static let blockedMessage = "Your organization blocks sign-in from this app or network. Ask your Workspace admin."
     private(set) var webView: WKWebView?
     @ObservationIgnored private let data: any SignInWebData
     @ObservationIgnored private var lastOffered: (cookies: [String], at: Date)?
@@ -70,7 +74,7 @@ final class WebViewSignIn: NSObject, SignInBrowser, WKNavigationDelegate, WKUIDe
     func close() {
         webView?.stopLoading()
         webView = nil
-        presented = false; handingOff = false; lastOffered = nil
+        presented = false; handingOff = false; blocked = false; lastOffered = nil
     }
     func forget() async {
         close()
@@ -140,9 +144,13 @@ final class WebViewSignIn: NSObject, SignInBrowser, WKNavigationDelegate, WKUIDe
         return Self.allowInView
     }
     func webView(_ webView: WKWebView, didCommit navigation: WKNavigation!) {
-        // Host only: no paths or query strings in the log.
-        if let host = webView.url?.host() { authLog.notice("In-app sign-in: page from \(host, privacy: .public)") }
-        if webView.url?.host() == "chat.google.com" { handOffBegan() }
+        if let host = webView.url?.host() { pageCommitted(host: host) }
+    }
+    /// A page from `host` is showing.
+    func pageCommitted(host: String) {
+        authLog.notice("In-app sign-in: page from \(host, privacy: .public)")   // host only: no paths or query strings in the log
+        blocked = host.lowercased() == "access.workspace.google.com"
+        if host == "chat.google.com" { handOffBegan() }
     }
     /// A page opening a new window: Google's own pages load here, anything else in the user's browser.
     func webView(_ webView: WKWebView, createWebViewWith configuration: WKWebViewConfiguration,

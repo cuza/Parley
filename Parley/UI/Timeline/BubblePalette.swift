@@ -121,6 +121,16 @@ enum BubblePalette {
     static let own = NSColor(name: nil) { resolved(own(dark: $0.isDark), in: $0) }
     /// Text and icons on my bubble.
     static let ownInk = NSColor(name: nil) { ink(on: resolved(own(dark: $0.isDark), in: $0)) }
+    /// Quotes, times and links on my bubble.
+    static let ownAccent = NSColor(name: nil) { accent(on: resolved(own(dark: $0.isDark), in: $0)) }
+    /// On a pale fill, a deeper shade of it, as Telegram derives its outgoing accents from a picked bubble colour
+    /// (hue ×1.008, saturation ×5.01, brightness ×0.549, 80% opaque); white on a fill that takes white text.
+    static func accent(on fill: NSColor) -> NSColor {
+        guard ink(on: fill) == .black, let c = fill.usingColorSpace(.sRGB) else { return .white }
+        func clamped(_ v: CGFloat) -> CGFloat { min(1, max(0, v)) }
+        return NSColor(colorSpace: .sRGB, hue: clamped(c.hueComponent * 1.008), saturation: clamped(c.saturationComponent * 5.0094),
+                       brightness: clamped(c.brightnessComponent * 0.549), alpha: 0.8)
+    }
     /// A chip or card on my bubble: a shade darker under white text, lighter under black.
     static let ownWell = NSColor(name: nil) {
         ink(on: resolved(own(dark: $0.isDark), in: $0)) == .white ? .black.withAlphaComponent(0.22) : .white.withAlphaComponent(0.45)

@@ -110,4 +110,18 @@ import Testing
         await web.forget()
         #expect(data.removals == 1 && data.stored.isEmpty && !web.presented)
     }
+    /// Google's Workspace access check page is covered by a plain explanation; any other page shows as it is.
+    @Test func workspaceAccessBlockIsExplained() async throws {
+        let sign = WebViewSignIn(data: FakeData())
+        try await sign.start()
+        sign.pageCommitted(host: "accounts.google.com")
+        #expect(!sign.blocked)
+        sign.pageCommitted(host: "access.workspace.google.com")
+        #expect(sign.blocked && WebViewSignIn.blockedMessage == "Your organization blocks sign-in from this app or network. Ask your Workspace admin.")
+        sign.pageCommitted(host: "accounts.google.com")   // the user went back to choose another account
+        #expect(!sign.blocked)
+        sign.pageCommitted(host: "access.workspace.google.com")
+        sign.close()
+        #expect(!sign.blocked)
+    }
 }

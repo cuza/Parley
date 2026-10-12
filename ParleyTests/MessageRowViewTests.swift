@@ -111,15 +111,22 @@ import Testing
 }
 
 @MainActor struct OwnBubbleLinkTests {
-    @Test func linksInOwnBubblesAreWhiteAndUnderlined() {
+    @Test func linksInOwnBubblesTakeItsAccentAndAreUnderlined() {
         let view = MessageRowView()
         let message = Message(id: "m", conversationID: "c", sender: Person(id: "me", name: "Me"), text: "see https://plane.so now")
         view.configure(TimelineRow.rows([message])[0], own: true, kind: .direct, meID: "me", actions: MessageRowActions())
-        #expect(view.textView.linkTextAttributes?[.foregroundColor] as? NSColor == BubblePalette.ownInk)   // white or black, by the bubble colour
+        #expect(view.textView.linkTextAttributes?[.foregroundColor] as? NSColor == BubblePalette.ownAccent)   // white, or a deeper shade of a pale bubble
         #expect(view.textView.linkTextAttributes?[.underlineStyle] as? Int == NSUnderlineStyle.single.rawValue)
         view.configure(TimelineRow.rows([Message(id: "n", conversationID: "c", sender: Person(id: "a", name: "A"), text: "https://x.com")])[0],
                        own: false, kind: .direct, meID: "me", actions: MessageRowActions())
         #expect(view.textView.linkTextAttributes?[.foregroundColor] as? NSColor != .white)
+    }
+    @Test func aQuoteOnMyBubbleTakesItsAccent() {
+        let view = MessageRowView()
+        var message = Message(id: "m", conversationID: "c", sender: Person(id: "me", name: "Me"), text: "yes")
+        message.quote = QuotedMessage(sender: "Sam", text: "the original")
+        view.configure(TimelineRow.rows([message])[0], own: true, kind: .direct, meID: "me", actions: MessageRowActions())
+        #expect(view.quoteView.bar == BubblePalette.ownAccent)
     }
 }
 

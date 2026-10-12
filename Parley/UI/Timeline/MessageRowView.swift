@@ -173,8 +173,8 @@ final class MessageRowView: NSTableRowView {
         else if let layout { rowLayout = layout }
         self.row = row; self.own = own; self.kind = kind; self.actions = actions
         self.meID = meID
-        let ink = BubblePalette.ownInk
-        let secondary: NSColor = own && !lone ? ink.withAlphaComponent(0.75) : .secondaryLabelColor
+        let ink = BubblePalette.ownInk, accent = BubblePalette.ownAccent
+        let secondary: NSColor = own && !lone ? accent.withAlphaComponent(0.75) : .secondaryLabelColor
         let senderColor = Self.color(for: message.sender.id)
 
         dateLabel.text = RowLayout.dateText(message, color: BubblePalette.serviceText)
@@ -190,16 +190,16 @@ final class MessageRowView: NSTableRowView {
         let acting = message.via?.components(separatedBy: " · ").first { $0 != "App" && $0 != "Only visible to you" }
         viaLabel.toolTip = acting.map { "Posted by \($0) on \(message.sender.name)’s behalf" }
         if let quote = message.quote {
-            let quoteColor = own ? ink : Self.color(for: quote.sender)
+            let quoteColor = own ? accent : Self.color(for: quote.sender)
             quoteView.bar = quoteColor
-            quoteView.fill = own ? ink.withAlphaComponent(0.2) : quoteColor.withAlphaComponent(0.1)
+            quoteView.fill = own ? accent.withAlphaComponent(0.2) : quoteColor.withAlphaComponent(0.1)
             quoteView.onClick = quote.id.map { id in { [weak self] in self?.actions.showQuoted(id) } }
             quoteSenderLabel.text = RowLayout.quoteSenderText(quote, color: quoteColor)
             quoteTextLabel.text = RowLayout.quoteBodyText(quote, color: own ? ink.withAlphaComponent(0.85) : .secondaryLabelColor)
         }
         NativeMessageText.show(message.text, formatting: message.formatting, own: own, jumbo: message.jumboEmoji, in: textView)
-        // Links on my bubble take its text colour, as Telegram draws them; elsewhere the system link colour.
-        textView.linkTextAttributes = [.foregroundColor: own ? ink : .linkColor,
+        // Links on my bubble take its accent, as Telegram draws them; elsewhere the system link colour.
+        textView.linkTextAttributes = [.foregroundColor: own ? accent : .linkColor,
                                        .underlineStyle: NSUnderlineStyle.single.rawValue, .cursor: NSCursor.pointingHand]
 
         while attachmentViews.count > message.attachments.count { attachmentViews.removeLast().removeFromSuperview() }

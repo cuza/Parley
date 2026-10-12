@@ -160,17 +160,25 @@ struct ConversationPalette: View {
         working = true; problem = nil
         Task {
             defer { working = false }
-            do {
-                switch item {
-                case .person(let person)?: try await store.message(picked + [person])
-                case _ where !picked.isEmpty: try await store.message(picked)
-                case .conversation(let room)?: await store.select(room.id)
-                case .space(let space)?: try await store.join(space)
-                case nil: return
-                }
-                if let then, let id = store.selectedID { then(id) }
-                dismiss()
-            } catch { problem = error.localizedDescription }
+            do { try await Self.open(item, picked: picked, store: store, then: then, close: { dismiss() }) }
+            catch { problem = error.localizedDescription }
         }
+    }
+    /// Opens the pick and closes the palette. A listed conversation closes it at once: its timeline shows straight away,
+    /// and its newest page, read mark and watch load behind. A new DM or a join closes it once the server has made it.
+    static func open(_ item: PaletteResults.Item?, picked: [Person], store: ChatStore, then: ((ConversationID) -> Void)?,
+                     close: () -> Void) async throws {
+        switch item {
+        case .person(let person)?: try await store.message(picked + [person])
+        case _ where !picked.isEmpty: try await store.message(picked)
+        case .conversation(let room)?:
+            then?(room.id); close()
+            await store.select(room.id)
+            return
+        case .space(let space)?: try await store.join(space)
+        case nil: return
+        }
+        if let then, let id = store.selectedID { then(id) }
+        close()
     }
 }

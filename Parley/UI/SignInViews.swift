@@ -112,7 +112,12 @@ struct WebSignInSheet: View {
             HStack {
                 VStack(alignment: .leading, spacing: 2) {
                     Text("Sign in with Google").font(.headline)
-                    Text(Self.passkeyNote).font(.caption).foregroundStyle(.secondary)
+                    // Google's block page stays in view (it names the requirement that failed); the header says what it means.
+                    if web.blocked {
+                        Label(WebViewSignIn.blockedMessage, systemImage: "exclamationmark.triangle.fill").font(.caption).foregroundStyle(.orange)
+                    } else {
+                        Text(Self.passkeyNote).font(.caption).foregroundStyle(.secondary)
+                    }
                 }
                 Spacer()
                 Button("Cancel", role: .cancel) { flow.cancel() }.keyboardShortcut(.cancelAction)

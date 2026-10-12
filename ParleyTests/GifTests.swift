@@ -96,4 +96,17 @@ struct GiphyKeyTests {
         #expect(draft.uploads.count == 1)
         #expect(draft.uploads.first?.contentType == "image/gif" && draft.uploads.first?.name == "Party Cat.gif")
     }
+    @Test func aGifPickedWhileReplyingQuotesTheMessage() async throws {
+        let fake = FakeBackend()
+        let store = ChatStore(backend: fake)
+        await store.start()
+        let id = try #require(store.selectedID)
+        let original = try #require(store.messages.last { $0.conversationID == id && !$0.text.isEmpty })
+        store.quote(original)
+        store.download = { _ in Data([0x47, 0x49, 0x46]) }
+        let remote = URL(string: "https://media.giphy.com/media/abc/giphy.gif")!
+        await store.sendGif(Attachment(name: "Party Cat", contentType: "image/gif", kind: .image, url: remote), conversation: id)
+        #expect(await fake.sentDrafts.last?.quoting?.text == original.text)
+        #expect(store.quoting.isEmpty)   // the reply bar closes, as after a typed reply
+    }
 }

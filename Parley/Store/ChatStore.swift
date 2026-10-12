@@ -966,10 +966,10 @@ final class ChatStore {
         draftSends[scope, default: 0] += 1
         await sendNew(text, formatting: formatting, attachments: files, quote: quote, serverDraft: draft, conversation: conversation, thread: thread)
     }
-    /// Sends a picked GIF on its own, as Google Chat does; the local echo shows it as an image attachment.
     /// Fetches a picked GIF from its CDN; injectable for tests.
     var download: (URL) async throws -> Data = { try await URLSession.shared.data(from: $0).0 }
-    /// Sent as an upload: the server drops a client-made URL chip for GIPHY links and stores an empty message.
+    /// Sends a picked GIF on its own, quoting the message being replied to, as Google Chat does; the local echo shows it as an
+    /// image attachment. Sent as an upload: the server drops a client-made URL chip for GIPHY links and stores an empty message.
     func sendGif(_ gif: Attachment, conversation: String, thread: String? = nil) async {
         guard let url = gif.url else { return }
         do {
@@ -978,14 +978,15 @@ final class ChatStore {
             try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
             let file = folder.appending(path: name + ".gif")
             try await download(url).write(to: file)
-            await sendNew("", attachments: [try .localFile(at: file)], conversation: conversation, thread: thread)
+            await sendNew("", attachments: [try .localFile(at: file)], quote: quoting.removeValue(forKey: key(conversation, thread)),
+                          conversation: conversation, thread: thread)
         } catch { report(error) }
     }
-    /// Sends a recording on its own, as Google Chat does: an upload named and typed like its own recordings, with the voice metadata.
+    /// Sends a recording on its own (quoting the message being replied to), as Google Chat does: an upload named and typed like its own recordings, with the voice metadata.
     func sendVoice(_ file: URL, duration: TimeInterval, waveform: [Int], conversation: String, thread: String? = nil) async {
         let voice = Attachment(name: file.lastPathComponent, contentType: Voice.contentType, kind: .voice, url: file,
                                voice: Voice(duration: duration, waveform: waveform))
-        await sendNew("", attachments: [voice], conversation: conversation, thread: thread)
+        await sendNew("", attachments: [voice], quote: quoting.removeValue(forKey: key(conversation, thread)), conversation: conversation, thread: thread)
     }
     /// A notification's inline reply: sent without touching the draft, and the conversation counts as read, as Messages does.
     func reply(_ text: String, conversation: ConversationID, thread: ThreadID?) async {

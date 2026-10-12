@@ -353,8 +353,10 @@ struct ChatView: View {
                 if !hidden.isEmpty {
                     let open = sectionLimitArgs.expanded.contains(title)
                     Button { expandedSections = Self.lines(expandedSections, title, contains: !open) } label: {
-                        Label { Text(open ? "Show less" : "Show all") } icon: { ShowAllIcon(open: open) }
-                            .font(.system(size: 13)).foregroundStyle(.secondary)
+                        HStack(spacing: 8) {   // laid out as a room row, so the icon and text line up with the avatars and names
+                            ShowAllIcon(open: open).frame(width: 20, height: 20)
+                            Text(open ? "Show less" : "Show all").font(.system(size: 13)).foregroundStyle(.secondary)
+                        }
                     }.buttonStyle(.plain).selectionDisabled()   // a click on the row toggles it, never selects it
                 }
             } header: {

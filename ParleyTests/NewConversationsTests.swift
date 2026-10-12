@@ -204,3 +204,20 @@ extension AuthTests {
         #expect(row(from: Person(id: "alex", name: "Alex"), kind: .direct) { _ in }.personMenu() == nil)
     }
 }
+
+@MainActor struct PaletteOpenTests {
+    /// A listed conversation's timeline shows at once, so the palette gets out of the way then, not after the page,
+    /// read mark and watch have loaded.
+    @Test func pickingAListedConversationClosesBeforeItLoads() async throws {
+        let store = ChatStore(backend: FakeBackend())
+        await store.start()
+        let room = try #require(store.conversations.first { $0.id != store.selectedID && $0.unread > 0 })
+        var unreadAtClose: Int?
+        try await ConversationPalette.open(.conversation(room), picked: [], store: store, then: nil) {
+            unreadAtClose = store.conversations.first { $0.id == room.id }?.unread
+        }
+        #expect((unreadAtClose ?? 0) > 0)   // closed before the conversation was loaded and marked read
+        #expect(store.selectedID == room.id)
+        #expect(store.conversations.first { $0.id == room.id }?.unread == 0)   // which still happened behind it
+    }
+}

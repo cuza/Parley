@@ -825,7 +825,7 @@ enum MessageTextStyle {
         let font = jumbo.map(jumboFont) ?? font
         if let cached = styledCache.object(forKey: key as NSString) { return cached }
         let ink = BubblePalette.ownInk
-        let color: NSColor = own ? ink : .labelColor, secondary: NSColor = own ? ink.withAlphaComponent(0.8) : .secondaryLabelColor
+        let color: NSColor = own ? ink : .labelColor, secondary: NSColor = own ? BubblePalette.ownAccent.withAlphaComponent(0.8) : .secondaryLabelColor
         let tint: NSColor = own ? ink.withAlphaComponent(0.2) : .labelColor.withAlphaComponent(0.08)
         let styled = NSMutableAttributedString(string: text, attributes: [.font: font, .foregroundColor: color])
         let all = NSRange(location: 0, length: styled.length), string = styled.string as NSString

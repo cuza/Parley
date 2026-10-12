@@ -40,9 +40,9 @@ actor DynamiteBackend: ChatBackend {
     private var latest: [ConversationID: Int64] = [:]   // newest message time (µs) the sidebar reported
     private var notifyLevel: [ConversationID: Dynamite_GroupNotificationSettings.Level] = [:]
     private var markedUnread: Set<ConversationID> = []
-    // A loaded message's attachments and chips (annotations not rebuilt from its text), re-sent on edit so they survive it.
-    // ponytail: kept for every loaded message with attachments, like `threads`; prune with them if memory ever matters.
-    private var attached: [MessageID: (text: String, annotations: [Dynamite_Annotation])] = [:]
+    // A loaded message's attachments, chips (annotations not rebuilt from its text) and quote, re-sent on edit so they survive it.
+    // ponytail: kept for every loaded message with attachments or a quote, like `threads`; prune with them if memory ever matters.
+    private var attached: [MessageID: (text: String, annotations: [Dynamite_Annotation], quote: Dynamite_QuotedMessageRef?)] = [:]
 
     private let vault: any SessionVault
     private let media: URLSession
@@ -534,8 +534,9 @@ actor DynamiteBackend: ChatBackend {
             let formats = DynamiteMapper.annotations(Self.sendable(formatting, besides: attached[id]?.annotations ?? []))
             r.annotations = formats + (attached[id].map { old in old.annotations.filter { Self.survives($0, from: old.text, to: text) } } ?? [])
             r.messageInfo.acceptFormatAnnotations = !formats.isEmpty
+            if let quote = attached[id]?.quote { r.messageInfo.quotedMessage = quote }
         }
-        if attached[id] == nil { log.notice("Editing a message not loaded here: any attachments it has are not re-sent") }
+        if attached[id] == nil { log.notice("Editing a message not loaded here: any attachments or quote it has are not re-sent") }
         let response: Dynamite_EditMessageResponse = try await rpc("edit_message", request)
         let conversation = String(id.split(separator: "/").prefix(2).joined(separator: "/"))
         saw([response.message], in: conversation)
@@ -1201,7 +1202,12 @@ actor DynamiteBackend: ChatBackend {
                 default: true
                 }
             }
-            attached[id] = kept.isEmpty || proto.deleteTime != 0 ? nil : (proto.textBody, kept)
+            let quoted = proto.quotedMessageMetadata
+            let quote = proto.hasQuotedMessageMetadata ? Dynamite_QuotedMessageRef.with {
+                $0.messageID = quoted.messageID; $0.lastUpdateTime = quoted.lastUpdateTimeWhenQuoted
+                $0.quoteType = quoted.quoteType == .forward ? .forward : .quoteReply
+            } : nil
+            attached[id] = kept.isEmpty && quote == nil || proto.deleteTime != 0 ? nil : (proto.textBody, kept, quote)
         }
     }
 

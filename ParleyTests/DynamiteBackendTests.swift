@@ -379,6 +379,23 @@ extension AuthTests {
         let message = Self.upserts(await Self.drain(backend)).last
         #expect(message?.id == "space/x/t1/h1" && message?.text == "new" && message?.edited == true)
     }
+    /// An edit replaces what it doesn't send: a reply's quote goes back with the new text, or the reply loses it.
+    @Test func editKeepsAReplysQuote() async throws {
+        var reply = Self.message("h1", topic: "t1", at: 3, by: "me")
+        reply.quotedMessageMetadata = .with { q in
+            q.messageID = .with { $0.messageID = "q1"; $0.parentID.topicID.topicID = "t0" }
+            q.lastUpdateTimeWhenQuoted = 1234
+            q.textBody = "the original"
+        }
+        let (backend, exchange) = try await Self.connected([try Self.proto(Dynamite_EditMessageResponse.with { $0.message = reply })])
+        await backend.handle(Self.pushed(.messagePosted, reply))
+        try await backend.edit("space/x/t1/h1", text: "new")
+        let request = try Dynamite_EditMessageRequest(serializedBytes: Self.body(try #require(exchange.requests.last)))
+        #expect(request.messageInfo.quotedMessage.messageID.messageID == "q1")
+        #expect(request.messageInfo.quotedMessage.messageID.parentID.topicID.topicID == "t0")
+        #expect(request.messageInfo.quotedMessage.lastUpdateTime == 1234)
+        #expect(request.messageInfo.quotedMessage.quoteType == .quoteReply)
+    }
     @Test func deleteEmitsRemoval() async throws {
         let (backend, exchange) = try await Self.connected([try Self.proto(Dynamite_DeleteMessageResponse())])
         try await backend.delete("dm/a/t1/m1")

@@ -266,6 +266,7 @@ message RoomUpdatedMetadata {                         // purple's name(2) is gon
 }
 message QuotedMessageMetadata {
   optional MessageId message_id = 1;
+  optional int64 last_update_time_when_quoted = 2;       // µs: what a QuotedMessageRef's last_update_time sends back
   optional User creator = 5;
   optional string text_body = 6;
   repeated Annotation annotations = 7;
@@ -557,7 +558,7 @@ message MessageInfo {
 }
 message CreateTopicRequest {
   optional string text_body = 2;
-  repeated Annotation annotations = 3;        // zjg.f
+  repeated Annotation annotations = 3;
   optional GroupId group_id = 5;
   optional string topic_and_message_id = 7;   // client-generated; also the topic id
   optional bool history_v2 = 8;               // Google Chat always sends true
@@ -577,9 +578,9 @@ message CreateVideoCallResponse { optional Annotation annotation = 1; }
 message CreateMessageRequest {
   optional MessageParentId parent_id = 1;
   optional string text_body = 2;
-  repeated Annotation annotations = 3; // zjc.f
+  repeated Annotation annotations = 3;
   optional string message_id = 6;      // client-generated new message id
-  optional MessageInfo message_info = 7;   // zjc.h
+  optional MessageInfo message_info = 7;
   optional RequestHeader request_header = 100;
 }
 message CreateMessageResponse { optional Message message = 1; }
@@ -812,7 +813,7 @@ message CatchUpResponse {
 message EditMessageRequest {
   optional MessageId message_id = 1;
   optional string text_body = 2;
-  repeated Annotation annotations = 3;   // zkc.f
+  repeated Annotation annotations = 3;
   optional MessageInfo message_info = 5;
   optional RequestHeader request_header = 100;
 }

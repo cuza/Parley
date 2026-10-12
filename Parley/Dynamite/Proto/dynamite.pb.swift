@@ -2224,69 +2224,78 @@ nonisolated struct Dynamite_RoomUpdatedMetadata: Sendable {
   fileprivate var _initiatorType: Int32? = nil
 }
 
-nonisolated struct Dynamite_QuotedMessageMetadata: Sendable {
+nonisolated struct Dynamite_QuotedMessageMetadata: @unchecked Sendable {
   // SwiftProtobuf.Message conformance is added in an extension below. See the
   // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
   // methods supported on all messages.
 
   var messageID: Dynamite_MessageId {
-    get {_messageID ?? Dynamite_MessageId()}
-    set {_messageID = newValue}
+    get {_storage._messageID ?? Dynamite_MessageId()}
+    set {_uniqueStorage()._messageID = newValue}
   }
   /// Returns true if `messageID` has been explicitly set.
-  var hasMessageID: Bool {self._messageID != nil}
+  var hasMessageID: Bool {_storage._messageID != nil}
   /// Clears the value of `messageID`. Subsequent reads from it will return its default value.
-  mutating func clearMessageID() {self._messageID = nil}
+  mutating func clearMessageID() {_uniqueStorage()._messageID = nil}
+
+  /// µs: what a QuotedMessageRef's last_update_time sends back
+  var lastUpdateTimeWhenQuoted: Int64 {
+    get {_storage._lastUpdateTimeWhenQuoted ?? 0}
+    set {_uniqueStorage()._lastUpdateTimeWhenQuoted = newValue}
+  }
+  /// Returns true if `lastUpdateTimeWhenQuoted` has been explicitly set.
+  var hasLastUpdateTimeWhenQuoted: Bool {_storage._lastUpdateTimeWhenQuoted != nil}
+  /// Clears the value of `lastUpdateTimeWhenQuoted`. Subsequent reads from it will return its default value.
+  mutating func clearLastUpdateTimeWhenQuoted() {_uniqueStorage()._lastUpdateTimeWhenQuoted = nil}
 
   var creator: Dynamite_User {
-    get {_creator ?? Dynamite_User()}
-    set {_creator = newValue}
+    get {_storage._creator ?? Dynamite_User()}
+    set {_uniqueStorage()._creator = newValue}
   }
   /// Returns true if `creator` has been explicitly set.
-  var hasCreator: Bool {self._creator != nil}
+  var hasCreator: Bool {_storage._creator != nil}
   /// Clears the value of `creator`. Subsequent reads from it will return its default value.
-  mutating func clearCreator() {self._creator = nil}
+  mutating func clearCreator() {_uniqueStorage()._creator = nil}
 
   var textBody: String {
-    get {_textBody ?? String()}
-    set {_textBody = newValue}
+    get {_storage._textBody ?? String()}
+    set {_uniqueStorage()._textBody = newValue}
   }
   /// Returns true if `textBody` has been explicitly set.
-  var hasTextBody: Bool {self._textBody != nil}
+  var hasTextBody: Bool {_storage._textBody != nil}
   /// Clears the value of `textBody`. Subsequent reads from it will return its default value.
-  mutating func clearTextBody() {self._textBody = nil}
+  mutating func clearTextBody() {_uniqueStorage()._textBody = nil}
 
-  var annotations: [Dynamite_Annotation] = []
+  var annotations: [Dynamite_Annotation] {
+    get {_storage._annotations}
+    set {_uniqueStorage()._annotations = newValue}
+  }
 
   /// FORWARD on a forwarded message
   var quoteType: Dynamite_QuotedMessageRef.QuoteType {
-    get {_quoteType ?? .unspecified}
-    set {_quoteType = newValue}
+    get {_storage._quoteType ?? .unspecified}
+    set {_uniqueStorage()._quoteType = newValue}
   }
   /// Returns true if `quoteType` has been explicitly set.
-  var hasQuoteType: Bool {self._quoteType != nil}
+  var hasQuoteType: Bool {_storage._quoteType != nil}
   /// Clears the value of `quoteType`. Subsequent reads from it will return its default value.
-  mutating func clearQuoteType() {self._quoteType = nil}
+  mutating func clearQuoteType() {_uniqueStorage()._quoteType = nil}
 
   /// a forward: the conversation it came from
   var group: Dynamite_QuotedGroup {
-    get {_group ?? Dynamite_QuotedGroup()}
-    set {_group = newValue}
+    get {_storage._group ?? Dynamite_QuotedGroup()}
+    set {_uniqueStorage()._group = newValue}
   }
   /// Returns true if `group` has been explicitly set.
-  var hasGroup: Bool {self._group != nil}
+  var hasGroup: Bool {_storage._group != nil}
   /// Clears the value of `group`. Subsequent reads from it will return its default value.
-  mutating func clearGroup() {self._group = nil}
+  mutating func clearGroup() {_uniqueStorage()._group = nil}
 
   var unknownFields = SwiftProtobuf.UnknownStorage()
 
   init() {}
 
-  fileprivate var _messageID: Dynamite_MessageId? = nil
-  fileprivate var _creator: Dynamite_User? = nil
-  fileprivate var _textBody: String? = nil
-  fileprivate var _quoteType: Dynamite_QuotedMessageRef.QuoteType? = nil
-  fileprivate var _group: Dynamite_QuotedGroup? = nil
+  fileprivate var _storage = _StorageClass.defaultInstance
 }
 
 nonisolated struct Dynamite_QuotedGroup: Sendable {
@@ -4759,7 +4768,6 @@ nonisolated struct Dynamite_CreateTopicRequest: @unchecked Sendable {
   /// Clears the value of `textBody`. Subsequent reads from it will return its default value.
   mutating func clearTextBody() {_uniqueStorage()._textBody = nil}
 
-  /// zjg.f
   var annotations: [Dynamite_Annotation] {
     get {_storage._annotations}
     set {_uniqueStorage()._annotations = newValue}
@@ -4918,7 +4926,6 @@ nonisolated struct Dynamite_CreateMessageRequest: @unchecked Sendable {
   /// Clears the value of `textBody`. Subsequent reads from it will return its default value.
   mutating func clearTextBody() {_uniqueStorage()._textBody = nil}
 
-  /// zjc.f
   var annotations: [Dynamite_Annotation] {
     get {_storage._annotations}
     set {_uniqueStorage()._annotations = newValue}
@@ -4934,7 +4941,6 @@ nonisolated struct Dynamite_CreateMessageRequest: @unchecked Sendable {
   /// Clears the value of `messageID`. Subsequent reads from it will return its default value.
   mutating func clearMessageID() {_uniqueStorage()._messageID = nil}
 
-  /// zjc.h
   var messageInfo: Dynamite_MessageInfo {
     get {_storage._messageInfo ?? Dynamite_MessageInfo()}
     set {_uniqueStorage()._messageInfo = newValue}
@@ -6717,7 +6723,6 @@ nonisolated struct Dynamite_EditMessageRequest: @unchecked Sendable {
   /// Clears the value of `textBody`. Subsequent reads from it will return its default value.
   mutating func clearTextBody() {_uniqueStorage()._textBody = nil}
 
-  /// zkc.f
   var annotations: [Dynamite_Annotation] {
     get {_storage._annotations}
     set {_uniqueStorage()._annotations = newValue}
@@ -14311,58 +14316,111 @@ nonisolated extension Dynamite_RoomUpdatedMetadata: SwiftProtobuf.Message, Swift
 
 nonisolated extension Dynamite_QuotedMessageMetadata: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
   static let protoMessageName: String = _protobuf_package + ".QuotedMessageMetadata"
-  static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{3}message_id\0\u{2}\u{4}creator\0\u{3}text_body\0\u{1}annotations\0\u{4}\u{8}quote_type\0\u{2}\u{2}group\0")
+  static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{3}message_id\0\u{3}last_update_time_when_quoted\0\u{2}\u{3}creator\0\u{3}text_body\0\u{1}annotations\0\u{4}\u{8}quote_type\0\u{2}\u{2}group\0")
+
+  fileprivate class _StorageClass {
+    var _messageID: Dynamite_MessageId? = nil
+    var _lastUpdateTimeWhenQuoted: Int64? = nil
+    var _creator: Dynamite_User? = nil
+    var _textBody: String? = nil
+    var _annotations: [Dynamite_Annotation] = []
+    var _quoteType: Dynamite_QuotedMessageRef.QuoteType? = nil
+    var _group: Dynamite_QuotedGroup? = nil
+
+      // This property is used as the initial default value for new instances of the type.
+      // The type itself is protecting the reference to its storage via CoW semantics.
+      // This will force a copy to be made of this reference when the first mutation occurs;
+      // hence, it is safe to mark this as `nonisolated(unsafe)`.
+      static nonisolated(unsafe) let defaultInstance = _StorageClass()
+
+    private init() {}
+
+    init(copying source: _StorageClass) {
+      _messageID = source._messageID
+      _lastUpdateTimeWhenQuoted = source._lastUpdateTimeWhenQuoted
+      _creator = source._creator
+      _textBody = source._textBody
+      _annotations = source._annotations
+      _quoteType = source._quoteType
+      _group = source._group
+    }
+  }
+
+  fileprivate mutating func _uniqueStorage() -> _StorageClass {
+    if !isKnownUniquelyReferenced(&_storage) {
+      _storage = _StorageClass(copying: _storage)
+    }
+    return _storage
+  }
 
   mutating func decodeMessage<D: SwiftProtobuf.Decoder>(decoder: inout D) throws {
-    while let fieldNumber = try decoder.nextFieldNumber() {
-      // The use of inline closures is to circumvent an issue where the compiler
-      // allocates stack space for every case branch when no optimizations are
-      // enabled. https://github.com/apple/swift-protobuf/issues/1034
-      switch fieldNumber {
-      case 1: try { try decoder.decodeSingularMessageField(value: &self._messageID) }()
-      case 5: try { try decoder.decodeSingularMessageField(value: &self._creator) }()
-      case 6: try { try decoder.decodeSingularStringField(value: &self._textBody) }()
-      case 7: try { try decoder.decodeRepeatedMessageField(value: &self.annotations) }()
-      case 15: try { try decoder.decodeSingularEnumField(value: &self._quoteType) }()
-      case 17: try { try decoder.decodeSingularMessageField(value: &self._group) }()
-      default: break
+    _ = _uniqueStorage()
+    try withExtendedLifetime(_storage) { (_storage: _StorageClass) in
+      while let fieldNumber = try decoder.nextFieldNumber() {
+        // The use of inline closures is to circumvent an issue where the compiler
+        // allocates stack space for every case branch when no optimizations are
+        // enabled. https://github.com/apple/swift-protobuf/issues/1034
+        switch fieldNumber {
+        case 1: try { try decoder.decodeSingularMessageField(value: &_storage._messageID) }()
+        case 2: try { try decoder.decodeSingularInt64Field(value: &_storage._lastUpdateTimeWhenQuoted) }()
+        case 5: try { try decoder.decodeSingularMessageField(value: &_storage._creator) }()
+        case 6: try { try decoder.decodeSingularStringField(value: &_storage._textBody) }()
+        case 7: try { try decoder.decodeRepeatedMessageField(value: &_storage._annotations) }()
+        case 15: try { try decoder.decodeSingularEnumField(value: &_storage._quoteType) }()
+        case 17: try { try decoder.decodeSingularMessageField(value: &_storage._group) }()
+        default: break
+        }
       }
     }
   }
 
   func traverse<V: SwiftProtobuf.Visitor>(visitor: inout V) throws {
-    // The use of inline closures is to circumvent an issue where the compiler
-    // allocates stack space for every if/case branch local when no optimizations
-    // are enabled. https://github.com/apple/swift-protobuf/issues/1034 and
-    // https://github.com/apple/swift-protobuf/issues/1182
-    try { if let v = self._messageID {
-      try visitor.visitSingularMessageField(value: v, fieldNumber: 1)
-    } }()
-    try { if let v = self._creator {
-      try visitor.visitSingularMessageField(value: v, fieldNumber: 5)
-    } }()
-    try { if let v = self._textBody {
-      try visitor.visitSingularStringField(value: v, fieldNumber: 6)
-    } }()
-    if !self.annotations.isEmpty {
-      try visitor.visitRepeatedMessageField(value: self.annotations, fieldNumber: 7)
+    try withExtendedLifetime(_storage) { (_storage: _StorageClass) in
+      // The use of inline closures is to circumvent an issue where the compiler
+      // allocates stack space for every if/case branch local when no optimizations
+      // are enabled. https://github.com/apple/swift-protobuf/issues/1034 and
+      // https://github.com/apple/swift-protobuf/issues/1182
+      try { if let v = _storage._messageID {
+        try visitor.visitSingularMessageField(value: v, fieldNumber: 1)
+      } }()
+      try { if let v = _storage._lastUpdateTimeWhenQuoted {
+        try visitor.visitSingularInt64Field(value: v, fieldNumber: 2)
+      } }()
+      try { if let v = _storage._creator {
+        try visitor.visitSingularMessageField(value: v, fieldNumber: 5)
+      } }()
+      try { if let v = _storage._textBody {
+        try visitor.visitSingularStringField(value: v, fieldNumber: 6)
+      } }()
+      if !_storage._annotations.isEmpty {
+        try visitor.visitRepeatedMessageField(value: _storage._annotations, fieldNumber: 7)
+      }
+      try { if let v = _storage._quoteType {
+        try visitor.visitSingularEnumField(value: v, fieldNumber: 15)
+      } }()
+      try { if let v = _storage._group {
+        try visitor.visitSingularMessageField(value: v, fieldNumber: 17)
+      } }()
     }
-    try { if let v = self._quoteType {
-      try visitor.visitSingularEnumField(value: v, fieldNumber: 15)
-    } }()
-    try { if let v = self._group {
-      try visitor.visitSingularMessageField(value: v, fieldNumber: 17)
-    } }()
     try unknownFields.traverse(visitor: &visitor)
   }
 
   static func ==(lhs: Dynamite_QuotedMessageMetadata, rhs: Dynamite_QuotedMessageMetadata) -> Bool {
-    if lhs._messageID != rhs._messageID {return false}
-    if lhs._creator != rhs._creator {return false}
-    if lhs._textBody != rhs._textBody {return false}
-    if lhs.annotations != rhs.annotations {return false}
-    if lhs._quoteType != rhs._quoteType {return false}
-    if lhs._group != rhs._group {return false}
+    if lhs._storage !== rhs._storage {
+      let storagesAreEqual: Bool = withExtendedLifetime((lhs._storage, rhs._storage)) { (_args: (_StorageClass, _StorageClass)) in
+        let _storage = _args.0
+        let rhs_storage = _args.1
+        if _storage._messageID != rhs_storage._messageID {return false}
+        if _storage._lastUpdateTimeWhenQuoted != rhs_storage._lastUpdateTimeWhenQuoted {return false}
+        if _storage._creator != rhs_storage._creator {return false}
+        if _storage._textBody != rhs_storage._textBody {return false}
+        if _storage._annotations != rhs_storage._annotations {return false}
+        if _storage._quoteType != rhs_storage._quoteType {return false}
+        if _storage._group != rhs_storage._group {return false}
+        return true
+      }
+      if !storagesAreEqual {return false}
+    }
     if lhs.unknownFields != rhs.unknownFields {return false}
     return true
   }
