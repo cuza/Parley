@@ -1,7 +1,10 @@
+import AppKit
 import XCTest
 
 /// Regenerates the README screenshots from the demo workspace: run it alone, then copy the PNGs it writes to the
-/// test runner's temporary directory into Screenshots/.
+/// test runner's temporary directory into Screenshots/. Each is the window as ⇧⌘4 then Space captures it: rounded
+/// corners and the system shadow on a transparent margin. screencapture needs Screen Recording permission for
+/// ParleyUITests-Runner (System Settings ▸ Privacy & Security); without it, it fails with "could not create image from window".
 @MainActor final class ReadmeShotsTests: XCTestCase {
     private func shoot(_ name: String, dark: Bool = false, open: String? = nil) throws {
         let app = XCUIApplication()
@@ -20,8 +23,27 @@ import XCTest
         // Park the pointer on empty sidebar space so no hover tooltip is captured.
         app.windows.firstMatch.coordinate(withNormalizedOffset: CGVector(dx: 0.1, dy: 0.8)).hover()
         sleep(3)
-        try app.windows.firstMatch.screenshot().pngRepresentation.write(to: URL(filePath: NSTemporaryDirectory()).appending(path: "\(name).png"))
+        let file = URL(filePath: NSTemporaryDirectory()).appending(path: "\(name).png")
+        let capture = Process()
+        capture.executableURL = URL(filePath: "/usr/sbin/screencapture")
+        capture.arguments = ["-x", "-l\(try windowID())", file.path]   // -x: no shutter sound
+        let errors = Pipe(); capture.standardError = errors
+        try capture.run(); capture.waitUntilExit()
+        XCTAssertEqual(capture.terminationStatus, 0, String(decoding: errors.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self))
         app.terminate()
+    }
+    /// The launched app's window: the newest Parley not running from /Applications, its largest normal-level window.
+    private func windowID() throws -> CGWindowID {
+        let pid = try XCTUnwrap(NSRunningApplication.runningApplications(withBundleIdentifier: "dev.cuza.Parley")
+            .filter { $0.bundleURL?.path.hasPrefix("/Applications/") == false }
+            .max { ($0.launchDate ?? .distantPast) < ($1.launchDate ?? .distantPast) }?.processIdentifier)
+        let windows = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[CFString: Any]] ?? []
+        let mine = windows.filter { $0[kCGWindowOwnerPID] as? pid_t == pid && $0[kCGWindowLayer] as? Int == 0 }
+        func area(_ w: [CFString: Any]) -> CGFloat {
+            let b = w[kCGWindowBounds] as? [String: CGFloat] ?? [:]
+            return (b["Width"] ?? 0) * (b["Height"] ?? 0)
+        }
+        return try XCTUnwrap(mine.max { area($0) < area($1) }?[kCGWindowNumber] as? CGWindowID)
     }
     func testReadmeScreenshots() throws {
         try shoot("home", open: "home")
