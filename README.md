@@ -19,7 +19,9 @@ An LLM wrote most of the code. It was tested it in daily use but didn't design o
 - **Notifications.** Native banners with a Reply field. Focus applies to them.
 - **Dock.** An unread badge, and a Dock menu to open unread conversations or mark them all read.
 - **Keyboard.** ⌘K opens any conversation, ⌘1 to ⌘9 the first nine, and ⌘F searches the open one.
-- **Windows.** Any conversation or thread can open in its own window.
+- **Windows.** Any conversation or thread can open in its own window, and conversation windows join as tabs.
+- **Shortcuts and Spotlight.** Shortcuts actions open, send and search, and Spotlight finds your conversations.
+- **Sharing.** Parley is in the Share menu and in Services, for text, links and files.
 - **Files.** Quick Look, and drag files in and out.
 - **Handoff.** Continue the open conversation on your iPhone or iPad.
 - **Links.** Google Chat links open in Parley when a link router such as [Velja](https://sindresorhus.com/velja) / [finicky](https://github.com/johnste/finicky) / [Choosy](https://choosy.app/) sends them there.
@@ -86,6 +88,8 @@ Unit tests use Swift Testing and run against a fake backend with stubbed network
 | `Parley/Dynamite` | The Google Chat API client, with requests, the realtime channel, mapping and sign-in |
 | `Parley/Store` | `ChatStore`, notifications, sign-in flow, launch cache, diagnostics |
 | `Parley/UI` | SwiftUI views and the AppKit timeline |
+| `Parley/Intents` | App Intents for Shortcuts, Spotlight and Siri |
+| `ParleyShare` | The Share menu extension |
 | `Parley/Preview` | `FakeBackend`, used by previews and tests |
 | `Proto` | The protobuf schema; regenerate the Swift code with `protoc --proto_path=Proto --swift_out=Parley/Dynamite/Proto Proto/dynamite.proto` |
 | `ParleyTests`, `ParleyUITests` | Unit and UI tests |

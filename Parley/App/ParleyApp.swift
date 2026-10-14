@@ -1,3 +1,4 @@
+import AppIntents
 import SwiftUI
 
 @main
@@ -12,6 +13,7 @@ struct ParleyApp: App {
     private let authorizer: WebSessionAuthorizer
     private let webSignIn: WebViewSignIn
     private let updates: Updates
+    private let spotlight: ConversationSpotlight?   // the signed-in account's conversations; none for demo and test runs
     init() {
         AppearanceMode.apply()
         let authorizer = WebSessionAuthorizer()
@@ -41,6 +43,14 @@ struct ParleyApp: App {
             _ = SystemNotifier(store: store)   // the store keeps it; registering now catches the click that launched the app
         }
         _store = State(initialValue: store)
+        spotlight = live ? ConversationSpotlight() : nil
+        if live, #available(macOS 27, *) {
+            store.sent = { [weak store] id in
+                guard let store, let room = store.conversations.first(where: { $0.id == id }) else { return }
+                SiriDonation.donate(room, me: store.me.id)
+            }
+        }
+        AppDependencyManager.shared.add(dependency: store)   // what Shortcuts' and Siri's actions act on
         let webSignIn = WebViewSignIn()
         self.webSignIn = webSignIn
         let signIn = SignInFlow(browser: webSignIn, importer: authorizer)
@@ -85,9 +95,13 @@ struct ParleyApp: App {
                 // Leaving the composer, as Google Chat's web client saves its draft when you click away.
                 .onReceive(NotificationCenter.default.publisher(for: NSApplication.didResignActiveNotification)) { _ in store.saveDrafts() }
                 .onReceive(NotificationCenter.default.publisher(for: NSWindow.didResignKeyNotification)) { _ in store.saveDrafts() }
+                .onChange(of: store.conversations, initial: true) { _, rooms in Task { await spotlight?.update(rooms, me: store.me.id) } }
                 .onAppear {
                     appDelegate.beforeQuit = { store.saveDrafts() }
-                    appDelegate.openURL = { url in Task { await store.open(url: url) } }
+                    appDelegate.openURL = { url in
+                        if let shared = Shared(link: url) { store.sharing = shared } else { Task { await store.open(url: url) } }
+                    }
+                    appDelegate.shareService.received = { store.sharing = $0 }
                     appDelegate.dockMenu = {
                         DockMenu.make(store.dockConversations,
                                       open: { id in NSApp.activate(); Task { await store.select(id) } },
@@ -161,6 +175,8 @@ private struct DiagnosticsMenuItem: View {
     var beforeQuit: (() -> Task<Void, Never>)?
     var dockMenu: (() -> NSMenu)?
     func applicationDockMenu(_ sender: NSApplication) -> NSMenu? { dockMenu?() }
+    let shareService = ShareService()
+    func applicationDidFinishLaunching(_ notification: Notification) { NSApp.servicesProvider = shareService }
     /// Links sent to Parley; ones that arrive before the window (the link launched Parley) wait for it.
     var openURL: ((URL) -> Void)? { didSet { if let openURL { waitingURLs.forEach(openURL); waitingURLs = [] } } }
     private var waitingURLs: [URL] = []

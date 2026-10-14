@@ -1,3 +1,4 @@
+import AppIntents
 import AppKit
 import Intents
 import Security
@@ -318,6 +319,8 @@ enum NotificationPolicy {
         content.categoryIdentifier = notification.isCall ? Self.callCategory : Self.category
         content.userInfo = ["conversation": notification.conversationID, "thread": notification.threadID ?? "",
                             "join": notification.join?.absoluteString ?? ""]
+        // "Reply to this" from a banner: Siri gets the message the banner shows.
+        if #available(macOS 27, *) { content.appEntityIdentifiers = [EntityIdentifier(for: SiriMessage.self, identifier: notification.id)] }
         Task {
             let restyled = await NotificationImage.content(for: notification, base: content)
             let shown = (restyled.mutableCopy() as? UNMutableNotificationContent) ?? content

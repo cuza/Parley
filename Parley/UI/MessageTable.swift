@@ -1,3 +1,4 @@
+import AppIntents
 import AppKit
 import Quartz
 import SwiftUI
@@ -47,6 +48,7 @@ struct MessageTable: NSViewRepresentable {
         table.columnAutoresizingStyle = .uniformColumnAutoresizingStyle
         table.dataSource = coordinator
         table.delegate = coordinator
+        if #available(macOS 27, *) { table.appIntentsDataSource = coordinator }   // Siri sees which message each row is
         let scroll = NSScrollView()
         scroll.documentView = table
         // The table sizes its own height to its rows. Under SwiftUI its autoresizing mask becomes constraints, and a
@@ -461,4 +463,12 @@ final class TimelineTableView: NSTableView {
     override func acceptsPreviewPanelControl(_ panel: QLPreviewPanel!) -> Bool { MainActor.assumeIsolated { files?.previewItems.isEmpty == false } }
     override func beginPreviewPanelControl(_ panel: QLPreviewPanel!) { MainActor.assumeIsolated { files?.beginControl(panel) } }
     override func endPreviewPanelControl(_ panel: QLPreviewPanel!) { MainActor.assumeIsolated { files?.endControl(panel) } }
+}
+
+/// "Summarize this message", "reply to that": each visible row names its message for Siri.
+@available(macOS 27, *)
+extension MessageTable.Coordinator: NSTableViewAppIntentsDataSource {
+    func tableView(_ tableView: NSTableView, appEntityIdentifierFor row: Int) -> EntityIdentifier? {
+        rows.indices.contains(row) ? EntityIdentifier(for: SiriMessage.self, identifier: rows[row].message.id) : nil
+    }
 }

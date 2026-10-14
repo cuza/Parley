@@ -1,3 +1,4 @@
+import AppIntents
 import AppKit
 import SwiftUI
 
@@ -93,6 +94,19 @@ struct ChatView: View {
     private var room: Conversation? { store.conversations.first { $0.id == (fixedConversation ?? store.selectedID) } }
     /// ⌘F: search what's open, the conversation as the "said in" filter, or everywhere from Home and the other shortcuts.
     private func find() { finding = .init(scope: store.shortcut == nil ? room : nil) }
+    /// A conversation's own window: titled with its name, which its tab and the Window menu show, and tabbed with the
+    /// conversation window already open.
+    private func tabbed(_ window: NSWindow) { if fixedConversation != nil { ConversationTabs.join(window, among: NSApp.windows) } }
+    private var windowTitle: String? { fixedConversation == nil ? nil : room?.name }
+    /// ⌘F's panel, or Search Messages' from Shortcuts, which opens in the main window only.
+    private var findingSheet: Binding<FinderPanel.Request?> {
+        Binding(get: { finding ?? (fixedConversation == nil ? store.searchRequest.map { FinderPanel.Request(id: $0.id, scope: nil, query: $0.query) } : nil) },
+                set: { finding = $0; if $0 == nil { store.searchRequest = nil } })
+    }
+    /// Send to Parley picks its conversation in the main window only.
+    private var sharing: Binding<Shared?> {
+        Binding(get: { fixedConversation == nil ? store.sharing : nil }, set: { store.sharing = $0 })
+    }
     /// What this window's menu items do.
     private var commands: ChatCommands {
         ChatCommands(
@@ -181,6 +195,8 @@ struct ChatView: View {
                 DraftList(store: store).safeAreaInset(edge: .top, spacing: 0) { expiredBanner }
             } else if fixedConversation == nil, let shortcut = store.shortcut {
                 ShortcutList(store: store, shortcut: shortcut).safeAreaInset(edge: .top, spacing: 0) { expiredBanner }
+            } else if let room, room.app == .gemini {
+                GeminiPane(store: store, room: room).id(room.id).safeAreaInset(edge: .top, spacing: 0) { expiredBanner }
             } else if let room {
                 // Scroll state belongs to one conversation; the toolbar stays outside so it is not duplicated on switch.
                 // The thread and info panel is our own pane: SwiftUI's .inspector inside a NavigationSplitView
@@ -254,7 +270,7 @@ struct ChatView: View {
             if open { Self.makeRoom(Self.widthForPane(window: width.value, sidebar: Self.shownSidebar(fixedConversation: fixedConversation, columns: columns, measured: sidebarWidth)), in: hostWindow.window) }
         }
         .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { width.value = $0; fitSidebar() }
-        .background(WindowReader(ref: hostWindow))
+        .background(WindowReader(ref: hostWindow, title: windowTitle, appeared: tabbed))
         .onChange(of: store.info || store.threadID != nil) { fitSidebar() }
         .onChange(of: columns) { _, shown in
             // Shown by the user in a window too narrow for it: widen the window rather than clip.
@@ -265,11 +281,14 @@ struct ChatView: View {
         .sheet(item: $store.forwarding) { message in
             ConversationPalette(store: store, then: { store.forward(message, to: $0) })
         }
-        .sheet(item: $finding) { FinderPanel(store: store, scope: $0.scope) }
+        .sheet(item: findingSheet) { FinderPanel(store: store, scope: $0.scope, query: $0.query) }
+        .sheet(item: sharing) { shared in ConversationPalette(store: store, then: { store.share(shared, to: $0) }, thenPrompt: "Send to a conversation or person") }
         // Handoff: the open conversation as a web page, as a browser offers it; Google Chat's iPhone and iPad app opens its links.
         .userActivity(NSUserActivityTypeBrowsingWeb, isActive: handoff != nil) { activity in
             activity.webpageURL = handoff
             activity.title = room?.name
+            // Siri's on-screen awareness: the conversation in front, as the entity its actions take.
+            if #available(macOS 15.2, *), let room { activity.appEntityIdentifier = EntityIdentifier(for: ConversationEntity.self, identifier: room.id) }
         }
         .onChange(of: store.newChatRequests) { if fixedConversation == nil { composing = true } }
         .onChange(of: store.newSpaceRequests) { if fixedConversation == nil { composing = false; creatingSpace = true } }
@@ -493,6 +512,7 @@ struct TimelineView: View {
     let conversation: Conversation
     var thread: String? = nil
     var detached = false   // a thread in its own window
+    var withHead = false   // the thread's first message leads its replies (an Ask Gemini session, as on the web)
     @State private var atBottom = true
     @State private var arrivedAway = 0   // new messages while scrolled up: the scroll-to-bottom badge
     @State private var reporting: Message?
@@ -506,7 +526,12 @@ struct TimelineView: View {
     @State private var composerHeight: CGFloat = 0   // the floating composer's height: the timeline's bottom inset
     /// A blocked person's messages stay hidden, as Google Chat hides them.
     private var items: [Message] {
-        let all = store.timeline(conversation.id, thread: thread), blocked = store.blockedPeople
+        var all = store.timeline(conversation.id, thread: thread)
+        if withHead, let thread, var head = store.messages.first(where: { $0.id == thread }) {
+            head.replyCount = 0   // inside its own thread, no "1 reply" link
+            all.insert(head, at: 0)
+        }
+        let blocked = store.blockedPeople
         return blocked.isEmpty ? all : all.map { blocked.contains($0.sender.id) ? ChatStore.blockedView($0) : $0 }
     }
     private var actions: MessageRowActions {
@@ -848,7 +873,7 @@ struct ComposerBar: View {
             .frame(minWidth: 60).frame(height: min(130, max(Self.control, fieldHeight)))
             .overlay(alignment: .topLeading) {
                 if draft.isEmpty {   // aligned with the text view's inset and line padding
-                    Text(ChatView.composerPrompt(conversation)).foregroundStyle(.tertiary).padding(.leading, 13).padding(.top, 11).allowsHitTesting(false).accessibilityHidden(true)
+                    Text(ChatView.composerPrompt(conversation, thread: thread)).foregroundStyle(.tertiary).padding(.leading, 13).padding(.top, 11).allowsHitTesting(false).accessibilityHidden(true)
                 }
             }
             Button { formatBar.toggle() } label: { Text("Aa").font(.system(size: 14, weight: .semibold)).fixedSize().foregroundStyle(formatBar ? Color.accentColor : .secondary) }
@@ -890,6 +915,7 @@ struct ThreadPane: View {
     let room: Conversation
     let thread: ThreadID
     var detached = false   // in its own window, which has its own close button
+    var session: String? = nil   // an Ask Gemini session: the question is the title, with no first message over the replies
     @Environment(\.openWindow) private var openWindow
     @State private var parentExpanded = false   // the first message beyond its first four lines
     @State private var emojiLoads = 0   // custom emoji pictures arrived: the header redraws
@@ -897,7 +923,7 @@ struct ThreadPane: View {
         VStack(spacing: 0) {
             if !detached {
                 HStack(spacing: 12) {
-                    Text("Thread").font(.headline); Spacer()
+                    Text(session ?? "Thread").font(.headline).lineLimit(1).truncationMode(.tail); Spacer()
                     ThreadFollowButton(store: store, thread: thread)
                     Button { if let ref = store.detachThread(in: room.id) { openWindow(value: ref) } } label: { Image(systemName: "macwindow.badge.plus") }
                         .buttonStyle(.plain).help("Open in new window")
@@ -905,7 +931,7 @@ struct ThreadPane: View {
                 }.padding()
                 Divider()
             }
-            if let parent = store.messages.first(where: { $0.id == thread }) {
+            if session == nil, let parent = store.messages.first(where: { $0.id == thread }) {
                 // A long first message would push the replies out of the pane: four lines, a click shows the rest.
                 // A message with no text shows its picture and what it carried ("Photo", the file's name…), as quotes do.
                 HStack(alignment: .top, spacing: 8) {
@@ -927,7 +953,7 @@ struct ThreadPane: View {
                 .onChange(of: thread) { parentExpanded = false }
                 Divider()
             }
-            TimelineView(store: store, conversation: room, thread: thread, detached: detached).id(thread)
+            TimelineView(store: store, conversation: room, thread: thread, detached: detached, withHead: session != nil).id(thread)
         }
     }
     /// Its custom emoji's pictures, which the text draws from `ImageCache` once they are there.
@@ -1120,12 +1146,13 @@ extension FocusedValues { @Entry var chatCommands: ChatCommands? }
 struct FinderPanel: View {
     /// What to search, carried by the sheet's item so the panel never opens with a stale scope: ⌘F's conversation
     /// starts as the "said in" filter, which can be changed or cleared like any other.
-    struct Request: Identifiable { let id = UUID(); let scope: Conversation? }
+    struct Request: Identifiable { var id = UUID(); let scope: Conversation?; var query = "" }
     @Bindable var store: ChatStore
-    @State private var query = ""
+    @State private var query: String
     @State private var filters: SearchFilters
-    init(store: ChatStore, scope: Conversation? = nil) {
+    init(store: ChatStore, scope: Conversation? = nil, query: String = "") {
         self.store = store
+        _query = State(initialValue: query)
         _filters = State(initialValue: SearchFilters(saidIn: scope.map { [$0.id] } ?? []))
     }
     @State private var selected: String?
@@ -1365,16 +1392,43 @@ extension ToolbarContent {
 /// The window a view is in, held weakly.
 final class WindowRef { weak var window: NSWindow? }
 final class WidthRef { var value: CGFloat = 0 }
-/// Records its view's window in `ref` once it is in one.
+/// Records its view's window in `ref` once it is in one, hands it to `appeared`, and keeps its title at `title` when set.
 private struct WindowReader: NSViewRepresentable {
     let ref: WindowRef
-    func makeNSView(context: Context) -> NSView { Reader(ref: ref) }
-    func updateNSView(_ view: NSView, context: Context) {}
+    var title: String? = nil
+    var appeared: ((NSWindow) -> Void)? = nil
+    func makeNSView(context: Context) -> NSView { Reader(ref: ref, appeared: appeared) }
+    func updateNSView(_ view: NSView, context: Context) {
+        (view as? Reader)?.title = title
+        if let title, let window = view.window, window.title != title { window.title = title }
+    }
     final class Reader: NSView {
         let ref: WindowRef
-        init(ref: WindowRef) { self.ref = ref; super.init(frame: .zero) }
+        let appeared: ((NSWindow) -> Void)?
+        var title: String?
+        init(ref: WindowRef, appeared: ((NSWindow) -> Void)?) { self.ref = ref; self.appeared = appeared; super.init(frame: .zero) }
         required init?(coder: NSCoder) { fatalError() }
-        override func viewDidMoveToWindow() { super.viewDidMoveToWindow(); ref.window = window }
+        override func viewDidMoveToWindow() {
+            super.viewDidMoveToWindow(); ref.window = window
+            guard let window else { return }
+            if let title { window.title = title }   // before it joins a tab group, so the tab shows the name
+            appeared?(window)
+        }
+    }
+}
+
+/// A conversation opened in its own window joins the conversation window already open as a tab, as Safari's windows
+/// do with "Prefer tabs", unless Settings ▸ General turns that off; the main window and thread windows stay apart.
+@MainActor enum ConversationTabs {
+    static let identifier = "dev.cuza.Parley.conversation"
+    static let key = "conversationWindowsAsTabs"
+    static var asTabs: Bool { UserDefaults.standard.object(forKey: key) as? Bool ?? true }
+    static func join(_ window: NSWindow, among windows: [NSWindow], asTab: Bool = asTabs) {
+        window.tabbingIdentifier = identifier   // Window ▸ Merge All Windows joins conversation windows either way
+        guard asTab, window.tabbedWindows == nil,
+              let host = windows.first(where: { $0 !== window && $0.isVisible && $0.tabbingIdentifier == identifier }) else { return }
+        host.addTabbedWindow(window, ordered: .above)
+        window.makeKeyAndOrderFront(nil)
     }
 }
 
@@ -1383,8 +1437,11 @@ private struct WindowReader: NSViewRepresentable {
 extension ChatView {
     /// Spaces, DMs and group DMs have threads, as in Google Chat; a DM with an app doesn't.
     static func offersThreads(_ room: Conversation) -> Bool { room.app == nil }
-    /// The empty composer's prompt; with history off it says so, as Google Chat's composer does.
-    static func composerPrompt(_ conversation: Conversation) -> String { conversation.historyOff == true ? "History is off" : "Message" }
+    /// The empty composer's prompt, as Google Chat's: Ask Gemini asks Gemini, and with history off it says so.
+    static func composerPrompt(_ conversation: Conversation, thread: ThreadID? = nil) -> String {
+        if conversation.app == .gemini { return thread == nil ? "Ask Gemini…" : "Reply" }   // a session's thread replies
+        return conversation.historyOff == true ? "History is off" : "Message"
+    }
     static func invitationsTitle(_ count: Int) -> String { count == 1 ? "1 space invitation" : "\(count) space invitations" }
 }
 

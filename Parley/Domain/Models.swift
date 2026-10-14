@@ -553,6 +553,11 @@ struct SharedPage: Sendable { var items: [SharedContent.Item]; var hasMore: Bool
 struct SearchPage: Sendable { var messages: [Message]; var cursor: String? = nil }
 /// Google Chat's search chips: From, a date range, Has, and Mentions me. Each narrows the results; within From or Has,
 /// any choice matches.
+/// Search asked for from outside the window (Shortcuts, Siri): the panel opens with these words.
+struct SearchRequest: Identifiable, Equatable, Sendable {
+    let id = UUID()
+    let query: String
+}
 struct SearchFilters: Equatable, Sendable {
     enum Kind: String, CaseIterable, Sendable {
         case link = "Link", file = "Any file", document = "Document", spreadsheet = "Spreadsheet", presentation = "Presentation"

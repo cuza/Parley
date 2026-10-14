@@ -44,6 +44,7 @@ struct ConversationPalette: View {
     @Bindable var store: ChatStore
     var newChat = false
     var then: ((ConversationID) -> Void)? = nil   // after opening the pick: Forward… leaves the message there
+    var thenPrompt = "Forward to a conversation or person"   // the field's prompt when `then` is set
     @State private var query = ""
     @State private var selected: String?
     @State private var people: [Person] = []
@@ -79,7 +80,7 @@ struct ConversationPalette: View {
                             .buttonStyle(.plain).foregroundStyle(.secondary).accessibilityLabel("Remove \(person.name)")
                     }.font(.callout).padding(.horizontal, 7).padding(.vertical, 3).background(.quaternary, in: Capsule())
                 }
-                TextField(then != nil ? "Forward to a conversation or person" : newChat || !picked.isEmpty ? "Name or email, or a space to join" : "Jump to a conversation, person or space", text: $query)
+                TextField(then != nil ? thenPrompt : newChat || !picked.isEmpty ? "Name or email, or a space to join" : "Jump to a conversation, person or space", text: $query)
                     .textFieldStyle(.plain).font(.title3).onSubmit { choose() }
                     .onKeyPress(.downArrow) { move(1); return .handled }
                     .onKeyPress(.upArrow) { move(-1); return .handled }

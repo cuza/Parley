@@ -35,7 +35,8 @@ actor FakeBackend: ChatBackend {
             Conversation(id: "general", name: "General", kind: .space, members: [Self.me, maria, alex]),
             Conversation(id: "engineering", name: "Engineering", kind: .space, members: [Self.me, alex], muted: true),
             Conversation(id: "notebook", name: "Notebook", kind: .direct, members: [Self.me, Self.notebook], unread: 1,
-                         avatarURL: Self.notebookIcon, app: .bot)
+                         avatarURL: Self.notebookIcon, app: .bot),
+            Conversation(id: "gemini", name: "Ask Gemini", kind: .direct, members: [Self.me, Self.gemini], app: .gemini)
         ]
         rooms += stride(from: 1, through: manyConversations, by: 1).map { i in
             let person = Person(id: "person\(i)", name: i % 7 == 0 ? "Person \(i) with a very long name that cannot fit in the sidebar" : "Person \(i)")
@@ -70,6 +71,15 @@ actor FakeBackend: ChatBackend {
             Message(id: "g1", conversationID: "general", sender: alex, text: "@Dave could you share the release notes before Friday?", createdAt: now.addingTimeInterval(-5400),
                     replyCount: 1, formatting: [TextStyleRange(style: .mention(userID: Self.me.id), start: 0, length: 5)]),
             Message(id: "g1r", conversationID: "general", threadID: "g1", sender: maria, text: "I can draft the summary part.", createdAt: now.addingTimeInterval(-450)),
+            // Ask Gemini: each question is a session, Gemini answering in its thread.
+            Message(id: "gs1", conversationID: "gemini", sender: Self.me, text: "What's on my calendar tomorrow?", createdAt: now.addingTimeInterval(-9_000),
+                    replyCount: 1),
+            Message(id: "gs1r", conversationID: "gemini", threadID: "gs1", sender: Self.gemini,
+                    text: "Tomorrow you have a Design review at 10:00 and the launch sync at 15:00.", createdAt: now.addingTimeInterval(-8_990)),
+            Message(id: "gs2", conversationID: "gemini", sender: Self.me, text: "Summarize the launch plan", createdAt: now.addingTimeInterval(-90_000),
+                    replyCount: 1),
+            Message(id: "gs2r", conversationID: "gemini", threadID: "gs2", sender: Self.gemini,
+                    text: "The launch plan ships the beta to the team on Thursday, then to everyone after a week of fixes.", createdAt: now.addingTimeInterval(-89_990)),
             Message(id: "l1", conversationID: "launch", sender: alex, text: "Launch plan for next week", createdAt: now.addingTimeInterval(-7_400),
                     attachments: [Attachment(name: "Launch plan", contentType: "application/vnd.google-apps.document", kind: .link,
                                              url: URL(string: "https://docs.google.com/document/d/demo/edit"))]),
@@ -399,7 +409,10 @@ actor FakeBackend: ChatBackend {
     func setDoNotDisturb(for duration: TimeInterval) -> OwnStatus {
         ownStatus.availability = .doNotDisturb(until: .now.addingTimeInterval(duration)); return ownStatus
     }
-    func setAway(_ away: Bool) -> OwnStatus { ownStatus.availability = away ? .away : .automatic; return ownStatus }
+    func setAway(_ away: Bool) throws -> OwnStatus {
+        if failNextChange { failNextChange = false; throw URLError(.networkConnectionLost) }
+        ownStatus.availability = away ? .away : .automatic; return ownStatus
+    }
     func setCustomStatus(_ status: CustomStatus?) -> OwnStatus { ownStatus.custom = status; return ownStatus }
     // New conversations: people outside the sidebar and spaces not yet joined.
     private let directory = [Person(id: "priya", name: "Priya Patel", presence: .available, email: "priya@example.com"),
@@ -601,6 +614,7 @@ actor FakeBackend: ChatBackend {
     static let notebookIcon = URL(string: "https://notebook.example/icon.png")!
     static let documentIcon = URL(string: "https://notebook.example/document.png")!
     static let notebook = Person(id: "notebook", name: "Notebook", avatarURL: notebookIcon)
+    static let gemini = Person(id: "gemini", name: "Ask Gemini")
     /// The pictures behind the demo's icon URLs: a symbol on a coloured tile.
     @MainActor static var demoIcons: [(URL, NSImage)] {
         func tile(_ symbol: String, _ colour: NSColor) -> NSImage {

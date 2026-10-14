@@ -162,7 +162,7 @@ enum DiagnosticsLog {
     /// Parley's own entries since launch; the unified log keeps no earlier ones readable here, which crash reports cover.
     static func entries() -> [String] {
         guard let store = try? OSLogStore(scope: .currentProcessIdentifier),
-              let all = try? store.getEntries(matching: NSPredicate(format: "subsystem == %@", Bundle.main.bundleIdentifier ?? "")) else { return [] }
+              let all = try? store.getEntries(matching: NSPredicate(format: "subsystem == %@", "dev.cuza.Parley")) else { return [] }
         return all.compactMap { $0 as? OSLogEntryLog }.map {
             "\($0.date.formatted(.iso8601)) [\($0.category)] \(ConnectionDiagnostics.redact($0.composedMessage))"
         }

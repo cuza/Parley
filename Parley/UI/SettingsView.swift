@@ -166,7 +166,7 @@ private struct GeneralSettings: View {
     }
 }
 
-/// Settings ▸ Appearance: light or dark, wallpaper and bubble colour per appearance, message style.
+/// Settings ▸ Appearance: light or dark, wallpaper and bubble colour per appearance, message style, window tabs.
 private struct AppearanceSettings: View {
     @AppStorage("timelineStyle") private var style = TimelineStyle.bubbles
     @AppStorage(AppearanceMode.key) private var appearance = AppearanceMode.auto
@@ -175,6 +175,7 @@ private struct AppearanceSettings: View {
     @AppStorage(Wallpaper.doodlesKey) private var doodles = true
     @AppStorage(BubblePalette.colorKey(dark: false)) private var bubbleColor = ""
     @AppStorage(BubblePalette.colorKey(dark: true)) private var darkBubbleColor = ""
+    @AppStorage(ConversationTabs.key) private var windowsAsTabs = true
     /// One appearance's wallpaper and bubble colour.
     private func look(_ title: String, wallpaper: Binding<Wallpaper>, bubble: Binding<String>) -> some View {
         LabeledContent(title) {
@@ -215,6 +216,11 @@ private struct AppearanceSettings: View {
                 .pickerStyle(.radioGroup)
             } footer: {
                 Footer("Plain lists every message on the left with names and avatars, like Telegram's list mode.")
+            }
+            Section {
+                Toggle("Open conversation windows as tabs", isOn: $windowsAsTabs)
+            } header: { Text("Windows") } footer: {
+                Footer("A conversation opened in a new window joins the conversation window already open as a tab. Window ▸ Merge All Windows joins them either way.")
             }
         }
     }

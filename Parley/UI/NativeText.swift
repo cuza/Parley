@@ -37,6 +37,8 @@ struct NativeComposer: NSViewRepresentable {
         view.isAutomaticSpellingCorrectionEnabled = true
         view.isContinuousSpellCheckingEnabled = true
         view.isAutomaticTextReplacementEnabled = true
+        // Writing Tools rewrite as plain text: a rich result's fonts would show formatting the draft doesn't carry.
+        if #available(macOS 15.2, *) { view.allowedWritingToolsResultOptions = .plainText }
         view.isVerticallyResizable = true
         view.autoresizingMask = [.width]
         view.textContainer?.widthTracksTextView = true

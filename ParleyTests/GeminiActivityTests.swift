@@ -60,3 +60,15 @@ struct GeminiThinkingTests {
         #expect(layout.bubble.contains(line) && line.maxY <= text.minY)
     }
 }
+
+/// Ask Gemini's composer asks Gemini, as Google Chat's does; in a thread it replies.
+struct AskGeminiComposerTests {
+    @Test func theComposerAsksGemini() {
+        var gemini = Conversation(id: "dm/g", name: "Gemini", kind: .direct, members: [])
+        gemini.app = .gemini
+        #expect(ChatView.composerPrompt(gemini) == "Ask Gemini…")
+        #expect(ChatView.composerPrompt(gemini, thread: "dm/g/t/t") == "Reply")   // inside a session
+        #expect(ChatView.composerPrompt(Conversation(id: "dm/a", name: "Alex", kind: .direct, members: [])) == "Message")
+    }
+}
+

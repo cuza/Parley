@@ -34,7 +34,7 @@ import XCTest
     }
     /// The launched app's window: the newest Parley not running from /Applications, its largest normal-level window.
     private func windowID() throws -> CGWindowID {
-        let pid = try XCTUnwrap(NSRunningApplication.runningApplications(withBundleIdentifier: "dev.cuza.Parley")
+        let pid = try XCTUnwrap(NSRunningApplication.runningApplications(withBundleIdentifier: "dev.cuza.Parley.debug")
             .filter { $0.bundleURL?.path.hasPrefix("/Applications/") == false }
             .max { ($0.launchDate ?? .distantPast) < ($1.launchDate ?? .distantPast) }?.processIdentifier)
         let windows = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[CFString: Any]] ?? []

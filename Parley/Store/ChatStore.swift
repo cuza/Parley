@@ -1201,7 +1201,10 @@ final class ChatStore {
         if let draft { spentDrafts.insert(draft) }
         draftSends[scope, default: 0] += 1
         await sendNew(text, formatting: formatting, attachments: files, quote: quote, serverDraft: draft, conversation: conversation, thread: thread)
+        sent?(conversation)
     }
+    /// After a send from the composer: the app tells Siri who I message (never what), so it learns my usual recipients.
+    @ObservationIgnored var sent: ((ConversationID) -> Void)?
     /// Fetches a picked GIF from its CDN; injectable for tests.
     var download: (URL) async throws -> Data = { try await URLSession.shared.data(from: $0).0 }
     /// Sends a picked GIF on its own, quoting the message being replied to, as Google Chat does; the local echo shows it as an
@@ -1231,13 +1234,27 @@ final class ChatStore {
         await sendNew(text, conversation: conversation, thread: thread)
         await markRead(conversation)
     }
+    /// Shortcuts' and Siri's Send Message: plain text to one of my conversations, as if typed in its composer. True once
+    /// Google has it; false for empty text, a conversation I'm not in, or a send that failed (left as failed in the timeline).
+    func sendText(_ text: String, to conversation: ConversationID) async -> Bool {
+        let text = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty, conversations.contains(where: { $0.id == conversation }) else { return false }
+        let id = await sendNew(text, conversation: conversation, thread: nil)
+        return !messages.contains { $0.id == id && $0.delivery == .failed }
+    }
+    /// Returns once the first conversation list is in (at most 15 s): an action that launched Parley waits for it.
+    func listed() async {
+        for _ in 0..<150 where !listedOnce { try? await Task.sleep(for: .milliseconds(100)) }
+    }
+    @discardableResult
     private func sendNew(_ text: String, formatting: [TextStyleRange] = [], attachments: [Attachment] = [], quote: QuotedMessage? = nil,
-                         serverDraft: String? = nil, conversation: String, thread: String?) async {
+                         serverDraft: String? = nil, conversation: String, thread: String?) async -> MessageID {
         if thread == nil, detached.contains(conversation) { await returnToNewest(conversation) }   // a send lands at the bottom, as on the web
         let pending = Message(id: "local-\(UUID())", conversationID: conversation, threadID: thread, sender: me, text: text,
                               delivery: .pending, attachments: attachments, formatting: formatting, quote: quote)
         upsert(pending)
         await deliver(pending, serverDraft: serverDraft)
+        return pending.id
     }
     /// The draft without surrounding whitespace, its ranges shifted and clipped to match (UTF-16 offsets).
     static func trimmed(_ text: String, _ formatting: [TextStyleRange]) -> (String, [TextStyleRange]) {
@@ -1308,6 +1325,14 @@ final class ChatStore {
             lastUpdateMicros: message.lastUpdateMicros ?? Int64((message.createdAt.timeIntervalSince1970 * 1_000_000).rounded()),
             media: message.attachments.first { $0.kind == .image || $0.kind == .video })
     }
+    /// Send to Parley: the text joins `conversation`'s draft on a line of its own and the files attach to it; nothing is sent.
+    func share(_ shared: Shared, to conversation: ConversationID) {
+        let scope = key(conversation, nil), draft = drafts[scope] ?? ""
+        if !shared.text.isEmpty {
+            setDraft(draft.isEmpty ? shared.text : draft + "\n" + shared.text, formatting: draftFormatting[scope] ?? [], conversation: conversation, thread: nil)
+        }
+        attach(shared.files, conversation: conversation, thread: nil)
+    }
     /// Forward…: `message` waits above `destination`'s composer, as in Google Chat, and goes with the next send there.
     func forward(_ message: Message, to destination: ConversationID) {
         guard message.delivery == .sent, !message.isSystem else { return }
@@ -1319,6 +1344,23 @@ final class ChatStore {
     }
     func delete(_ message: Message) async {
         do { try await backend.delete(message.id) } catch { report(error) }
+    }
+    /// Siri's edit: one of my sent messages gets new plain text. False when it isn't mine or Google refused it.
+    func editText(of id: MessageID, to text: String) async -> Bool {
+        let text = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty, let message = messages.first(where: { $0.id == id }), message.sender.id == me.id, message.delivery == .sent else { return false }
+        do { try await backend.edit(id, text: text, formatting: []); return true }
+        catch { log.error("edit failed: \(String(describing: error), privacy: .public)"); return false }
+    }
+    /// Siri's unsend: one of my sent messages is deleted for everyone. False when it isn't mine or Google refused it.
+    func unsend(_ id: MessageID) async -> Bool {
+        guard let message = messages.first(where: { $0.id == id }), message.sender.id == me.id, message.delivery == .sent else { return false }
+        do { try await backend.delete(id); return true }
+        catch { log.error("unsend failed: \(String(describing: error), privacy: .public)"); return false }
+    }
+    /// Siri's "mark this as read/unread": read clears the conversation; unread starts at the message, as its menu does.
+    func setRead(_ read: Bool, _ message: Message) async {
+        if read { await markRead(message.conversationID) } else { await markUnread(from: message) }
     }
     /// `custom`: a custom emoji picked for the reaction; a pill's own custom emoji goes back whole.
     func react(_ emoji: String, custom: CustomEmoji? = nil, to message: Message) async {
@@ -1697,6 +1739,8 @@ final class ChatStore {
         invitations = listed.filter { $0.invited && !inSidebar.contains($0.id) }
     }
     var forwarding: Message?   // Forward…: the message whose destination is being picked
+    var sharing: Shared?       // Send to Parley: what waits for a conversation to be picked
+    var searchRequest: SearchRequest?   // Shortcuts' Search Messages: the words the main window's search panel opens with
     // New conversations. Errors stay with the caller, which shows them where the search or action happened.
     func searchPeople(_ query: String) async throws -> [Person] { try await backend.searchPeople(query) }
     func browseSpaces(_ query: String) async throws -> [SpaceListing] { try await backend.browseSpaces(query) }
