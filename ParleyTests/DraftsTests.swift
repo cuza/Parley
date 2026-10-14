@@ -57,10 +57,6 @@ extension AuthTests {
         #expect(draft.threadID == "space/AAQAexample/tOpIc0000b2/tOpIc0000b2" && draft.text == "thread draft")
         #expect(abs(draft.updatedAt.timeIntervalSince1970 - 1_791_423_754.179982) < 0.001)
     }
-    @Test func scheduledMessagesAreNoDrafts() {
-        let scheduled = Dynamite_UnsentMessage.with { $0.id.id = "s"; $0.id.groupID.spaceID.spaceID = "x"; $0.type = .scheduled }
-        #expect(DynamiteMapper.draft(scheduled) == nil)
-    }
     /// A send that was a draft names it in MessageInfo.5, as Google Chat's web client does: {1 accept, 5 UnsentMessageId}.
     @Test func messageInfoNamesTheDraftAtFieldFive() throws {
         let bytes = Wire.int(1, 1) + Wire.ld(5, Wire.str(1, "dRaFt0000c3") + Wire.ld(2, Wire.ld(3, Wire.str(1, "dmExample01"))))

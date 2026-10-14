@@ -105,10 +105,7 @@ struct ParleyApp: App {
                     MeetLinkMenuItem(store: store)
                 }
                 CommandGroup(replacing: .help) { DiagnosticsMenuItem() }
-                CommandMenu("Go") {
-                    Button("Back") { Task { await store.goBack() } }.keyboardShortcut("[").disabled(!store.canGoBack)
-                    Button("Forward") { Task { await store.goForward() } }.keyboardShortcut("]").disabled(!store.canGoForward)
-                }
+                ChatMenuCommands(store: store)
             }
         WindowGroup(for: ConversationID.self) { $id in
             if let id = id { ChatView(store: store, fixedConversation: id).environment(signIn) }
@@ -124,6 +121,29 @@ struct ParleyApp: App {
         }
             .defaultSize(width: 560, height: 720)
             .commandsRemoved()
+    }
+}
+
+/// The window's shortcuts as menu items, so the menus and Help's search list them.
+struct ChatMenuCommands: Commands {
+    let store: ChatStore
+    @FocusedValue(\.chatCommands) private var chat
+    var body: some Commands {
+        CommandGroup(after: .textEditing) {
+            Button("Search Messages…") { chat?.find?() }.keyboardShortcut("f").disabled(chat?.find == nil)
+            Button("Edit Last Message") { chat?.editLast() }.keyboardShortcut("e").disabled(chat == nil)
+        }
+        CommandGroup(after: .sidebar) {
+            Button("Conversation Info") { chat?.info() }.keyboardShortcut("i").disabled(chat == nil)
+        }
+        CommandMenu("Go") {
+            Button("Back") { Task { await store.goBack() } }.keyboardShortcut("[").disabled(!store.canGoBack)
+            Button("Forward") { Task { await store.goForward() } }.keyboardShortcut("]").disabled(!store.canGoForward)
+            Divider()
+            Button("Jump to Conversation…") { chat?.jump() }.keyboardShortcut("k").disabled(chat == nil)
+            Button("Next Unread") { chat?.unread(true) }.keyboardShortcut(.downArrow, modifiers: .option).disabled(chat == nil)
+            Button("Previous Unread") { chat?.unread(false) }.keyboardShortcut(.upArrow, modifiers: .option).disabled(chat == nil)
+        }
     }
 }
 

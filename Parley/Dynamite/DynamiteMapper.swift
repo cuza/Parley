@@ -164,6 +164,7 @@ enum DynamiteMapper {
         // Google Chat gives a picture a new token, so a new URL, on every load: its cache knows it by its message and place.
         for index in message.attachments.indices { message.attachments[index].cacheKey = "\(id)#\(index)" }
         message.sources = sources(proto.annotations)
+        message.pinned = proto.messageLabels.contains { $0.type == .pinned }
         // "Show thinking": the last activity annotation with steps, as Google Chat shows it.
         message.thinking = proto.annotations.reversed().lazy.compactMap { annotation -> [ThinkingStep]? in
             guard case .activityMetadata(let activity)? = annotation.metadata, !activity.log.entries.isEmpty else { return nil }
@@ -754,6 +755,7 @@ enum DynamiteMapper {
                 let actorID = update.initiator.userID.id.isEmpty ? proto.creator.userID.id : update.initiator.userID.id
                 let actor = name(actorID, update.initiator.name, first: true)
                 if !update.renameMetadata.newName.isEmpty { return "\(actor) renamed the \(noun) to “\(update.renameMetadata.newName)”" }
+                if update.boardUpdate.action == 1, update.boardUpdate.kind == 1 { return "\(actor) pinned a message to the board" }
                 guard update.hasGroupDetailsMetadata else { return nil }
                 // As Google Chat words it: a new description is quoted, guidelines are only named; an admin is not named.
                 let who = update.initiatorType == 2 ? "An admin" : actor
@@ -1173,16 +1175,20 @@ enum DynamiteMapper {
     }
 }
 
-// Server drafts: Google Chat's unsent messages of type DRAFT.
+// Server drafts and scheduled messages: Google Chat's unsent messages of type DRAFT and SCHEDULED.
 extension DynamiteMapper {
-    /// A draft as Google Chat lists or pushes it; a scheduled message, or one naming no conversation, is none.
+    /// A draft or scheduled message as Google Chat lists or pushes it; one naming no conversation, or scheduled with no
+    /// time, is none.
     static func draft(_ proto: Dynamite_UnsentMessage) -> ServerDraft? {
-        guard proto.type != .scheduled, !proto.id.id.isEmpty, let conversation = DynamiteID.conversation(proto.id.groupID) else { return nil }
+        guard !proto.id.id.isEmpty, let conversation = DynamiteID.conversation(proto.id.groupID) else { return nil }
+        let schedule = time(proto.scheduledSend.sendTime).map { ServerDraft.Schedule(at: $0, failed: proto.scheduledSend.state == .failed) }
+        if proto.type == .scheduled, schedule == nil { return nil }
         let rich = richText(proto.textBody, proto.annotations), topic = proto.id.topicID
         return ServerDraft(id: proto.id.id, conversationID: conversation,
                            threadID: topic.isEmpty ? nil : DynamiteID.message(conversation, topic: topic, message: topic),
                            text: rich.text, formatting: rich.formatting,
-                           updatedAt: time(proto.updateTime) ?? time(proto.createTime) ?? .now)
+                           updatedAt: time(proto.updateTime) ?? time(proto.createTime) ?? .now,
+                           schedule: proto.type == .scheduled ? schedule : nil)
     }
     static func time(_ timestamp: Dynamite_Timestamp) -> Date? {
         timestamp.seconds > 0 ? Date(timeIntervalSince1970: Double(timestamp.seconds) + Double(timestamp.nanos) / 1e9) : nil

@@ -162,19 +162,22 @@ struct ShortcutList: View {
     }
 }
 
-/// The Drafts shortcut, as web's: every composer holding a draft, newest first; a click opens the conversation, or the thread
-/// in the thread pane, with the draft in its composer.
+/// The Drafts shortcut, as web's: scheduled messages, soonest first, then every composer holding a draft, newest first; a
+/// click opens the conversation, or the thread in the thread pane, with the draft in its composer.
 struct DraftList: View {
     @Bindable var store: ChatStore
     var body: some View {
-        let drafts = store.draftList()
+        let drafts = store.draftList(), scheduled = store.scheduled
         Group {
-            if drafts.isEmpty {
+            if drafts.isEmpty && scheduled.isEmpty {
                 ContentUnavailableView("No drafts", systemImage: Shortcut.drafts.icon, description: Text("Messages you start and don’t send show up here."))
             } else {
-                List(drafts, id: \.self) { draft in
-                    Button { Task { await store.open(conversation: draft.conversationID, thread: draft.threadID) } } label: { row(draft) }
-                        .buttonStyle(.plain)
+                List {   // one list, as web's: scheduled messages carry their send time
+                    ForEach(scheduled, id: \.id) { ScheduledRow(store: store, message: $0) }
+                    ForEach(drafts, id: \.self) { draft in
+                        Button { Task { await store.open(conversation: draft.conversationID, thread: draft.threadID) } } label: { row(draft) }
+                            .buttonStyle(.plain)
+                    }
                 }
                 .accessibilityIdentifier("shortcut-drafts")
             }

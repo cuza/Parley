@@ -405,7 +405,17 @@ struct RowLayout: Equatable, Sendable {
     }
     static func timeText(_ message: Message, color: NSColor = .secondaryLabelColor, timeOnly: Bool = false) -> NSAttributedString {
         let time = message.delivery == .pending ? "Sending…" : shortTime(message.createdAt)
-        return styled(timeOnly ? time : (message.starred ? "★ " : "") + (message.edited ? "edited " : "") + time, .systemFont(ofSize: 11), color, oneLine: true)
+        let text = styled(timeOnly ? time : (message.starred ? "★ " : "") + (message.edited ? "edited " : "") + time, .systemFont(ofSize: 11), color, oneLine: true)
+        guard message.pinned, !timeOnly else { return text }
+        // A pin before the time, as Google Chat marks a message on the board.
+        let pin = NSTextAttachment()
+        pin.image = NSImage(systemSymbolName: "pin.fill", accessibilityDescription: "Pinned")?
+            .withSymbolConfiguration(.init(pointSize: 9, weight: .regular).applying(.init(paletteColors: [color])))
+        let marked = NSMutableAttributedString(attachment: pin)
+        marked.append(styled(" ", .systemFont(ofSize: 11), color, oneLine: true))
+        marked.append(text)
+        marked.addAttribute(.paragraphStyle, value: text.attribute(.paragraphStyle, at: 0, effectiveRange: nil) as Any, range: NSRange(location: 0, length: marked.length))
+        return marked
     }
     /// Formatted once per date: every layout and every row view needs its message's time.
     /// ponytail: a time zone or 12/24-hour change shows in newly formatted times only; key by both if it matters.

@@ -25,6 +25,27 @@ struct OwnStatus: Equatable, Sendable {
         return status
     }
 }
+/// Recurring quiet periods that turn Do not disturb on by themselves, as Google Chat keeps them for the account.
+struct DndSchedules: Equatable, Sendable {
+    struct Period: Equatable, Sendable {
+        var days: [Int]            // 1 Monday … 7 Sunday
+        var start: Int             // minutes after midnight
+        var end: Int               // before `start`: the period ends the next day; equal to it: all day
+        var enabled = true
+        var isAllDay: Bool { start == end }
+        /// "Sun, Mon, Tue", in the week's order where it starts, or "Every day".
+        func dayList(calendar: Calendar = .current) -> String {
+            guard Set(days).count < 7 else { return "Every day" }
+            let symbols = calendar.shortWeekdaySymbols   // Sunday first
+            let order = (0..<7).map { (calendar.firstWeekday - 1 + $0) % 7 }   // indexes into `symbols`
+            return order.filter { days.contains($0 == 0 ? 7 : $0) }.map { symbols[$0] }.joined(separator: ", ")
+        }
+    }
+    var periods: [Period] = []
+    var followsTimeZone = true     // the periods move with the Mac's time zone
+    var timeZone = TimeZone.current.identifier
+    static let limit = 7           // as Google Chat allows
+}
 struct CustomStatus: Equatable, Sendable {
     var text: String
     var emoji: String
@@ -439,6 +460,7 @@ struct Message: Identifiable, Hashable, Codable, Sendable {
     var thinking: [ThinkingStep] = []   // the steps behind a Gemini answer ("Show thinking")
     var translation: Translation? = nil   // Google's translation for me; the timeline shows it first, `text` stays the original
     var tombstone = false    // deleted, kept in its place as "Message deleted": nothing can be done with it, not even quote it
+    var pinned = false       // on the conversation's board, for everyone (Google Chat's PINNED label)
 }
 /// One step of a Gemini answer's reasoning, as Google Chat lists them under "Show thinking".
 struct ThinkingStep: Hashable, Codable, Sendable {
@@ -473,7 +495,8 @@ extension Message {
                   sources: try c.decodeIfPresent([Source].self, forKey: .sources) ?? [],
                   thinking: try c.decodeIfPresent([ThinkingStep].self, forKey: .thinking) ?? [],
                   translation: try c.decodeIfPresent(Translation.self, forKey: .translation),
-                  tombstone: try c.decodeIfPresent(Bool.self, forKey: .tombstone) ?? false)
+                  tombstone: try c.decodeIfPresent(Bool.self, forKey: .tombstone) ?? false,
+                  pinned: try c.decodeIfPresent(Bool.self, forKey: .pinned) ?? false)
     }
 }
 struct MessageDraft: Sendable {
@@ -490,6 +513,11 @@ struct ServerDraft: Hashable, Codable, Sendable {
     var text: String
     var formatting: [TextStyleRange] = []
     var updatedAt: Date = .now        // the server's last update time
+    var schedule: Schedule? = nil     // a scheduled message: Google sends it at this time; nil for a composer's draft
+    struct Schedule: Hashable, Codable, Sendable {
+        var at: Date
+        var failed = false            // Google tried at that time and couldn't send it
+    }
 }
 /// A thread in a space's Threads list, as Google Chat's Active threads lists it.
 struct ThreadSummary: Identifiable, Hashable, Sendable {
@@ -523,6 +551,35 @@ struct MessagePage: Sendable {
 enum SharedCategory: String, CaseIterable, Sendable { case media = "Media", files = "Files", links = "Links" }
 struct SharedPage: Sendable { var items: [SharedContent.Item]; var hasMore: Bool }
 struct SearchPage: Sendable { var messages: [Message]; var cursor: String? = nil }
+/// Google Chat's search chips: From, a date range, Has, and Mentions me. Each narrows the results; within From or Has,
+/// any choice matches.
+struct SearchFilters: Equatable, Sendable {
+    enum Kind: String, CaseIterable, Sendable {
+        case link = "Link", file = "Any file", document = "Document", spreadsheet = "Spreadsheet", presentation = "Presentation"
+        case image = "Image", video = "Video", pdf = "PDF"
+    }
+    /// The date chip's quick choices, as Google Chat offers them.
+    enum Age: String, CaseIterable, Sendable {
+        case week = "Older than a week", month = "Older than a month", halfYear = "Older than 6 months", year = "Older than a year"
+        func before(now: Date) -> Date {
+            let days = switch self { case .week: 7; case .month: 31; case .halfYear: 182; case .year: 365 }
+            return now.addingTimeInterval(-Double(days) * 86_400)
+        }
+    }
+    var from: [Person] = []
+    var saidIn: [ConversationID] = []   // "Said in": only these conversations
+    var after: Date? = nil
+    var before: Date? = nil
+    var has: Set<Kind> = []
+    var mentionsMe = false
+    var isEmpty: Bool { self == SearchFilters() }
+    /// Picks or drops a kind. Any file covers every file kind, so it and they exclude each other; a link is apart.
+    mutating func toggle(_ kind: Kind) {
+        if has.remove(kind) != nil { return }
+        if kind == .file { has = has.filter { $0 == .link } } else if kind != .link { has.remove(.file) }
+        has.insert(kind)
+    }
+}
 /// A sidebar shortcut shown in place of a conversation, in the sidebar's order. Home lists conversations by recent
 /// activity; Mentions and Starred list messages from every conversation; Drafts lists the unsent drafts.
 enum Shortcut: String, CaseIterable, Sendable {
@@ -651,7 +708,7 @@ protocol ChatBackend: Sendable {
     /// Each member's role, from the last `members(of:)` read.
     func roles(in conversation: ConversationID) async -> [PersonID: MemberRole]
     /// Messages matching `query`, in every conversation or only `conversation`.
-    func searchMessages(_ query: String, in conversation: ConversationID?, cursor: String?) async throws -> SearchPage
+    func searchMessages(_ query: String, filters: SearchFilters, cursor: String?) async throws -> SearchPage
     /// Thumbnail (or the full file when there is none) for display; `thumbnail: false` for the original.
     func attachmentData(_ attachment: Attachment, thumbnail: Bool) async throws -> Data
     /// Uploads a local file (`Attachment.localFile`) for a message in `conversation`; returns it with `uploadToken` set.
@@ -688,6 +745,13 @@ protocol ChatBackend: Sendable {
     func slashCommands(in conversation: ConversationID, matching query: String, toApp: Bool) async throws -> [SlashCommand]
     /// Stars a message for me, or unstars it.
     func setStarred(_ starred: Bool, on id: MessageID) async throws
+    /// Pins a message to its conversation's board, or takes it off; the board is shared by every member.
+    func setPinned(_ pinned: Bool, on id: MessageID) async throws
+    /// The messages on a conversation's board, as Google Chat's Board panel lists them.
+    func pinnedMessages(in conversation: ConversationID) async throws -> [Message]
+    /// The account's do not disturb schedules, with times in `timeZone`; saving replaces the whole set.
+    func dndSchedules(timeZone: String) async throws -> DndSchedules
+    func setDndSchedules(_ schedules: DndSchedules) async throws
     /// Sends a card button's action and the card's inputs back to its app; returns the message as the app updated it.
     func clickCard(_ id: MessageID, card: String?, action: Data, inputs: [Card.Input]) async throws -> Message?
     /// One of a dialog's requests (`DialogStep`): `action` is the pressed button's (nil when a slash command opens it or
@@ -702,6 +766,9 @@ protocol ChatBackend: Sendable {
     /// Creates the draft when its `id` is empty, else replaces its text and formatting; returns it as saved (id, update time).
     func saveDraft(_ draft: ServerDraft) async throws -> ServerDraft
     func deleteDraft(_ draft: ServerDraft) async throws
+    /// Every scheduled message; `saveDraft` schedules one (a draft with a `schedule` and no id) and `deleteDraft` cancels it.
+    func scheduled() async throws -> [ServerDraft]
+    func reschedule(_ message: ServerDraft, to date: Date) async throws -> ServerDraft
 }
 
 
@@ -770,6 +837,6 @@ extension Character {
 
 extension ChatBackend {
     func searchMessages(_ query: String, cursor: String?) async throws -> SearchPage {
-        try await searchMessages(query, in: nil, cursor: cursor)
+        try await searchMessages(query, filters: SearchFilters(), cursor: cursor)
     }
 }

@@ -47,6 +47,7 @@ struct InfoPanel: View {
             Section { header }
             Section { actions; NotificationLevelPicker(store: store, room: room); history }
             if room.kind == .space, room.guidelines != nil || allowed.editDetails { Section("Guidelines") { guidelines } }
+            if let board = store.pinned[room.id], !board.isEmpty { Section("Board") { ForEach(board) { pinned($0) } } }
             if room.kind != .direct { Section("\(roster.count) members") { ForEach(roster) { member($0) } } }
             if room.kind == .space, allowed.deleteSpace {
                 Section { Button("Delete Space…", role: .destructive) { deleting = true } }
@@ -77,8 +78,9 @@ struct InfoPanel: View {
                 store.messages.filter { $0.conversationID == id }.sorted { $0.createdAt < $1.createdAt }
             }
             async let permissions: Void = store.loadPermissions(room.id)
+            async let board: Void = store.loadPinned(room.id)
             await store.loadMembers(room.id)
-            await permissions
+            await permissions; await board
         }
         .task(id: "\(room.id)/\(tab.rawValue)") { await store.loadShared(tab, in: room.id) }
     }
@@ -195,6 +197,21 @@ struct InfoPanel: View {
                 }.padding([.horizontal, .bottom], 14)
             }.padding(.top, 8)
         }
+    }
+
+    // MARK: Pinned
+    /// A message on the board: who sent it and what it says; a click shows it in the conversation.
+    private func pinned(_ message: Message) -> some View {
+        Button { Task { await store.jump(message) } } label: {
+            VStack(alignment: .leading, spacing: 2) {
+                Text("\(message.sender.id == store.me.id ? "You" : store.name(of: message.sender.id, in: room.id)) · \(message.createdAt.formatted(date: .abbreviated, time: .omitted))")
+                    .font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                Text(QuotedMessage.summary(text: TextStyleRange.plain(message.text, message.formatting), attachments: message.attachments))
+                    .lineLimit(2).frame(maxWidth: .infinity, alignment: .leading)
+            }.contentShape(Rectangle())
+        }
+        .buttonStyle(.plain).help("Show in Chat")
+        .contextMenu { Button("Unpin from Board") { Task { await store.setPinned(false, message) } } }
     }
 
     // MARK: Shared content

@@ -48,7 +48,8 @@ actor FakeBackend: ChatBackend {
         history = [
             Message(id: "d1", conversationID: "design", sender: maria, text: "Morning! I’ve been thinking about how we make this feel more at home on the Mac.", createdAt: now.addingTimeInterval(-3600)),
             Message(id: "d2", conversationID: "design", sender: maria, text: "A little less chrome, a little more room for the conversation.", createdAt: now.addingTimeInterval(-3550), reactions: [Reaction(emoji: "✨", people: ["me", "alex"])], starred: true),
-            Message(id: "d3", conversationID: "design", sender: Self.me, text: "Agreed. Compact sidebar, native text, and threads that stay out of the way.", createdAt: now.addingTimeInterval(-3300)),
+            Message(id: "d3", conversationID: "design", sender: Self.me, text: "Agreed. Compact sidebar, native text, and threads that stay out of the way.", createdAt: now.addingTimeInterval(-3300),
+                    pinned: true),
             Message(id: "d4", conversationID: "design", sender: alex, text: "The keyboard shortcuts are the part I’m most excited about. ⌘K should get us anywhere \u{FFFD}", createdAt: now.addingTimeInterval(-900),
                     reactions: [Reaction(emoji: Self.shipIt.text, people: ["maria"], custom: Self.shipIt)], replyCount: 2,
                     formatting: [TextStyleRange(style: .customEmoji(Self.shipIt), start: 86, length: 1)]),
@@ -68,7 +69,13 @@ actor FakeBackend: ChatBackend {
             Message(id: "a1", conversationID: "alex", sender: alex, text: "The build is ready for a first look 👋", createdAt: now.addingTimeInterval(-600)),
             Message(id: "g1", conversationID: "general", sender: alex, text: "@Dave could you share the release notes before Friday?", createdAt: now.addingTimeInterval(-5400),
                     replyCount: 1, formatting: [TextStyleRange(style: .mention(userID: Self.me.id), start: 0, length: 5)]),
-            Message(id: "g1r", conversationID: "general", threadID: "g1", sender: maria, text: "I can draft the summary part.", createdAt: now.addingTimeInterval(-450))
+            Message(id: "g1r", conversationID: "general", threadID: "g1", sender: maria, text: "I can draft the summary part.", createdAt: now.addingTimeInterval(-450)),
+            Message(id: "l1", conversationID: "launch", sender: alex, text: "Launch plan for next week", createdAt: now.addingTimeInterval(-7_400),
+                    attachments: [Attachment(name: "Launch plan", contentType: "application/vnd.google-apps.document", kind: .link,
+                                             url: URL(string: "https://docs.google.com/document/d/demo/edit"))]),
+            Message(id: "l2", conversationID: "launch", sender: maria, text: "", createdAt: now.addingTimeInterval(-7_200),
+                    attachments: [Attachment(name: "Launch banner.png", contentType: "image/png", kind: .image,
+                                             thumbnailURL: URL(string: "https://parley.example/launch-banner.png"), width: 640, height: 360)])
         ]
         let lines = ["ok", "Deploying the new build now, will report back in a few minutes.", "https://example.com/pull/42",
                      "Can you take a look at the failing check? It only fails on the second run, which makes me think the cache is involved somewhere.",
@@ -170,7 +177,9 @@ actor FakeBackend: ChatBackend {
         sentDrafts.append(draft)
         if failNextSend { failNextSend = false; throw CocoaError(.fileWriteUnknown) }
         if let expiry = expireOnNextSend { expireOnNextSend = nil; throw expiry }
-        if let id = draft.serverDraftID { serverDrafts.removeAll { $0.id == id } }   // the server drops the draft it names
+        if let id = draft.serverDraftID {   // the server drops the draft or scheduled message it names
+            serverDrafts.removeAll { $0.id == id }; scheduledMessages.removeAll { $0.id == id }
+        }
         let message = Message(id: UUID().uuidString, conversationID: conversation, threadID: thread, sender: Self.me, text: draft.text,
                               attachments: draft.uploads, formatting: draft.formatting,
                               quote: draft.quoting.map { QuotedMessage(sender: $0.sender, text: $0.text) })
@@ -354,8 +363,15 @@ actor FakeBackend: ChatBackend {
     func setHidden(_ hidden: Bool, conversation: ConversationID) async throws {
         try await change(hidden ? "hide" : "unhide", conversation) { $0.hidden = hidden ? .now : nil }
     }
-    func searchMessages(_ query: String, in conversation: ConversationID?, cursor: String?) -> SearchPage {
-        SearchPage(messages: history.filter { $0.text.localizedCaseInsensitiveContains(query) && (conversation == nil || $0.conversationID == conversation) })
+    // ponytail: From, dates and images only; the other chips match everything here.
+    func searchMessages(_ query: String, filters: SearchFilters, cursor: String?) -> SearchPage {
+        SearchPage(messages: history.filter { message in
+            (query.isEmpty || message.text.localizedCaseInsensitiveContains(query))
+                && (filters.from.isEmpty || filters.from.contains { $0.id == message.sender.id })
+                && (filters.saidIn.isEmpty || filters.saidIn.contains(message.conversationID))
+                && filters.after.map { message.createdAt >= $0 } ?? true && filters.before.map { message.createdAt < $0 } ?? true
+                && (!filters.has.contains(.image) || message.attachments.contains { $0.kind == .image })
+        })
     }
     private(set) var typingSent: [String] = []   // "<conversation>/<thread or timeline>"
     private(set) var watched: [Set<ConversationID>] = []
@@ -437,6 +453,22 @@ actor FakeBackend: ChatBackend {
         history[i].starred = starred
         continuation.yield(.messageUpserted(history[i]))
     }
+    func setPinned(_ pinned: Bool, on id: MessageID) async throws {
+        changes.append("\(pinned ? "pin" : "unpin") \(id)")
+        guard let i = history.firstIndex(where: { $0.id == id }) else { return }
+        history[i].pinned = pinned
+        continuation.yield(.messageUpserted(history[i]))
+    }
+    /// The demo's schedule: weeknights, switched off.
+    private var schedules = DndSchedules(periods: [.init(days: [7, 1, 2, 3, 4], start: 22 * 60, end: 7 * 60, enabled: false)])
+    func dndSchedules(timeZone: String) -> DndSchedules { schedules }
+    func setDndSchedules(_ schedules: DndSchedules) throws {
+        if failNextChange { failNextChange = false; throw URLError(.networkConnectionLost) }
+        self.schedules = schedules
+    }
+    /// A pin made elsewhere: Google keeps it, and nothing is pushed.
+    func simulatePinned(_ id: MessageID) { if let i = history.firstIndex(where: { $0.id == id }) { history[i].pinned = true } }
+    func pinnedMessages(in conversation: ConversationID) -> [Message] { history.filter { $0.conversationID == conversation && $0.pinned } }
     /// The server's followed threads as tests set them; nil derives them from the history.
     private var serverHome: [HomeThread]?
     func setHomeThreads(_ threads: [HomeThread]) { serverHome = threads }
@@ -465,6 +497,12 @@ actor FakeBackend: ChatBackend {
     func simulateDrafts(_ drafts: [ServerDraft]) { serverDrafts = drafts }
     func drafts() -> [ServerDraft] { serverDrafts }
     func saveDraft(_ draft: ServerDraft) async throws -> ServerDraft {
+        if draft.schedule != nil {   // a scheduled message
+            var saved = draft
+            saved.id = UUID().uuidString; saved.updatedAt = .now
+            scheduledMessages.append(saved)
+            return saved
+        }
         draftWrites.append("\(draft.id.isEmpty ? "create" : "update") \(draft.conversationID)/\(draft.threadID ?? "timeline")")
         if failDraftWrites { throw URLError(.networkConnectionLost) }
         if draftLatency > .zero { try? await Task.sleep(for: draftLatency) }
@@ -476,9 +514,22 @@ actor FakeBackend: ChatBackend {
         return saved
     }
     func deleteDraft(_ draft: ServerDraft) throws {
+        if draft.schedule != nil { scheduledMessages.removeAll { $0.id == draft.id }; return }
         draftWrites.append("delete \(draft.conversationID)/\(draft.threadID ?? "timeline")")
         if failDraftWrites { throw URLError(.networkConnectionLost) }
         serverDrafts.removeAll { $0.id == draft.id }
+    }
+    /// Scheduled messages, as Google keeps them; the demo has one going to Launch crew tomorrow morning.
+    private(set) var scheduledMessages = [ServerDraft(id: "demo-scheduled", conversationID: "launch", text: "Reminder: the beta build goes out at noon",
+                                                      schedule: .init(at: Calendar.current.date(byAdding: .day, value: 1,
+                                                                                                to: Calendar.current.date(bySettingHour: 9, minute: 0, second: 0, of: .now)!)!))]
+    func simulateScheduled(_ messages: [ServerDraft]) { scheduledMessages = messages }
+    func scheduled() -> [ServerDraft] { scheduledMessages }
+    func reschedule(_ message: ServerDraft, to date: Date) -> ServerDraft {
+        var moved = message
+        moved.schedule = .init(at: date)
+        if let index = scheduledMessages.firstIndex(where: { $0.id == message.id }) { scheduledMessages[index] = moved }
+        return moved
     }
     /// Pushes an event as the server would, for tests and previews.
     func push(_ event: ChatEvent) { continuation.yield(event) }

@@ -760,16 +760,16 @@ actor DynamiteBackend: ChatBackend {
         }
         return reactions.filter { !$0.people.isEmpty }
     }
-    func searchMessages(_ query: String, in conversation: ConversationID?, cursor: String?) async throws -> SearchPage {
-        let group = try conversation.map(DynamiteID.group)
+    func searchMessages(_ query: String, filters: SearchFilters, cursor: String?) async throws -> SearchPage {
+        // The "said in" conversations: Google refuses a scope without a sort.
+        let groups = try filters.saidIn.map(DynamiteID.group)
         let request = Dynamite_SearchMessagesV2Request.with { r in
             r.requestHeader = DynamiteClient.header
             r.size = 20
             if let cursor { r.cursor = cursor }
-            r.filter = .init()   // Google Chat always sends the filter, empty when unfiltered
-            if let group {
-                // One conversation, as Google Chat's "said in" filter sends it; Google refuses the scope without a sort.
-                r.filter.scope.conversations = [.with { $0.groupID = group; $0.kind = 1 }]
+            r.filter = Self.filter(filters, selfID: selfID)   // Google Chat always sends the filter, empty when unfiltered
+            if !groups.isEmpty {
+                r.filter.scope.conversations = groups.map { group in .with { $0.groupID = group; $0.kind = 1 } }
                 r.sort.operator = .relevance
             }
             r.query = query
@@ -779,6 +779,21 @@ actor DynamiteBackend: ChatBackend {
         await resolve(messages: protos)
         return SearchPage(messages: protos.compactMap(located), cursor: response.cursor.isEmpty ? nil : response.cursor)
     }
+    /// The chips in the shapes Google reads them; none of them needs a sort. Dates are in µs: milliseconds fail.
+    static func filter(_ filters: SearchFilters, selfID: String) -> Dynamite_SearchFilter {
+        .with { f in
+            f.senders = filters.from.map { person in .with { $0.id = person.id } }
+            if filters.after != nil || filters.before != nil {
+                if let after = filters.after { f.dates.startUsec = Int64(after.timeIntervalSince1970 * 1_000_000) }
+                if let before = filters.before { f.dates.endUsec = Int64(before.timeIntervalSince1970 * 1_000_000) }
+            }
+            let types: [SearchFilters.Kind: Dynamite_Annotation.TypeEnum] = [.file: .driveFile, .document: .driveDoc, .spreadsheet: .driveSheet,
+                                                                            .presentation: .driveSlide, .video: .video, .image: .image, .pdf: .pdf]
+            f.has = filters.has.compactMap { types[$0] }.sorted { $0.rawValue < $1.rawValue }.map { type in .with { $0.type = type } }
+            if filters.mentionsMe { f.mentions = [.with { $0.users = [.with { $0.id = selfID }] }] }
+            if filters.has.contains(.link) { f.hasLink_p = true }
+        }
+    }
     /// A message from anywhere (search, shortcuts) in its conversation, pointing at its thread when it is a reply.
     private func located(_ proto: Dynamite_Message) -> Message? {
         guard let conversation = DynamiteID.conversation(proto.id.parentID.topicID.groupID),
@@ -786,6 +801,55 @@ actor DynamiteBackend: ChatBackend {
         if let head = heads[Self.topicKey(message.id)], head.id != message.id { message.threadID = head.id }
         else { message.threadID = unloadedThread(of: proto, in: conversation) }
         return message
+    }
+    /// `apply_message_label` / `remove_message_label` with the PINNED label, as Google Chat's Pin to board and Unpin send them:
+    /// a pin also sends position 0.
+    func setPinned(_ pinned: Bool, on id: MessageID) async throws {
+        let request = try Dynamite_MessageLabelRequest.with { r in
+            r.requestHeader = DynamiteClient.header
+            r.messageID = try DynamiteID.protoMessageID(id)
+            r.label.type = .pinned
+            if pinned { r.label.position = 0 }
+        }
+        if pinned { let _: Dynamite_ApplyMessageLabelResponse = try await rpc("apply_message_label", request) }
+        else { let _: Dynamite_RemoveMessageLabelResponse = try await rpc("remove_message_label", request) }
+        update(id) { $0.pinned = pinned }
+    }
+    /// `get_recurring_dnd` with the time zone, which Google needs.
+    func dndSchedules(timeZone: String) async throws -> DndSchedules {
+        let response: Dynamite_GetRecurringDndResponse = try await rpc("get_recurring_dnd", Dynamite_GetRecurringDndRequest.with {
+            $0.timeZone = timeZone; $0.requestHeader = DynamiteClient.header
+        })
+        let proto = response.recurringDnd
+        return DndSchedules(periods: proto.schedules.map { .init(days: $0.days.map(Int.init), start: Int($0.start), end: Int($0.end), enabled: $0.enabled) },
+                            followsTimeZone: proto.updatesOnTimeZoneChange, timeZone: proto.timeZone.isEmpty ? timeZone : proto.timeZone)
+    }
+    /// `set_recurring_dnd` with the whole set and field 2 at 0, as Google Chat sends it. A period switched on that covers
+    /// now turns DND on at once: the reply's status says so.
+    func setDndSchedules(_ schedules: DndSchedules) async throws {
+        let request = Dynamite_SetRecurringDndRequest.with { r in
+            r.recurringDnd.schedules = schedules.periods.map { period in
+                .with { $0.days = period.days.map(Int32.init); $0.start = Int32(period.start); $0.end = Int32(period.end); $0.enabled = period.enabled }
+            }
+            r.recurringDnd.updatesOnTimeZoneChange = schedules.followsTimeZone
+            r.recurringDnd.timeZone = schedules.timeZone
+            r.field2 = 0
+            r.requestHeader = DynamiteClient.header
+        }
+        let response: Dynamite_SetRecurringDndResponse = try await rpc("set_recurring_dnd", request)
+        if response.hasUserStatus { continuation.yield(.ownStatusChanged(DynamiteMapper.ownStatus(response.userStatus))) }
+    }
+    /// `get_chat_board` with the options Google Chat's Board panel sends; its pinned messages, as they are now.
+    func pinnedMessages(in conversation: ConversationID) async throws -> [Message] {
+        let request = try Dynamite_GetChatBoardRequest.with { r in
+            r.groupID = try DynamiteID.group(conversation)
+            r.options.messages = .with { $0.a = 5; $0.b = 2; $0.c = true }
+            r.options.resources = .with { $0.a = 3; $0.b = true }
+            r.requestHeader = DynamiteClient.header
+        }
+        let response: Dynamite_GetChatBoardResponse = try await rpc("get_chat_board", request)
+        await resolve(messages: response.pinned.messages)
+        return response.pinned.messages.compactMap(located)
     }
     /// `apply_message_label` / `remove_message_label` with the STAR label, as Google Chat's Star and Unstar send them.
     func setStarred(_ starred: Bool, on id: MessageID) async throws {
@@ -913,19 +977,22 @@ actor DynamiteBackend: ChatBackend {
         return space
     }
 
-    // Server drafts are Google Chat's unsent messages of type DRAFT. Their four RPCs carry the request header at field 1.
-    /// `list_unsent_messages` as Google Chat's start-up asks for drafts: filter {type DRAFT, 5: 0}, an empty paging field,
-    /// then each page's token.
+    // Server drafts and scheduled messages are Google Chat's unsent messages of type DRAFT and SCHEDULED. Their four RPCs
+    // carry the request header at field 1.
+    func drafts() async throws -> [ServerDraft] { try await unsent(.draft, scope: 0).filter { $0.schedule == nil } }
+    func scheduled() async throws -> [ServerDraft] { try await unsent(.scheduled, scope: 1).filter { $0.schedule != nil } }
+    /// `list_unsent_messages` as Google Chat's start-up asks for each type: filter {type, 5: 0 for drafts, 1 for scheduled},
+    /// an empty paging field, then each page's token.
     // ponytail: stops after 10 pages; raise it if anyone keeps that many drafts.
-    func drafts() async throws -> [ServerDraft] {
+    private func unsent(_ type: Dynamite_UnsentMessage.TypeEnum, scope: Int32) async throws -> [ServerDraft] {
         var drafts: [ServerDraft] = [], token: String?
         for _ in 0..<10 {
             let request = Dynamite_ListUnsentMessagesRequest.with { r in
                 r.requestHeader = DynamiteClient.header
                 r.paging = .init()
                 if let token { r.paging.pageToken = token }
-                r.filter.type = .draft
-                r.filter.scope = 0
+                r.filter.type = type
+                r.filter.scope = scope
             }
             let response: Dynamite_ListUnsentMessagesResponse = try await rpc("list_unsent_messages", request)
             response.unsentMessages.forEach(keepUneditable)
@@ -937,6 +1004,7 @@ actor DynamiteBackend: ChatBackend {
     }
     /// As Google Chat's composer saves: `create_unsent_message` with a client-chosen id, type DRAFT and a new mutation id;
     /// later `update_unsent_message` with the whole text and the mask Google Chat sends (mutation id, text, annotations, quote).
+    /// A draft with a `schedule` is created as Google Chat schedules a message: type SCHEDULED, the time, an empty mutation id.
     func saveDraft(_ draft: ServerDraft) async throws -> ServerDraft {
         let creating = draft.id.isEmpty
         let unsent = try Dynamite_UnsentMessage.with { m in
@@ -945,8 +1013,14 @@ actor DynamiteBackend: ChatBackend {
             m.textBody = draft.text
             let extras = draftExtras[draft.id].map { old in old.annotations.compactMap { Self.relocated($0, from: old.text, to: draft.text) } } ?? []
             m.annotations = DynamiteMapper.annotations(Self.sendable(draft.formatting, besides: draftExtras[draft.id]?.annotations ?? [])) + extras
-            if creating { m.type = .draft }
-            m.mutationID = UUID().uuidString   // uppercase, as Google Chat sends it
+            if let schedule = draft.schedule, creating {
+                m.type = .scheduled
+                m.scheduledSend.sendTime.seconds = Int64(schedule.at.timeIntervalSince1970.rounded())
+                m.mutationID = ""
+            } else {
+                if creating { m.type = .draft }
+                m.mutationID = UUID().uuidString   // uppercase, as Google Chat sends it
+            }
         }
         let saved: Dynamite_UnsentMessage
         if creating {
@@ -960,7 +1034,7 @@ actor DynamiteBackend: ChatBackend {
             })
             saved = response.unsentMessage
         }
-        log.notice("draft \(creating ? "created" : "updated", privacy: .public)")
+        log.notice("\(draft.schedule == nil ? "draft" : "scheduled message", privacy: .public) \(creating ? "created" : "updated", privacy: .public)")
         var result = draft
         result.id = unsent.id.id
         draftExtras[result.id] = draftExtras[draft.id].map { _ in (draft.text, unsent.annotations.filter(Self.uneditable)) }
@@ -990,6 +1064,20 @@ actor DynamiteBackend: ChatBackend {
         guard found.count == 1 else { return nil }
         var moved = annotation
         moved.startIndex = Int32(found[0])
+        return moved
+    }
+    /// As Google Chat reschedules: `update_unsent_message` with only the id and the new time, and a mask naming field 8's field 1.
+    func reschedule(_ message: ServerDraft, to date: Date) async throws -> ServerDraft {
+        let request = try Dynamite_UpdateUnsentMessageRequest.with {
+            $0.requestHeader = DynamiteClient.header
+            $0.unsentMessage.id = try DynamiteMapper.unsentID(message.id, conversation: message.conversationID, thread: message.threadID)
+            $0.unsentMessage.scheduledSend.sendTime.seconds = Int64(date.timeIntervalSince1970.rounded())
+            $0.updateMask.paths = [.with { $0.field = 8; $0.sub.fields = [1] }]
+        }
+        let _: Dynamite_UpdateUnsentMessageResponse = try await rpc("update_unsent_message", request)
+        log.notice("scheduled message rescheduled")
+        var moved = message
+        moved.schedule = .init(at: date)
         return moved
     }
     func deleteDraft(_ draft: ServerDraft) async throws {

@@ -119,6 +119,8 @@ final class ChatStore {
     @ObservationIgnored var notificationSettings: @MainActor () -> NotificationSettings = { .current }
     // Server drafts: each composer's draft saved to Google too, so it follows the user to web and phone (see `syncDraft`).
     private(set) var serverDrafts: [String: ServerDraft] = [:]   // per draft key: Google's copy, as last saved or heard of
+    /// Messages Google sends later, soonest first: scheduled from a composer here or elsewhere (see `schedule`).
+    private(set) var scheduled: [ServerDraft] = []
     @ObservationIgnored private var draftEdits: [String: Date] = [:]   // draft keys typed in since their last save, and when
     @ObservationIgnored private var draftsListed = false
     @ObservationIgnored private var draftListing: Task<Bool, Never>?
@@ -148,7 +150,7 @@ final class ChatStore {
     var sessionExpired: Bool { connection == .signedOut && !me.id.isEmpty }
     /// Another account connected: nothing of the previous one may show, be sent, or be cached.
     private func forgetAccount() {
-        serverDrafts = [:]; draftEdits = [:]; draftsListed = false; draftTimers.values.forEach { $0.cancel() }; draftTimers = [:]
+        serverDrafts = [:]; scheduled = []; pinned = [:]; draftEdits = [:]; draftsListed = false; draftTimers.values.forEach { $0.cancel() }; draftTimers = [:]
         conversations = []; hidden = []; homeThreads = []; messages = []; selectedID = nil; drafts = [:]; draftFormatting = [:]; draftAttachments = [:]
         quoting = [:]; searchResults = []; shortcut = nil; shortcutLists = [:]; shortcutCursors = [:]; hasMore = []; members = [:]; memberLoads = []; customEmoji = []; customEmojiLoad = nil; loaded = []; threadID = nil; editing = [:]
         typing = [:]; presence = [:]; statuses = [:]; readReceipts = [:]; receiptsOff = []; followed = []; presenceFetched = [:]; watching = nil
@@ -254,6 +256,7 @@ final class ChatStore {
             }
         }
         _ = await listDrafts()
+        await listScheduled()
         persist()
         if !listedOnce {
             listedOnce = true
@@ -530,6 +533,8 @@ final class ChatStore {
         case .messageUpserted(let message):
             let isNew = !messages.contains { $0.id == message.id }
             upsert(message)
+            // A pin posts a service line: the board on screen reads again.
+            if isNew, message.isSystem, pinned[message.conversationID] != nil { Task { await loadPinned(message.conversationID) } }
             // A newer reply in a thread Home lists moves its row up.
             // Threads already listed; a reply in another one re-reads Home's threads (checkFollowed, below).
             if let thread = message.threadID, let i = homeThreads.firstIndex(where: { $0.id == thread }), message.createdAt > homeThreads[i].latest.createdAt {
@@ -638,12 +643,14 @@ final class ChatStore {
         case .draftChanged(let draft):
             let scope = key(draft.conversationID, draft.threadID)
             if spentDrafts.contains(draft.id) { break }   // sent: an echo of an earlier save, not a draft
+            if draft.schedule != nil { keepScheduled(draft); break }
             // Our own save comes back too, possibly after a newer one: only a newer copy counts.
             if let held = serverDrafts[scope], held.id == draft.id, held.updatedAt >= draft.updatedAt { break }
             serverDrafts[scope] = draft
             // The user typing here wins: their text replaces this at the next save.
             if draftEdits[scope] == nil, draftWrites[scope] == nil, !isEditing(scope) { fill(scope, with: draft) }
         case .draftDeleted(let id):
+            scheduled.removeAll { $0.id == id }   // sent at its time, or cancelled elsewhere
             guard let (scope, held) = serverDrafts.first(where: { $0.value.id == id }) else { break }   // ours, or a send's
             serverDrafts[scope] = nil
             // Sent or deleted elsewhere: the composer empties, unless it holds text not yet saved.
@@ -1037,6 +1044,50 @@ final class ChatStore {
                                formatting: draftFormatting[scope] ?? [], updatedAt: edited ?? serverDrafts[scope]?.updatedAt ?? .distantPast)
         }.sorted { $0.updatedAt == $1.updatedAt ? $0.conversationID < $1.conversationID : $0.updatedAt > $1.updatedAt }
     }
+    // Scheduled send, as Google Chat's: the server keeps the message and sends it at its time.
+    func listScheduled() async {
+        do { scheduled = try await backend.scheduled().sorted(by: Self.soonest) } catch {
+            log.error("scheduled messages not listed: \(ConnectionDiagnostics.redact(error.localizedDescription), privacy: .public)")
+            _ = endedSession(error)
+        }
+    }
+    func scheduled(in conversation: ConversationID, thread: ThreadID?) -> [ServerDraft] {
+        scheduled.filter { $0.conversationID == conversation && $0.threadID == thread }
+    }
+    /// Only text can wait, as on the web: no files, quote or forward, and not an edit.
+    func canSchedule(conversation: String, thread: String?) -> Bool {
+        let scope = key(conversation, thread)
+        return !Self.blank(drafts[scope] ?? "") && editing[scope] == nil && (draftAttachments[scope] ?? []).isEmpty && quoting[scope] == nil
+    }
+    /// The composer's text goes to Google to send at `date`; the composer empties, which drops its own draft as a send does.
+    func schedule(conversation: String, thread: String? = nil, at date: Date) async {
+        guard canSchedule(conversation: conversation, thread: thread) else { return }
+        let scope = key(conversation, thread)
+        let (text, formatting) = Self.trimmed(drafts[scope, default: ""], draftFormatting[scope] ?? [])
+        do {
+            keepScheduled(try await backend.saveDraft(ServerDraft(conversationID: conversation, threadID: thread, text: text,
+                                                                  formatting: formatting, schedule: .init(at: date))))
+            setDraft("", conversation: conversation, thread: thread)
+        } catch { report(error) }
+    }
+    /// Sends it now, naming it so Google drops it, as Google Chat's Send now does.
+    func sendNow(_ message: ServerDraft) async {
+        scheduled.removeAll { $0.id == message.id }
+        spentDrafts.insert(message.id)
+        await sendNew(message.text, formatting: message.formatting, serverDraft: message.id, conversation: message.conversationID, thread: message.threadID)
+    }
+    func reschedule(_ message: ServerDraft, to date: Date) async {
+        do { keepScheduled(try await backend.reschedule(message, to: date)) } catch { report(error) }
+    }
+    func unschedule(_ message: ServerDraft) async {
+        do { try await backend.deleteDraft(message); scheduled.removeAll { $0.id == message.id } } catch { report(error) }
+    }
+    private func keepScheduled(_ message: ServerDraft) {
+        scheduled.removeAll { $0.id == message.id }
+        scheduled.append(message)
+        scheduled.sort(by: Self.soonest)
+    }
+    private static func soonest(_ a: ServerDraft, _ b: ServerDraft) -> Bool { (a.schedule?.at ?? .distantPast) < (b.schedule?.at ?? .distantPast) }
     /// The threads in `conversation` whose reply box holds a draft, for the "1 draft" under their first message.
     func threadsWithDrafts(in conversation: ConversationID) -> Set<ThreadID> {
         Set(draftedScopes.compactMap { scope -> ThreadID? in
@@ -1569,6 +1620,40 @@ final class ChatStore {
         await show(message.id, in: message.conversationID)
     }
     /// Starred or unstarred everywhere it shows at once; a refusal puts it back and says why.
+    /// The account's do not disturb schedules, once Settings has asked for them.
+    private(set) var dndSchedules: DndSchedules?
+    func loadDndSchedules() async {
+        do { dndSchedules = try await backend.dndSchedules(timeZone: TimeZone.current.identifier) } catch { report(error) }
+    }
+    /// Saves the whole set; on failure the old one stays.
+    func saveDndSchedules(_ schedules: DndSchedules) async {
+        let old = dndSchedules
+        dndSchedules = schedules
+        do { try await backend.setDndSchedules(schedules) } catch { dndSchedules = old; report(error) }
+    }
+    // The board: messages pinned for everyone in a conversation, as Google Chat's Board panel lists them.
+    private(set) var pinned: [ConversationID: [Message]] = [:]
+    func loadPinned(_ conversation: ConversationID) async {
+        do {
+            let list = try await backend.pinnedMessages(in: conversation)
+            pinned[conversation] = list
+            let ids = Set(list.map(\.id))
+            for i in messages.indices where messages[i].conversationID == conversation && messages[i].pinned != ids.contains(messages[i].id) {
+                messages[i].pinned.toggle()
+            }
+        } catch { log.error("board not loaded: \(ConnectionDiagnostics.redact(error.localizedDescription), privacy: .public)") }
+    }
+    func setPinned(_ value: Bool, _ message: Message) async {
+        func mark(_ value: Bool) {
+            for i in messages.indices where messages[i].id == message.id { messages[i].pinned = value }
+            guard var list = pinned[message.conversationID] else { return }
+            list.removeAll { $0.id == message.id }
+            if value { var added = message; added.pinned = true; list.insert(added, at: 0) }
+            pinned[message.conversationID] = list
+        }
+        mark(value)
+        do { try await backend.setPinned(value, on: message.id) } catch { mark(!value); report(error) }
+    }
     func setStarred(_ starred: Bool, _ message: Message) async {
         func mark(_ value: Bool) {
             for i in messages.indices where messages[i].id == message.id { messages[i].starred = value }
@@ -1582,13 +1667,14 @@ final class ChatStore {
         do { try await backend.setStarred(starred, on: message.id) } catch { mark(!starred); report(error) }
         persist()
     }
-    /// Search results for `query`, everywhere or in one conversation (⌘F).
-    func search(_ query: String, in conversation: ConversationID? = nil) async {
+    /// Search results for `query` and the filters; ⌘F's conversation is a "said in" filter.
+    func search(_ query: String, filters: SearchFilters = SearchFilters()) async {
         searchGeneration += 1
         let generation = searchGeneration
-        guard !query.trimmingCharacters(in: .whitespaces).isEmpty else { searchResults = []; return }
+        let query = query.trimmingCharacters(in: .whitespaces)
+        guard !query.isEmpty || !filters.isEmpty else { searchResults = []; return }   // chips alone search too
         do {
-            let page = try await backend.searchMessages(query, in: conversation, cursor: nil)
+            let page = try await backend.searchMessages(query, filters: filters, cursor: nil)
             if generation == searchGeneration { searchResults = page.messages }
         } catch { if generation == searchGeneration { report(error) } }
     }

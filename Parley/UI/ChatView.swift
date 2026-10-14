@@ -91,6 +91,22 @@ struct ChatView: View {
     private func sendMeetLink(_ id: ConversationID) { Task { if let url = await store.sendMeetLink(in: id) { openURL(url) } } }
     @Environment(SignInFlow.self) private var signIn: SignInFlow?
     private var room: Conversation? { store.conversations.first { $0.id == (fixedConversation ?? store.selectedID) } }
+    /// ⌘F: search what's open, the conversation as the "said in" filter, or everywhere from Home and the other shortcuts.
+    private func find() { finding = .init(scope: store.shortcut == nil ? room : nil) }
+    /// What this window's menu items do.
+    private var commands: ChatCommands {
+        ChatCommands(
+            find: fixedConversation == nil ? { find() } : nil,
+            jump: { switcher = true },
+            info: {   // a composer with text keeps ⌘I for italic
+                if let composer = NSApp.keyWindow?.firstResponder as? ComposerTextView, !composer.string.isEmpty { composer.formatItalic(nil) }
+                else if room != nil { store.toggleInfo() }
+            },
+            editLast: { if let room, let last = store.timeline(room.id).last(where: { $0.sender.id == store.me.id }) { store.edit(last) } },
+            unread: { forward in
+                if let room = Conversation.nextUnread(after: store.selectedID, in: store.conversations, forward: forward) { Task { await store.select(room.id) } }
+            })
+    }
     private var handoff: URL? { Self.handoffURL(room, shortcut: fixedConversation == nil ? store.shortcut : nil) }
     /// What Handoff offers: the conversation on screen; Home and the other shortcuts have no web page of their own.
     static func handoffURL(_ room: Conversation?, shortcut: Shortcut?) -> URL? {
@@ -215,7 +231,7 @@ struct ChatView: View {
                             }
                         }
                         if fixedConversation == nil {   // results open in the main window, so search lives only there
-                            ToolbarItem(placement: .primaryAction) { Button { finding = .init(scope: nil) } label: { Image(systemName: "magnifyingglass") }.help("Search messages (⇧⌘F)") }
+                            ToolbarItem(placement: .primaryAction) { Button { find() } label: { Image(systemName: "magnifyingglass") }.help("Search messages (⌘F)") }
                         }
                     }
                     .focusedSceneValue(\.meetLinkConversation, room.id)
@@ -270,28 +286,14 @@ struct ChatView: View {
             }
             Button("Cancel", role: .cancel) {}
         }
+        .focusedSceneValue(\.chatCommands, commands)
         .background {
-            Group {
-                Button("") { switcher = true }.keyboardShortcut("k")
-                Button("") {   // a composer with text keeps ⌘I for italic
-                    if let composer = NSApp.keyWindow?.firstResponder as? ComposerTextView, !composer.string.isEmpty { composer.formatItalic(nil) }
-                    else if room != nil { store.toggleInfo() }
-                }.keyboardShortcut("i")
-                Button("") { finding = .init(scope: nil) }.keyboardShortcut("f", modifiers: [.command, .shift]).disabled(fixedConversation != nil)
-                // ⌘F finds in what's open: the conversation, or everywhere from Home and the other shortcuts.
-                Button("") { finding = .init(scope: store.shortcut == nil ? room : nil) }.keyboardShortcut("f").disabled(fixedConversation != nil)
+            Group {   // ⌘1 to ⌘9 stay out of the menus, as tabs' do in Safari
                 ForEach(1...9, id: \.self) { number in
                     Button("") { if let room = Conversation.atShortcut(number, in: store.conversations, limit: sectionLimitArgs.limit,
                                                                        expanded: sectionLimitArgs.expanded, selected: store.selectedID, custom: store.sections) { Task { await store.select(room.id) } } }
                         .keyboardShortcut(KeyEquivalent(Character(String(number))), modifiers: .command)
                 }
-                Button("") { if let room = Conversation.nextUnread(after: store.selectedID, in: store.conversations, forward: true) { Task { await store.select(room.id) } } }
-                    .keyboardShortcut(.downArrow, modifiers: .option)
-                Button("") { if let room = Conversation.nextUnread(after: store.selectedID, in: store.conversations, forward: false) { Task { await store.select(room.id) } } }
-                    .keyboardShortcut(.upArrow, modifiers: .option)
-                Button("") {
-                    if let room, let last = store.timeline(room.id).last(where: { $0.sender.id == store.me.id }) { store.edit(last) }
-                }.keyboardShortcut("e")
             }.hidden()
         }
         .overlay {
@@ -373,7 +375,7 @@ struct ChatView: View {
                     ForEach(Shortcut.allCases, id: \.self) { shortcut in
                         HStack {
                             Label(shortcut.title, systemImage: shortcut.icon).font(.system(size: 13))
-                            if shortcut == .drafts, case let count = store.draftList().count, count > 0 {   // as web shows it
+                            if shortcut == .drafts, case let count = store.draftList().count + store.scheduled.count, count > 0 {   // as web shows it
                                 Spacer(minLength: 0)
                                 Text("\(count)").font(.system(size: 11)).foregroundStyle(.secondary).accessibilityLabel("\(count) drafts")
                             }
@@ -530,6 +532,7 @@ struct TimelineView: View {
                           edit: { store.edit($0) },
                           delete: { message in Task { await store.delete(message) } },
                           star: { starred, message in Task { await store.setStarred(starred, message) } },
+                          pin: { pinned, message in Task { await store.setPinned(pinned, message) } },
                           markUnread: { message in Task { await store.markUnread(from: message) } },
                           report: store.permissions[conversation.id]?.reportMessages == true ? { reporting = $0 } : nil,
                           readers: { [conversation] message in
@@ -700,6 +703,14 @@ struct ComposerBar: View {
                             formatButton("curlybraces.square", "Code block (⌥⇧⌘C)", #selector(ComposerTextView.formatCodeBlock(_:)))
                         }.padding(.horizontal, -6).floatingCapsule()
                     }
+                    if let next = store.scheduled(in: conversation.id, thread: thread).first, let at = next.schedule?.at {   // as web says it
+                        let more = store.scheduled(in: conversation.id, thread: thread).count - 1
+                        Button { Task { await store.openShortcut(.drafts) } } label: {
+                            Label(more > 0 ? "Scheduled for \(ScheduledSend.when(at, inSentence: true)), and \(more) more"
+                                             : "Scheduled for \(ScheduledSend.when(at, inSentence: true))",
+                                  systemImage: "clock").font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                        }.buttonStyle(.plain).help("See scheduled messages").floatingCapsule()
+                    }
                     if store.uploading(conversation.id, thread: thread) > 0 {
                         HStack(spacing: 6) { ProgressView().controlSize(.mini); Text("Uploading…").font(.caption).foregroundStyle(.secondary) }.floatingCapsule()
                     }
@@ -732,7 +743,18 @@ struct ComposerBar: View {
                                 Image(systemName: "arrow.up").font(.system(size: 16, weight: .semibold)).foregroundStyle(canSend ? .white : .secondary)
                                     .frame(width: Self.control, height: Self.control)
                                     .floatingGlass(Circle(), tint: canSend ? .accentColor : nil, interactive: true)
-                            }.buttonStyle(.plain).disabled(!canSend).help("Send message").accessibilityLabel("Send message")
+                            }.buttonStyle(.plain).disabled(!canSend).help("Send message (right-click to schedule)").accessibilityLabel("Send message")
+                            .contextMenu {
+                                ScheduleMenu(enabled: store.canSchedule(conversation: conversation.id, thread: thread)) { date in
+                                    Task { await store.schedule(conversation: conversation.id, thread: thread, at: date) }
+                                } custom: { pickingSchedule = true }
+                            }
+                            .sheet(isPresented: $pickingSchedule) {
+                                ScheduleSheet(title: "Schedule Send") { date in
+                                    pickingSchedule = false
+                                    if let date { Task { await store.schedule(conversation: conversation.id, thread: thread, at: date) } }
+                                }
+                            }
                         } else {   // an empty field offers a voice message instead, as Telegram does
                             Button { Task { do { try await recorder.start() } catch { store.report(error) } } } label: {
                                 Image(systemName: "mic").font(.system(size: 17)).foregroundStyle(.secondary)
@@ -751,6 +773,7 @@ struct ComposerBar: View {
         guard let recording = recorder.finish() else { return }
         Task { await store.sendVoice(recording.file, duration: recording.duration, waveform: recording.levels, conversation: conversation.id, thread: thread) }
     }
+    @State private var pickingSchedule = false
     private static let control: CGFloat = 42   // round buttons, and the field's height on one line
     @State private var fieldHeight: CGFloat = 0   // the text view's laid-out height; wrapped paragraphs count, not only newlines
     /// The text capsule: the native field, a placeholder while empty, and Aa, emoji and GIF at its end.
@@ -1083,43 +1106,252 @@ extension View {
         padding(.horizontal, 12).padding(.vertical, 6).floatingGlass(RoundedRectangle(cornerRadius: 16, style: .continuous))
     }
 }
-/// ⇧⌘F: message search.
-/// Message search: everywhere (⇧⌘F), or in one conversation (⌘F).
+/// The main window's actions for the menu bar; each acts on the window in front.
+struct ChatCommands {
+    var find: (() -> Void)?   // nil in a conversation's own window
+    var jump: () -> Void
+    var info: () -> Void
+    var editLast: () -> Void
+    var unread: (_ forward: Bool) -> Void
+}
+extension FocusedValues { @Entry var chatCommands: ChatCommands? }
+
+/// Message search (⌘F).
 struct FinderPanel: View {
-    /// What to search, carried by the sheet's item so the panel never opens with a stale scope.
+    /// What to search, carried by the sheet's item so the panel never opens with a stale scope: ⌘F's conversation
+    /// starts as the "said in" filter, which can be changed or cleared like any other.
     struct Request: Identifiable { let id = UUID(); let scope: Conversation? }
     @Bindable var store: ChatStore
-    var scope: Conversation? = nil
     @State private var query = ""
+    @State private var filters: SearchFilters
+    init(store: ChatStore, scope: Conversation? = nil) {
+        self.store = store
+        _filters = State(initialValue: SearchFilters(saidIn: scope.map { [$0.id] } ?? []))
+    }
     @State private var selected: String?
     @Environment(\.dismiss) private var dismiss
+    private struct Ask: Equatable { var query: String; var filters: SearchFilters }
     var body: some View {
         VStack(spacing: 0) {
-            TextField(Self.prompt(in: scope), text: $query).textFieldStyle(.plain).font(.title3).padding(18).onSubmit { choose() }
+            TextField("Search messages", text: $query).textFieldStyle(.plain).font(.title3).padding(.horizontal, 18).padding(.top, 18)
+                .padding(.bottom, 10).onSubmit { choose() }
+            SearchChips(store: store, filters: $filters).padding(.horizontal, 18).padding(.bottom, 10)
             Divider()
             List(selection: $selected) {
                 ForEach(store.searchResults) { message in
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text("\(message.sender.name) · \(store.conversations.first { $0.id == message.conversationID }?.name ?? "Conversation")").font(.caption).foregroundStyle(.secondary)
-                        Text(message.text).lineLimit(3)
-                    }.padding(.vertical, 5).tag(message.id).onTapGesture { selected = message.id; choose() }
+                    SearchResultRow(message: message, conversation: store.conversations.first { $0.id == message.conversationID }?.name ?? "Conversation",
+                                    load: { try await store.attachmentData($0, thumbnail: $1) })
+                        .padding(.vertical, 5).frame(maxWidth: .infinity, alignment: .leading).contentShape(Rectangle())   // the whole row opens it
+                        .tag(message.id).onTapGesture { selected = message.id; choose() }
                 }
             }.frame(height: 280)
-            HStack { Text(scope == nil ? "Searches Google Chat" : "Searches this conversation in Google Chat").font(.caption).foregroundStyle(.secondary); Spacer(); Button("Close") { dismiss() }.keyboardShortcut(.cancelAction); Button("Open") { choose() }.keyboardShortcut(.defaultAction) }.padding(12)
+            HStack { Text("Searches Google Chat").font(.caption).foregroundStyle(.secondary); Spacer(); Button("Close") { dismiss() }.keyboardShortcut(.cancelAction) }.padding(12)
         }.frame(width: 500)
-            .task(id: query) {
+            .task(id: Ask(query: query, filters: filters)) {
                 try? await Task.sleep(for: .milliseconds(250))   // one request per pause in typing, not per keystroke
                 guard !Task.isCancelled else { return }
-                await store.search(query, in: scope?.id); selected = store.searchResults.first?.id
+                await store.search(query, filters: filters); selected = store.searchResults.first?.id
             }
     }
-    static func prompt(in scope: Conversation?) -> String { scope.map { "Search in \($0.name)" } ?? "Search messages" }
     private func choose() {
         guard let selected else { return }
         Task {
             if let message = store.searchResults.first(where: { $0.id == selected }) { await store.jump(message) }
             dismiss()
         }
+    }
+}
+
+/// A search result as Google Chat's web draws it: who and where, the text, then what the message carries. Pictures show
+/// as thumbnails and files and Drive links by name, so a picture or a document can be found by sight.
+struct SearchResultRow: View {
+    let message: Message
+    let conversation: String
+    let load: (Attachment, _ thumbnail: Bool) async throws -> Data
+    static let thumbnail: CGFloat = 56
+    var body: some View {
+        HStack(alignment: .top, spacing: 10) {
+            Avatar(name: message.sender.name, size: 28, url: message.sender.avatarURL)
+            VStack(alignment: .leading, spacing: 4) {
+                Text("\(message.sender.name) · \(conversation)").font(.caption).foregroundStyle(.secondary)
+                if !message.text.isEmpty { Text(message.text).lineLimit(3) }
+                let shown = Self.shown(message.attachments)
+                if !shown.isEmpty {
+                    HStack(spacing: 6) {
+                        ForEach(Array(shown.enumerated()), id: \.offset) { _, attachment in item(attachment) }
+                    }
+                }
+            }
+        }
+    }
+    /// Cards and calls are not things to find.
+    static func shown(_ attachments: [Attachment]) -> [Attachment] { attachments.filter { $0.kind != .card && $0.kind != .call } }
+    /// A link's symbol, by the Drive file it opens, or a voice message's; nil for a file, which shows the Finder's icon for its type.
+    static func symbol(_ attachment: Attachment) -> String? {
+        if attachment.kind == .voice { return "waveform" }
+        guard attachment.kind == .link else { return nil }
+        let kind = attachment.contentType + (attachment.url?.path() ?? "")
+        return kind.contains("document") ? "doc.text" : kind.contains("spreadsheet") ? "tablecells"
+            : kind.contains("presentation") ? "rectangle.on.rectangle" : "link"
+    }
+    @ViewBuilder private func item(_ attachment: Attachment) -> some View {
+        if attachment.kind == .image || attachment.kind == .video {
+            Thumbnail(attachment: attachment, load: load).frame(width: Self.thumbnail, height: Self.thumbnail)
+        } else {
+            HStack(spacing: 5) {
+                if let symbol = Self.symbol(attachment) {
+                    Image(systemName: symbol).foregroundStyle(.secondary).frame(width: 16)
+                } else {
+                    Image(nsImage: NSWorkspace.shared.icon(for: attachment.utType ?? .data)).resizable().frame(width: 16, height: 16)
+                }
+                Text(attachment.kind == .voice ? "Voice message" : attachment.name).lineLimit(1).truncationMode(.middle)
+            }
+            .font(.callout).padding(.horizontal, 8).padding(.vertical, 4)
+            .background(.quaternary, in: Capsule())
+            .help(attachment.name)
+        }
+    }
+}
+
+/// Google Chat's search chips: From, Date, Has and Mentions me. A chip in use is tinted and says what it picked.
+struct SearchChips: View {
+    let store: ChatStore
+    @Binding var filters: SearchFilters
+    @State private var pickingPeople = false
+    @State private var pickingConversations = false
+    @State private var pickingDates = false
+    var body: some View {
+        HStack(spacing: 6) {
+            chip(filters.from.isEmpty ? "From" : "From: " + ListFormatter.localizedString(byJoining: filters.from.map(\.name)), on: !filters.from.isEmpty) {
+                pickingPeople = true
+            }
+            .popover(isPresented: $pickingPeople, arrowEdge: .bottom) { PeoplePicker(store: store, picked: $filters.from) }
+            let names = filters.saidIn.compactMap { id in store.conversations.first { $0.id == id }?.name }
+            chip(names.isEmpty ? "Said in" : "Said in: " + ListFormatter.localizedString(byJoining: names), on: !filters.saidIn.isEmpty) {
+                pickingConversations = true
+            }
+            .popover(isPresented: $pickingConversations, arrowEdge: .bottom) { ConversationPicker(store: store, picked: $filters.saidIn) }
+            Menu {
+                Button("Any Time") { filters.after = nil; filters.before = nil }
+                ForEach(SearchFilters.Age.allCases, id: \.self) { age in
+                    Button(age.rawValue) { filters.after = nil; filters.before = age.before(now: .now) }
+                }
+                Button("Custom Range…") { pickingDates = true }
+            } label: { Text(dateTitle) }
+                .menuStyle(.button).buttonStyle(.bordered).controlSize(.small).fixedSize()
+                .tint(filters.after != nil || filters.before != nil ? .accentColor : nil)
+            Menu {
+                ForEach(SearchFilters.Kind.allCases, id: \.self) { kind in
+                    Toggle(kind.rawValue, isOn: Binding(get: { filters.has.contains(kind) }, set: { _ in filters.toggle(kind) }))
+                }
+            } label: { Text(filters.has.isEmpty ? "Has" : "Has: " + SearchFilters.Kind.allCases.filter(filters.has.contains).map(\.rawValue).joined(separator: ", ")) }
+                .menuStyle(.button).buttonStyle(.bordered).controlSize(.small).fixedSize()
+                .tint(filters.has.isEmpty ? nil : .accentColor)
+            chip("Mentions me", on: filters.mentionsMe) { filters.mentionsMe.toggle() }
+            Spacer(minLength: 0)
+            if !filters.isEmpty { Button("Clear") { filters = SearchFilters() }.buttonStyle(.link).controlSize(.small) }
+        }
+        .sheet(isPresented: $pickingDates) {
+            DateRangeSheet { range in
+                pickingDates = false
+                if let range { filters.after = range.lowerBound; filters.before = range.upperBound }
+            }
+        }
+    }
+    private var dateTitle: String {
+        switch (filters.after, filters.before) {
+        case (nil, nil): return "Date"
+        case (nil, let before?):
+            return SearchFilters.Age.allCases.first { abs($0.before(now: .now).timeIntervalSince(before)) < 86_400 }?.rawValue
+                ?? "Before \(before.formatted(date: .abbreviated, time: .omitted))"
+        case (let after?, let before):
+            let end = before.map { $0.addingTimeInterval(-1).formatted(date: .abbreviated, time: .omitted) } ?? "now"
+            return "\(after.formatted(date: .abbreviated, time: .omitted)) – \(end)"
+        }
+    }
+    private func chip(_ title: String, on: Bool, action: @escaping () -> Void) -> some View {
+        Button(title, action: action).buttonStyle(.bordered).controlSize(.small).tint(on ? .accentColor : nil).lineLimit(1)
+    }
+}
+
+/// People to search messages from: me, then anyone found by name.
+private struct PeoplePicker: View {
+    let store: ChatStore
+    @Binding var picked: [Person]
+    @State private var query = ""
+    @State private var found: [Person] = []
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            TextField("Name or email", text: $query).textFieldStyle(.roundedBorder)
+            ForEach([store.me] + found.filter { $0.id != store.me.id }, id: \.id) { person in
+                Toggle(isOn: Binding(get: { picked.contains { $0.id == person.id } }, set: { on in
+                    if on { picked.append(person) } else { picked.removeAll { $0.id == person.id } }
+                })) {
+                    HStack(spacing: 6) {
+                        Avatar(name: person.name, size: 18, url: person.avatarURL)
+                        Text(person.id == store.me.id ? "Me" : person.name).lineLimit(1)
+                    }
+                }.toggleStyle(.checkbox)
+            }
+        }
+        .padding(12).frame(width: 240)
+        .task(id: query) {
+            try? await Task.sleep(for: .milliseconds(250))
+            guard !Task.isCancelled, !query.isEmpty else { found = picked.filter { $0.id != store.me.id }; return }
+            found = (try? await store.searchPeople(query)) ?? []
+        }
+    }
+}
+
+/// Conversations to search in: the picked ones, then the rest by recent activity, narrowed by name.
+private struct ConversationPicker: View {
+    let store: ChatStore
+    @Binding var picked: [ConversationID]
+    @State private var query = ""
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            TextField("Conversation name", text: $query).textFieldStyle(.roundedBorder)
+            ForEach(shown) { room in
+                Toggle(isOn: Binding(get: { picked.contains(room.id) }, set: { on in
+                    if on { picked.append(room.id) } else { picked.removeAll { $0 == room.id } }
+                })) {
+                    HStack(spacing: 6) {
+                        Avatar(name: room.name, space: room.kind == .space, size: 18, url: room.avatarURL, emoji: room.emoji)
+                        Text(room.name).lineLimit(1).truncationMode(.tail)
+                    }
+                }.toggleStyle(.checkbox)
+            }
+        }
+        .padding(12).frame(width: 260)
+    }
+    private var shown: [Conversation] {
+        let matching = store.conversations.filter { query.isEmpty || $0.name.localizedCaseInsensitiveContains(query) }
+            .sorted { ($0.activity ?? .distantPast) > ($1.activity ?? .distantPast) }
+        return Array((matching.filter { picked.contains($0.id) } + matching.filter { !picked.contains($0.id) }).prefix(8))
+    }
+}
+
+/// A custom date range, whole days: the end day counts, as in Google Chat.
+private struct DateRangeSheet: View {
+    let done: (Range<Date>?) -> Void
+    @State private var start = Calendar.current.date(byAdding: .month, value: -1, to: .now) ?? .now
+    @State private var end = Date.now
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Custom Range").font(.headline)
+            DatePicker("From", selection: $start, in: ...end, displayedComponents: .date)
+            DatePicker("To", selection: $end, in: start..., displayedComponents: .date)
+            HStack {
+                Spacer()
+                Button("Cancel", role: .cancel) { done(nil) }.keyboardShortcut(.cancelAction)
+                Button("Apply") {
+                    let calendar = Calendar.current, from = calendar.startOfDay(for: start)
+                    let to = calendar.date(byAdding: .day, value: 1, to: calendar.startOfDay(for: end)) ?? end
+                    done(from..<to)
+                }.keyboardShortcut(.defaultAction)
+            }
+        }
+        .padding(20).frame(width: 300)
     }
 }
 

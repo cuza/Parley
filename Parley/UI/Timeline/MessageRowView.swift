@@ -29,6 +29,8 @@ struct MessageRowActions {
     var delete: (Message) -> Void = { _ in }
     /// Star or unstar (the new state); nil: not offered.
     var star: ((Bool, Message) -> Void)? = nil
+    /// Pin to the board or unpin (the new state); nil: not offered.
+    var pin: ((Bool, Message) -> Void)? = nil
     var markUnread: ((Message) -> Void)? = nil   // Mark as Unread from this message on; nil: not offered
     var report: ((Message) -> Void)? = nil   // Report this message (Workspace); nil: not offered
     /// Names of everyone whose read receipt covers the message, for "Seen by …" on my messages.
@@ -465,6 +467,9 @@ final class MessageRowView: NSTableRowView {
         }
         if message.delivery == .sent, let star = actions.star {
             menu.addItem(ClosureMenuItem(message.starred ? "Unstar" : "Star") { star(!message.starred, message) })
+        }
+        if message.delivery == .sent, !message.isSystem, let pin = actions.pin {
+            menu.addItem(ClosureMenuItem(message.pinned ? "Unpin from Board" : "Pin to Board") { pin(!message.pinned, message) })
         }
         if message.delivery == .sent, let markUnread = actions.markUnread {
             menu.addItem(ClosureMenuItem("Mark as Unread") { markUnread(message) })

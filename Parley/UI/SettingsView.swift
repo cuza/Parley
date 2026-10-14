@@ -80,7 +80,7 @@ struct SettingsView: View {
             switch tab {
             case .general: GeneralSettings(store: store)
             case .appearance: AppearanceSettings()
-            case .notifications: NotificationsSettings()
+            case .notifications: NotificationsSettings(store: store)
             case .advanced: AdvancedSettings(store: store)
             }
         }
@@ -249,8 +249,9 @@ private struct LoginItemSection: View {
     private func read() { on = item.isOn || item.needsApproval; needsApproval = item.needsApproval }
 }
 
-/// Settings ▸ Notifications: on or off, and the sound.
+/// Settings ▸ Notifications: on or off, the sound, and the account's do not disturb schedule.
 private struct NotificationsSettings: View {
+    let store: ChatStore
     @AppStorage(NotificationSettings.enabledKey) private var notify = true
     @AppStorage(NotificationSound.key) private var sound = NotificationSound.standard.stored
     @AppStorage(NotificationSettings.bounceKey) private var bounce = false
@@ -302,7 +303,125 @@ private struct NotificationsSettings: View {
             } footer: {
                 Footer("Once for each notification, while Parley is in the background.")
             }
+            DndScheduleSection(store: store)
         }
+    }
+}
+
+/// The do not disturb schedule, as web Chat's settings list it: each period with its own switch, Edit, and Add.
+private struct DndScheduleSection: View {
+    let store: ChatStore
+    @State private var editing: Int?   // an index into the periods; the count adds one
+    var body: some View {
+        Section {
+            if let schedules = store.dndSchedules {
+                ForEach(schedules.periods.indices, id: \.self) { index in
+                    let period = schedules.periods[index]
+                    HStack {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(DndScheduleEditor.times(period))
+                            Text(period.dayList()).font(.caption).foregroundStyle(.secondary)
+                        }
+                        Spacer()
+                        Button("Edit…") { editing = index }
+                        Toggle(DndScheduleEditor.times(period), isOn: Binding(get: { period.enabled }, set: { on in
+                            var changed = schedules; changed.periods[index].enabled = on
+                            Task { await store.saveDndSchedules(changed) }
+                        })).labelsHidden().toggleStyle(.switch)
+                    }
+                }
+                Button("Add Schedule…") { editing = schedules.periods.count }.disabled(schedules.periods.count >= DndSchedules.limit)
+                Toggle("Follow the Mac's time zone", isOn: Binding(get: { schedules.followsTimeZone }, set: { on in
+                    var changed = schedules; changed.followsTimeZone = on
+                    Task { await store.saveDndSchedules(changed) }
+                }))
+            } else {
+                ProgressView().controlSize(.small).frame(maxWidth: .infinity)
+            }
+        } header: {
+            Text("Do not disturb schedule")
+        } footer: {
+            let zone = (TimeZone(identifier: store.dndSchedules?.timeZone ?? "") ?? .current).localizedName(for: .generic, locale: .current)
+            Footer("Do not disturb turns on by itself at these times, in Parley, on the web and on your phone. Times are in \(zone ?? "your time zone").")
+        }
+        .task { if store.dndSchedules == nil { await store.loadDndSchedules() } }
+        .sheet(item: Binding(get: { editing.map(EditingIndex.init) }, set: { editing = $0?.index })) { item in
+            if let schedules = store.dndSchedules {
+                DndScheduleEditor(period: item.index < schedules.periods.count ? schedules.periods[item.index] : nil) { result in
+                    editing = nil
+                    var changed = schedules
+                    switch result {
+                    case .save(let period) where item.index < changed.periods.count: changed.periods[item.index] = period
+                    case .save(let period): changed.periods.append(period)
+                    case .delete: changed.periods.remove(at: item.index)
+                    case .cancel: return
+                    }
+                    Task { await store.saveDndSchedules(changed) }
+                }
+            }
+        }
+    }
+    private struct EditingIndex: Identifiable { let index: Int; var id: Int { index } }
+}
+
+/// One do not disturb period: its times, or all day, and its days.
+struct DndScheduleEditor: View {
+    enum Result { case save(DndSchedules.Period), delete, cancel }
+    let isNew: Bool
+    let done: (Result) -> Void
+    @State private var period: DndSchedules.Period
+    init(period: DndSchedules.Period?, done: @escaping (Result) -> Void) {
+        isNew = period == nil
+        self.done = done
+        // A new one starts as web Chat's: weeknights, 6 PM to 9 AM.
+        _period = State(initialValue: period ?? .init(days: [1, 2, 3, 4, 5], start: 18 * 60, end: 9 * 60))
+    }
+    /// "7:00 PM – 7:00 AM", or "All day".
+    static func times(_ period: DndSchedules.Period) -> String {
+        period.isAllDay ? "All day" : "\(clock(period.start)) – \(clock(period.end))"
+    }
+    private static func clock(_ minutes: Int) -> String { date(minutes).formatted(date: .omitted, time: .shortened) }
+    private static func date(_ minutes: Int) -> Date { Calendar.current.date(bySettingHour: minutes / 60, minute: minutes % 60, second: 0, of: .now) ?? .now }
+    private static func minutes(_ date: Date) -> Int { let c = Calendar.current.dateComponents([.hour, .minute], from: date); return (c.hour ?? 0) * 60 + (c.minute ?? 0) }
+    private func time(_ keyPath: WritableKeyPath<DndSchedules.Period, Int>) -> Binding<Date> {
+        Binding(get: { Self.date(period[keyPath: keyPath]) }, set: { period[keyPath: keyPath] = Self.minutes($0) })
+    }
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            Text(isNew ? "Add Schedule" : "Edit Schedule").font(.headline)
+            Toggle("All day", isOn: Binding(get: { period.isAllDay }, set: { allDay in
+                if allDay { period.start = 0; period.end = 0 } else { period.start = 18 * 60; period.end = 9 * 60 }
+            }))
+            if !period.isAllDay {
+                Grid(alignment: .leading) {
+                    GridRow {
+                        Text("From").gridColumnAlignment(.trailing)
+                        DatePicker("From", selection: time(\.start), displayedComponents: .hourAndMinute).labelsHidden()
+                    }
+                    GridRow {
+                        Text("To")
+                        DatePicker("To", selection: time(\.end), displayedComponents: .hourAndMinute).labelsHidden()
+                    }
+                }
+            }
+            HStack(spacing: 4) {   // the week in the order it starts here
+                let calendar = Calendar.current
+                ForEach((0..<7).map { (calendar.firstWeekday - 1 + $0) % 7 }, id: \.self) { index in
+                    let day = index == 0 ? 7 : index
+                    Toggle(calendar.veryShortWeekdaySymbols[index], isOn: Binding(get: { period.days.contains(day) }, set: { on in
+                        if on { period.days.append(day) } else { period.days.removeAll { $0 == day } }
+                    }))
+                    .toggleStyle(.button).help(calendar.weekdaySymbols[index])
+                }
+            }
+            HStack {
+                if !isNew { Button("Delete", role: .destructive) { done(.delete) } }
+                Spacer()
+                Button("Cancel", role: .cancel) { done(.cancel) }.keyboardShortcut(.cancelAction)
+                Button("Save") { done(.save(period)) }.keyboardShortcut(.defaultAction).disabled(period.days.isEmpty)
+            }
+        }
+        .padding(20).frame(width: 320)
     }
 }
 

@@ -473,7 +473,7 @@ extension AuthTests {
     /// Search in one conversation: the filter's scope names its group, with the relevance sort Google requires alongside it.
     @Test func searchInAConversationScopesTheFilterAndSorts() async throws {
         let (backend, exchange) = try await Self.connected([try Self.proto(Dynamite_SearchMessagesV2Response())])
-        _ = try await backend.searchMessages("hello", in: "space/s9", cursor: nil)
+        _ = try await backend.searchMessages("hello", filters: SearchFilters(saidIn: ["space/s9"]), cursor: nil)
         let sent = try Dynamite_SearchMessagesV2Request(serializedBytes: Self.body(try #require(exchange.requests.last)))
         #expect(sent.filter.scope.conversations.map(\.groupID.spaceID.spaceID) == ["s9"] && sent.filter.scope.conversations[0].kind == 1)
         #expect(sent.sort.operator == .relevance && sent.query == "hello")
@@ -680,7 +680,7 @@ extension AuthTests {
     }
     @Test func aSendersFirstLiveMessageRefreshesTheirProfile() async throws {
         let anonymous = Dynamite_GetMembersResponse.with { $0.memberProfiles = [.with { $0.member.user.userID.id = "u2"; $0.member.user.name = "Anonymous User" }] }
-        let named = Dynamite_GetMembersResponse.with { $0.memberProfiles = [.with { $0.member.user.userID.id = "u2"; $0.member.user.name = "Dariel" }] }
+        let named = Dynamite_GetMembersResponse.with { $0.memberProfiles = [.with { $0.member.user.userID.id = "u2"; $0.member.user.name = "Maria" }] }
         let listed = Dynamite_ListReactorsResponse.with { $0.reactors = [.with { $0.id = "u2" }] }
         let (backend, exchange) = try await Self.connected([try Self.proto(listed), try Self.proto(anonymous), try Self.proto(named)])
         _ = try await backend.reactors(of: "space/s/t1/m1", emoji: "👍", custom: nil)   // u2 known, as the placeholder
@@ -688,7 +688,7 @@ extension AuthTests {
         await backend.handle(Self.pushedDM(Self.message("m3", topic: "m3", at: 6, by: "u2")))
         let events = await Self.drain(backend)
         #expect(events.contains(.resync))
-        #expect(Self.upserts(events).map(\.sender.name) == ["Dariel", "Dariel"])
+        #expect(Self.upserts(events).map(\.sender.name) == ["Maria", "Maria"])
         #expect(exchange.requests.filter { $0.url?.path == "/api/get_members" }.count == 3)   // connect, the reactors, one re-read: not per message
     }
 }

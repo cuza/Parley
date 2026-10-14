@@ -263,7 +263,14 @@ message RoomUpdatedMetadata {                         // purple's name(2) is gon
   optional RoomRenameMetadata rename_metadata = 6;
   optional GroupDetailsUpdatedMetadata group_details_metadata = 7;
   optional int32 initiator_type = 8;                  // enum; 2 = an admin (named nowhere), 1 = a member
+  optional BoardUpdate board_update = 9;              // something pinned to the conversation's board
 }
+message BoardUpdate {
+  optional int32 action = 1;                          // 1 pinned, as Google Chat sends it; unpinning posts no line
+  optional int32 kind = 2;                            // 1 a message
+  optional BoardItem item = 3;
+}
+message BoardItem { optional MessageId message_id = 1; }
 message QuotedMessageMetadata {
   optional MessageId message_id = 1;
   enum MessageState { MESSAGE_STATE_UNSPECIFIED = 0; ACTIVE = 1; DELETED = 2; OTR_EDITED = 3; }
@@ -314,11 +321,28 @@ message MessageLabel {
               REACTED_TO_ME = 5; MENTIONED_ALL = 6; MEETING_RECAP = 7; SYSTEM_MESSAGE = 8; UNREAD = 9; }
   optional Type type = 1;
   optional string secondary_key = 2;
+  optional int64 position = 3;                        // Google Chat sends 0 when it pins
 }
 message MessageLabelRequest {                         // apply_message_label and remove_message_label
   optional MessageId message_id = 1;
   optional MessageLabel label = 2;
   optional RequestHeader request_header = 100;
+}
+// The conversation's board, as Google Chat's Board panel asks for it: pinned messages, then pinned files and links.
+message GetChatBoardRequest {
+  message Options {
+    message Messages { optional int32 a = 1; optional int32 b = 2; optional bool c = 3; }   // sent as 5, 2, true
+    message Resources { optional int32 a = 1; optional bool b = 2; }                        // sent as 3, true
+    optional Messages messages = 4;
+    optional Resources resources = 5;
+  }
+  optional GroupId group_id = 1;
+  optional Options options = 3;
+  optional RequestHeader request_header = 100;
+}
+message GetChatBoardResponse {
+  message Pinned { repeated Message messages = 1; }
+  optional Pinned pinned = 4;                         // the board's sections (1) and resources are not used
 }
 message ApplyMessageLabelResponse {}                  // the revision (1) and the labels now on the message (2) are not used
 message RemoveMessageLabelResponse {}
@@ -539,6 +563,32 @@ message GetSelfUserStatusResponse { optional UserStatus user_status = 1; }
 message SetDndDurationRequest {
   optional int64 duration_usec = 1;                   // the server turns DND on; no state needed
   optional RequestHeader request_header = 100;
+}
+// Do not disturb schedules: recurring quiet periods that turn DND on by themselves (get_recurring_dnd, set_recurring_dnd).
+message DndSchedule {
+  repeated int32 days = 2 [packed = true];            // 1 Monday … 7 Sunday
+  optional int32 start = 3;                           // minutes after midnight, in `time_zone`; start = end is all day
+  optional int32 end = 4;
+  optional bool enabled = 5;                          // each schedule has its own switch
+}
+message RecurringDnd {
+  repeated DndSchedule schedules = 1;
+  optional bool updates_on_time_zone_change = 2;      // the schedules follow the Mac's time zone when it changes
+  optional string time_zone = 3;                      // an IANA identifier
+}
+message GetRecurringDndRequest {
+  optional string time_zone = 1;                      // required: without it Google answers 500
+  optional RequestHeader request_header = 100;
+}
+message GetRecurringDndResponse { optional RecurringDnd recurring_dnd = 1; }   // the last update time (2) is not used
+message SetRecurringDndRequest {
+  optional RecurringDnd recurring_dnd = 1;            // the whole set, replacing the old one
+  optional int32 field2 = 2;                          // 0, as Google Chat sends it
+  optional RequestHeader request_header = 100;
+}
+message SetRecurringDndResponse {
+  optional UserStatus user_status = 1;                // a schedule switched on now turns DND on at once
+  optional RecurringDnd recurring_dnd = 2;
 }
 message SetPresenceSharedRequest {
   optional bool presence_shared = 1;                  // true: automatic, false: away
@@ -937,8 +987,16 @@ message ListReactorsRequest {                       // who reacted with one emoj
 }
 message ListReactorsResponse { repeated UserId reactors = 1; }   // revision(3), a Revision{timestampMicros}, not used
 message SearchFilter {
+  repeated UserId senders = 2;                     // "From": any of these people
+  optional SearchDates dates = 4;
+  repeated SearchHas has = 5;                      // "Has": any of these kinds
+  repeated SearchMentions mentions = 6;            // "Mentions me": my own id
+  optional bool has_link = 7;
   optional SearchScope scope = 8;                  // needs a sort: without one Google answers 400
 }
+message SearchDates { optional int64 start_usec = 1; optional int64 end_usec = 2; }   // µs; either may be left out
+message SearchHas { optional Annotation.Type type = 1; }   // DRIVE_FILE (any file), DRIVE_DOC/SHEET/SLIDE, VIDEO, IMAGE, PDF
+message SearchMentions { repeated UserId users = 1; }
 message SearchScope {
   repeated SearchConversation conversations = 4;   // "said in": the conversations to search
 }
@@ -1206,9 +1264,20 @@ message UnsentMessage {
   optional string text_body = 4;
   repeated Annotation annotations = 5;
   optional Type type = 7;              // sent on create only
-  optional string mutation_id = 9;     // a new uppercase UUID per write
+  optional ScheduledSend scheduled_send = 8;   // a SCHEDULED message's send time
+  optional string mutation_id = 9;     // a new uppercase UUID per write; Google Chat sends "" when it schedules
 }
-message FieldMask { repeated int32 fields = 2 [packed = true]; }   // UnsentMessage field numbers
+message ScheduledSend {
+  enum State { STATE_UNSPECIFIED = 0; SCHEDULED = 1; FAILED = 2; }
+  optional Timestamp send_time = 1;    // whole seconds
+  optional State state = 2;            // set by the server
+}
+// UnsentMessage field numbers: `fields` lists whole fields; a path names a message field and which of its fields.
+message FieldMask {
+  message Path { optional int32 field = 1; optional FieldMask sub = 2; }
+  repeated Path paths = 1;
+  repeated int32 fields = 2 [packed = true];
+}
 message CreateUnsentMessageRequest {
   optional RequestHeader request_header = 1;
   optional UnsentMessage unsent_message = 2;
