@@ -4,9 +4,10 @@ import SwiftUI
 /// (and not already picked for a group DM), then directory spaces not in the sidebar.
 struct PaletteResults {
     enum Item: Hashable, Identifiable {
-        case conversation(Conversation), person(Person), space(SpaceListing)
+        case conversation(Conversation), person(Person), space(SpaceListing), link(URL)
         var id: String {
             switch self {
+            case .link(let url): "l:" + url.absoluteString
             case .conversation(let room): "c:" + room.id
             case .person(let person): "p:" + person.id
             case .space(let space): "s:" + space.id
@@ -15,18 +16,26 @@ struct PaletteResults {
     }
     let conversations: [Conversation]
     let people: [Person]
+    let invitations: [SpaceListing]   // spaces someone invited me to, shown before people
+    let link: URL?   // a pasted Google Chat link, offered first
     let spaces: [SpaceListing]
     init(query: String, conversations: [Conversation], people: [Person], spaces: [SpaceListing], picked: [Person]) {
         let query = query.trimmingCharacters(in: .whitespaces)
+        link = URL(string: query).flatMap { ChatLink($0) == nil ? nil : $0 }
         func matches(_ text: String?) -> Bool { query.isEmpty || text?.localizedCaseInsensitiveContains(query) == true }
         self.conversations = conversations.filter { matches($0.name) }
         let listedDMs = Set(self.conversations.filter { $0.kind == .direct }.flatMap(\.members).map(\.id))
         let pickedIDs = Set(picked.map(\.id))
         self.people = people.filter { !listedDMs.contains($0.id) && !pickedIDs.contains($0.id) && (matches($0.name) || matches($0.email)) }
         let inSidebar = Set(conversations.map(\.id))
-        self.spaces = spaces.filter { !$0.joined && !inSidebar.contains($0.id) && matches($0.name) }
+        let open = spaces.filter { !$0.joined && !inSidebar.contains($0.id) && matches($0.name) }
+        // Invitations get their own section above people, so the sidebar's invitation row opens onto them.
+        invitations = open.filter(\.invited)
+        self.spaces = open.filter { !$0.invited }
     }
-    var items: [Item] { conversations.map(Item.conversation) + people.map(Item.person) + spaces.map(Item.space) }
+    var items: [Item] {
+        (link.map { [Item.link($0)] } ?? []) + conversations.map(Item.conversation) + invitations.map(Item.space) + people.map(Item.person) + spaces.map(Item.space)
+    }
 }
 
 /// ⌘K jumps to a conversation, or finds someone to message or a space to join. `newChat` (⌘N, the sidebar's
@@ -47,6 +56,19 @@ struct ConversationPalette: View {
     private var results: PaletteResults {
         PaletteResults(query: query, conversations: newChat && query.isEmpty ? [] : store.conversations, people: people, spaces: spaces, picked: picked)
     }
+    private func spaceRow(_ space: SpaceListing) -> some View {
+        row(.space(space)) {
+            Avatar(name: space.name, space: true, size: 22, url: space.avatarURL, emoji: space.emoji)
+            VStack(alignment: .leading, spacing: 1) {
+                Text(space.name).lineLimit(1)
+                if let detail = SpaceListing.detail(space) {
+                    Text(detail).font(.caption).foregroundStyle(space.invited ? Color.accentColor : .secondary)
+                }
+            }
+            Spacer(minLength: 0)
+            Text("Join").font(.caption.weight(.semibold)).foregroundStyle(Color.accentColor)
+        }
+    }
     var body: some View {
         VStack(spacing: 0) {
             HStack(spacing: 6) {
@@ -66,6 +88,14 @@ struct ConversationPalette: View {
             Divider()
             List(selection: $selected) {
                 let results = results
+                if let link = results.link {
+                    Section("Link") {
+                        row(.link(link)) {
+                            Image(systemName: "link").frame(width: 22)
+                            Text(Self.linkTitle(link, in: store.conversations)).lineLimit(1)
+                        }
+                    }
+                }
                 if !results.conversations.isEmpty {
                     Section("Conversations") {
                         ForEach(results.conversations) { room in
@@ -75,6 +105,9 @@ struct ConversationPalette: View {
                             }
                         }
                     }
+                }
+                if !results.invitations.isEmpty {
+                    Section("Invitations") { ForEach(results.invitations) { spaceRow($0) } }
                 }
                 if !results.people.isEmpty {
                     Section("People") {
@@ -93,19 +126,7 @@ struct ConversationPalette: View {
                     }
                 }
                 if !results.spaces.isEmpty {
-                    Section(newChat ? "Browse spaces" : "Spaces") {
-                        ForEach(results.spaces) { space in
-                            row(.space(space)) {
-                                Avatar(name: space.name, space: true, size: 22, url: space.avatarURL, emoji: space.emoji)
-                                VStack(alignment: .leading, spacing: 1) {
-                                    Text(space.name).lineLimit(1)
-                                    if let count = space.memberCount { Text("\(count) members").font(.caption).foregroundStyle(.secondary) }
-                                }
-                                Spacer(minLength: 0)
-                                Text("Join").font(.caption.weight(.semibold)).foregroundStyle(Color.accentColor)
-                            }
-                        }
-                    }
+                    Section(newChat ? "Browse spaces" : "Spaces") { ForEach(results.spaces) { spaceRow($0) } }
                 }
             }.frame(height: 320)
             if let problem {
@@ -116,6 +137,7 @@ struct ConversationPalette: View {
                 Text(picked.isEmpty ? "↑↓ to choose · Return to open · ⌘Return to add someone" : "⌘Return to add someone · Return to message the group")
                     .font(.caption).foregroundStyle(.secondary)
                 Spacer()
+                if newChat { Button("New Space…") { dismiss(); store.newSpaceRequests += 1 } }
                 Button("Close") { dismiss() }.keyboardShortcut(.cancelAction)
                 Button(picked.isEmpty ? "Open" : "Message \(picked.count == 1 ? picked[0].name : "\(picked.count) people")") { choose() }
                     .keyboardShortcut(.defaultAction).disabled(working)
@@ -127,6 +149,7 @@ struct ConversationPalette: View {
                 let text = query.trimmingCharacters(in: .whitespaces)
                 guard newChat || !text.isEmpty else { people = []; spaces = []; selected = results.items.first?.id; return }
                 selected = results.items.first?.id
+                guard results.link == nil else { return }   // a pasted link isn't a name to search for
                 try? await Task.sleep(for: .milliseconds(250))   // one search per pause in typing, not per keystroke
                 guard !Task.isCancelled else { return }
                 searching = true
@@ -164,6 +187,11 @@ struct ConversationPalette: View {
             catch { problem = error.localizedDescription }
         }
     }
+    /// "Open Design studio" for a link to a listed conversation, else "Open link".
+    static func linkTitle(_ url: URL, in conversations: [Conversation]) -> String {
+        let ids = ChatLink(url)?.conversations ?? []
+        return conversations.first { ids.contains($0.id) }.map { "Open \($0.name)" } ?? "Open link"
+    }
     /// Opens the pick and closes the palette. A listed conversation closes it at once: its timeline shows straight away,
     /// and its newest page, read mark and watch load behind. A new DM or a join closes it once the server has made it.
     static func open(_ item: PaletteResults.Item?, picked: [Person], store: ChatStore, then: ((ConversationID) -> Void)?,
@@ -176,6 +204,10 @@ struct ConversationPalette: View {
             await store.select(room.id)
             return
         case .space(let space)?: try await store.join(space)
+        case .link(let url)?:
+            close()
+            await store.open(url: url)
+            return
         case nil: return
         }
         if let then, let id = store.selectedID { then(id) }

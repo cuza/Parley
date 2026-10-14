@@ -148,6 +148,17 @@ import Testing
         let (own, _) = row(own: true)
         #expect(own.contextMenu().items.dropFirst().filter { !$0.isSeparatorItem }.map(\.title) == ["Reply", "Reply in Thread", "Copy", "Edit", "Delete"])
     }
+    @Test func markAsUnreadIsOfferedAndMarksFromThisMessage() throws {
+        var marked: [MessageID] = []
+        let view = MessageRowView()
+        let message = Message(id: "m", conversationID: "c", sender: Person(id: "a", name: "X"), text: "hi")
+        var actions = MessageRowActions()
+        actions.markUnread = { marked.append($0.id) }
+        view.configure(TimelineRow.rows([message])[0], own: false, kind: .space, meID: "me", actions: actions)
+        let item = try #require(view.contextMenu().items.first { $0.title == "Mark as Unread" })
+        item.target.map { _ = ($0 as AnyObject).perform(item.action, with: item) }
+        #expect(marked == ["m"])
+    }
     @Test func replyQuotesAndReplyInThreadOpensTheThread() throws {
         let (view, calls) = row(own: false)
         for title in ["Reply", "Reply in Thread"] {
@@ -155,6 +166,18 @@ import Testing
             item.target.map { _ = ($0 as AnyObject).perform(item.action, with: item) }
         }
         #expect(calls() == ["quote", "thread"])
+    }
+    /// A deleted message offers nothing, as on the web: no menu to quote, react to or forward it.
+    @Test func aDeletedMessageHasNoMenu() throws {
+        let view = MessageRowView()
+        var gone = Message(id: "m", conversationID: "c", sender: Person(id: "a", name: "X"), text: "Message deleted")
+        gone.tombstone = true
+        view.configure(TimelineRow.rows([gone])[0], own: false, kind: .space, meID: "me", actions: MessageRowActions())
+        let event = try #require(NSEvent.mouseEvent(with: .rightMouseDown, location: .zero, modifierFlags: [], timestamp: 0,
+                                                    windowNumber: 0, context: nil, eventNumber: 0, clickCount: 1, pressure: 1))
+        #expect(view.menu(for: event) == nil && view.emojiPopover() == nil)
+        let textMenu = view.textView.menu(for: event)?.items.map(\.title) ?? []   // the system's text menu at most
+        #expect(!textMenu.contains("Reply") && !textMenu.contains("Forward…"))
     }
     @Test func theTextMenuIsTheSameMenu() throws {
         let (view, _) = row(own: true)

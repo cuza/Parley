@@ -48,6 +48,9 @@ struct PunctualWireTests {
                 == [.change(watch: 1, payload: try event.serializedBytes())])
         #expect(PunctualWire.updates(#"[[["1",null,[[14,null,"busy"]]]]]"#) == [.failed(watch: 1, code: 14)])
         #expect(PunctualWire.updates(#"[null,[1]]"#) == [.close])
+        // A resume point older than Google keeps (about 20 to 30 minutes): the stream ends, then completes with no error.
+        #expect(PunctualWire.updates(#"[[["1",[null,null,null,null,[[1]]]]]]"#) == [.ended(watch: 1)])
+        #expect(PunctualWire.updates(#"[[["1",null,[[]]]]]"#) == [])
     }
 }
 
@@ -95,5 +98,69 @@ extension AuthTests {
         let poll = requests[3]
         #expect(poll.httpMethod == "GET")
         #expect(poll.url?.query?.contains("SID=SID1") == true)
+    }
+
+    /// Google sends each change on the user stream twice, byte for byte; Parley applies it once.
+    @Test(.timeLimit(.minutes(1))) func aRepeatedChangeIsAppliedOnce() async throws {
+        let vault = MemoryVault()
+        let cookies = [SessionCookie(name: "SID", value: "s", domain: ".google.com", path: "/", secure: true, expires: -1),
+                       SessionCookie(name: "SAPISID", value: "abc", domain: ".google.com", path: "/", secure: true, expires: -1)]
+        vault.write(try JSONEncoder().encode(WebCredentials(cookies: cookies, userAgent: "TestAgent/1")))
+        let first = (try Dynamite_Event.with { $0.groupRevision.timestamp = 42 }.serializedBytes() as Data).base64EncodedString()
+        let second = (try Dynamite_Event.with { $0.groupRevision.timestamp = 43 }.serializedBytes() as Data).base64EncodedString()
+        func change(_ aid: Int, _ base64: String, _ version: String) -> String {
+            #"[\#(aid),[[[["1",[null,[[[null,"\#(base64)","\#(version)"]]]]]]]]]"#
+        }
+        let stream = Self.frame(#"[[1,[[[["1",[["100"]]]]]]]]"#) + Self.frame("[" + change(2, first, "9") + "]")
+            + Self.frame("[" + change(3, first, "8") + "]") + Self.frame("[" + change(4, second, "10") + "]")
+        let exchange = StubExchange([Self.bootstrap, .init(data: Data(#"["G1",1,null,"10","20"]"#.utf8)),
+                                     .init(data: Data(Self.frame(#"[[0,["c","SID1","",8,15,30000]]]"#).utf8)),
+                                     .init(data: Data(stream.utf8))])
+        let auth = WebSessionAuthorizer(vault: vault, session: AuthStubProtocol.session(exchange))
+        let (received, sink) = AsyncStream<Dynamite_Event>.makeStream()
+        let channel = PunctualChannel(authorizer: auth, onEvent: { sink.yield($0) }, onState: { _ in })
+        let run = Task { await channel.run() }
+        var events = received.makeAsyncIterator()
+        _ = await events.next()   // session ready
+        let a = await events.next(), b = await events.next()
+        run.cancel(); await run.value
+        #expect(a?.groupRevision.timestamp == 42)
+        #expect(b?.groupRevision.timestamp == 43)
+    }
+
+    /// After a long sleep the saved resume point is too old: Google ends the user stream instead of starting it. Parley
+    /// has to drop that point and ask for a fresh stream, or it resumes from it on every reconnect and never connects.
+    @Test(.timeLimit(.minutes(1))) func anEndedUserStreamReopensFresh() async throws {
+        let vault = MemoryVault()
+        let cookies = [SessionCookie(name: "SID", value: "s", domain: ".google.com", path: "/", secure: true, expires: -1),
+                       SessionCookie(name: "SAPISID", value: "abc", domain: ".google.com", path: "/", secure: true, expires: -1)]
+        vault.write(try JSONEncoder().encode(WebCredentials(cookies: cookies, userAgent: "TestAgent/1")))
+        let choose = StubExchange.Reply(data: Data(#"["G1",1,null,"10","20"]"#.utf8))
+        let handshake = StubExchange.Reply(data: Data(Self.frame(#"[[0,["c","SID1","",8,15,30000]]]"#).utf8))
+        let live = Self.frame(#"[[1,[[[["1",[["100"]]]]]]],[2,[[[["1",[null,null,["300"]]]]]]],[3,["stop"]]]"#)
+        let ended = Self.frame(#"[[4,[[[["1",[null,null,null,null,[[1]]]]]]]],[5,[[[["1",null,[[]]]]]]]]"#)
+        let fresh = Self.frame(#"[[6,[[[["1",[["500"]]]]]]]]"#)
+        let exchange = StubExchange([Self.bootstrap, choose, handshake, .init(data: Data(live.utf8)),
+                                     Self.bootstrap, choose, handshake, .init(data: Data(ended.utf8)),
+                                     Self.bootstrap, choose, handshake, .init(data: Data(fresh.utf8))])
+        let auth = WebSessionAuthorizer(vault: vault, session: AuthStubProtocol.session(exchange))
+        let (gaps, gapSink) = AsyncStream<Void>.makeStream()
+        let channel = PunctualChannel(authorizer: auth, config: .init(backoff: { _ in .zero }), onEvent: { _ in }, onState: { _ in },
+                                      onGap: { gapSink.yield() })
+        let run = Task { await channel.run() }
+        func opens() -> [String] {
+            exchange.requests.filter { $0.httpMethod == "POST" && $0.url?.path.hasSuffix("multi-watch/channel") == true }
+                .map { String(decoding: Self.body($0), as: UTF8.self).removingPercentEncoding ?? "" }
+        }
+        let deadline = ContinuousClock.now + .seconds(5)
+        while opens().count < 3, ContinuousClock.now < deadline { try await Task.sleep(for: .milliseconds(10)) }
+        var gapIterator = gaps.makeAsyncIterator()
+        _ = await gapIterator.next()   // the fresh stream started: what came during the gap is gone, so reload
+        run.cancel(); await run.value
+        let sent = opens()
+        try #require(sent.count >= 3)
+        #expect(sent[1].contains("[300,"))                  // the reconnect resumes from the watermark
+        #expect(sent[2].contains("[1791432459227491,"))     // after the stream ended: the registration's start
+        #expect(!sent[2].contains("[300,"))
     }
 }

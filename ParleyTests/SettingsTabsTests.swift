@@ -39,7 +39,8 @@ import Testing
             let host = hosted(tab, store)
             let size = host.fittingSize
             #expect(abs(size.width - SettingsTab.width) < 0.5, "\(tab) width \(size.width)")
-            #expect(size.height > 80 && size.height <= 640, "\(tab) height \(size.height)")
+            // Each tab's window is as tall as its content: it must still fit the smallest Mac screen (about 830 pt usable).
+            #expect(size.height > 80 && size.height <= 700, "\(tab) height \(size.height)")
             host.setFrameSize(size)
             host.layoutSubtreeIfNeeded()
             // The grouped form's own scroll view spans the page and shows everything: nothing hides below the window.

@@ -41,6 +41,18 @@ nonisolated enum Dynamite_DndState: Int, SwiftProtobuf.Enum, Swift.CaseIterable 
 
 }
 
+nonisolated enum Dynamite_MemberRole: Int, SwiftProtobuf.Enum, Swift.CaseIterable {
+  case unknown = 0
+  case member = 3
+  case owner = 4
+  case manager = 6
+
+  init() {
+    self = .unknown
+  }
+
+}
+
 /// --- Typing, presence and read receipts ---
 nonisolated enum Dynamite_TypingState: Int, SwiftProtobuf.Enum, Swift.CaseIterable {
   case unspecified = 0
@@ -2238,6 +2250,26 @@ nonisolated struct Dynamite_QuotedMessageMetadata: @unchecked Sendable {
   /// Clears the value of `messageID`. Subsequent reads from it will return its default value.
   mutating func clearMessageID() {_uniqueStorage()._messageID = nil}
 
+  /// the quoted original's state now
+  var messageState: Dynamite_QuotedMessageMetadata.MessageState {
+    get {_storage._messageState ?? .unspecified}
+    set {_uniqueStorage()._messageState = newValue}
+  }
+  /// Returns true if `messageState` has been explicitly set.
+  var hasMessageState: Bool {_storage._messageState != nil}
+  /// Clears the value of `messageState`. Subsequent reads from it will return its default value.
+  mutating func clearMessageState() {_uniqueStorage()._messageState = nil}
+
+  /// the quoted original's history setting
+  var retentionSettings: Dynamite_RetentionSettings {
+    get {_storage._retentionSettings ?? Dynamite_RetentionSettings()}
+    set {_uniqueStorage()._retentionSettings = newValue}
+  }
+  /// Returns true if `retentionSettings` has been explicitly set.
+  var hasRetentionSettings: Bool {_storage._retentionSettings != nil}
+  /// Clears the value of `retentionSettings`. Subsequent reads from it will return its default value.
+  mutating func clearRetentionSettings() {_uniqueStorage()._retentionSettings = nil}
+
   /// µs: what a QuotedMessageRef's last_update_time sends back
   var lastUpdateTimeWhenQuoted: Int64 {
     get {_storage._lastUpdateTimeWhenQuoted ?? 0}
@@ -2292,6 +2324,18 @@ nonisolated struct Dynamite_QuotedMessageMetadata: @unchecked Sendable {
   mutating func clearGroup() {_uniqueStorage()._group = nil}
 
   var unknownFields = SwiftProtobuf.UnknownStorage()
+
+  nonisolated enum MessageState: Int, SwiftProtobuf.Enum, Swift.CaseIterable {
+    case unspecified = 0
+    case active = 1
+    case deleted = 2
+    case otrEdited = 3
+
+    init() {
+      self = .unspecified
+    }
+
+  }
 
   init() {}
 
@@ -2729,11 +2773,35 @@ nonisolated struct Dynamite_ReplySummary: Sendable {
   /// Clears the value of `totalReplyCount`. Subsequent reads from it will return its default value.
   mutating func clearTotalReplyCount() {self._totalReplyCount = nil}
 
+  var unreadReplyCount: Int64 {
+    get {_unreadReplyCount ?? 0}
+    set {_unreadReplyCount = newValue}
+  }
+  /// Returns true if `unreadReplyCount` has been explicitly set.
+  var hasUnreadReplyCount: Bool {self._unreadReplyCount != nil}
+  /// Clears the value of `unreadReplyCount`. Subsequent reads from it will return its default value.
+  mutating func clearUnreadReplyCount() {self._unreadReplyCount = nil}
+
+  /// what the unread replies mention
+  var unreadAttributes: [Dynamite_ReplySummary.UnreadAttribute] = []
+
   var unknownFields = SwiftProtobuf.UnknownStorage()
+
+  nonisolated enum UnreadAttribute: Int, SwiftProtobuf.Enum, Swift.CaseIterable {
+    case unspecified = 0
+    case userMentioned = 1
+    case allMentioned = 2
+
+    init() {
+      self = .unspecified
+    }
+
+  }
 
   init() {}
 
   fileprivate var _totalReplyCount: Int64? = nil
+  fileprivate var _unreadReplyCount: Int64? = nil
 }
 
 /// only sent with fetch option TOPIC_METADATA (and on Home's thread items)
@@ -2882,6 +2950,9 @@ nonisolated struct Dynamite_GroupReadState: Sendable {
   var hasLastReadTime: Bool {self._lastReadTime != nil}
   /// Clears the value of `lastReadTime`. Subsequent reads from it will return its default value.
   mutating func clearLastReadTime() {self._lastReadTime = nil}
+
+  /// my labels on the conversation: {4, key} puts it in that custom section
+  var labels: [Dynamite_GroupAttribute] = []
 
   /// (purple) absent today; kept for older servers
   var unreadMessageCount: Int64 {
@@ -3190,6 +3261,16 @@ nonisolated struct Dynamite_WorldItemLite: @unchecked Sendable {
     // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
     // methods supported on all messages.
 
+    /// history on or off
+    var retention: Dynamite_RetentionSettings {
+      get {_retention ?? Dynamite_RetentionSettings()}
+      set {_retention = newValue}
+    }
+    /// Returns true if `retention` has been explicitly set.
+    var hasRetention: Bool {self._retention != nil}
+    /// Clears the value of `retention`. Subsequent reads from it will return its default value.
+    mutating func clearRetention() {self._retention = nil}
+
     /// a space's description and guidelines
     var spaceDetails: Dynamite_GroupDetails {
       get {_spaceDetails ?? Dynamite_GroupDetails()}
@@ -3204,6 +3285,7 @@ nonisolated struct Dynamite_WorldItemLite: @unchecked Sendable {
 
     init() {}
 
+    fileprivate var _retention: Dynamite_RetentionSettings? = nil
     fileprivate var _spaceDetails: Dynamite_GroupDetails? = nil
   }
 
@@ -3212,12 +3294,13 @@ nonisolated struct Dynamite_WorldItemLite: @unchecked Sendable {
   fileprivate var _storage = _StorageClass.defaultInstance
 }
 
+/// a group label: type 4 with a section's key puts the conversation in that custom section
 nonisolated struct Dynamite_GroupAttribute: Sendable {
   // SwiftProtobuf.Message conformance is added in an extension below. See the
   // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
   // methods supported on all messages.
 
-  /// 6 = what kind of conversation the value names
+  /// 6 = what kind of conversation the value names; 4 = a custom sidebar section
   var type: Int32 {
     get {_type ?? 0}
     set {_type = newValue}
@@ -3242,6 +3325,384 @@ nonisolated struct Dynamite_GroupAttribute: Sendable {
 
   fileprivate var _type: Int32? = nil
   fileprivate var _value: String? = nil
+}
+
+/// The user's sidebar sections, shared with the web. Custom ones (type 3) hold the conversations labelled {4, key}.
+nonisolated struct Dynamite_RosterSectionId: Sendable {
+  // SwiftProtobuf.Message conformance is added in an extension below. See the
+  // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
+  // methods supported on all messages.
+
+  /// 1 DMs, 2 spaces, 3 custom, 4 apps, 5 shortcuts
+  var type: Int32 {
+    get {_type ?? 0}
+    set {_type = newValue}
+  }
+  /// Returns true if `type` has been explicitly set.
+  var hasType: Bool {self._type != nil}
+  /// Clears the value of `type`. Subsequent reads from it will return its default value.
+  mutating func clearType() {self._type = nil}
+
+  /// {4, key} for a custom section
+  var label: Dynamite_GroupAttribute {
+    get {_label ?? Dynamite_GroupAttribute()}
+    set {_label = newValue}
+  }
+  /// Returns true if `label` has been explicitly set.
+  var hasLabel: Bool {self._label != nil}
+  /// Clears the value of `label`. Subsequent reads from it will return its default value.
+  mutating func clearLabel() {self._label = nil}
+
+  /// the same key
+  var secondaryKey: String {
+    get {_secondaryKey ?? String()}
+    set {_secondaryKey = newValue}
+  }
+  /// Returns true if `secondaryKey` has been explicitly set.
+  var hasSecondaryKey: Bool {self._secondaryKey != nil}
+  /// Clears the value of `secondaryKey`. Subsequent reads from it will return its default value.
+  mutating func clearSecondaryKey() {self._secondaryKey = nil}
+
+  var unknownFields = SwiftProtobuf.UnknownStorage()
+
+  init() {}
+
+  fileprivate var _type: Int32? = nil
+  fileprivate var _label: Dynamite_GroupAttribute? = nil
+  fileprivate var _secondaryKey: String? = nil
+}
+
+nonisolated struct Dynamite_RosterSection: Sendable {
+  // SwiftProtobuf.Message conformance is added in an extension below. See the
+  // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
+  // methods supported on all messages.
+
+  var id: Dynamite_RosterSectionId {
+    get {_id ?? Dynamite_RosterSectionId()}
+    set {_id = newValue}
+  }
+  /// Returns true if `id` has been explicitly set.
+  var hasID: Bool {self._id != nil}
+  /// Clears the value of `id`. Subsequent reads from it will return its default value.
+  mutating func clearID() {self._id = nil}
+
+  /// its position among the sections
+  var sortOrder: Int64 {
+    get {_sortOrder ?? 0}
+    set {_sortOrder = newValue}
+  }
+  /// Returns true if `sortOrder` has been explicitly set.
+  var hasSortOrder: Bool {self._sortOrder != nil}
+  /// Clears the value of `sortOrder`. Subsequent reads from it will return its default value.
+  mutating func clearSortOrder() {self._sortOrder = nil}
+
+  var name: String {
+    get {_name ?? String()}
+    set {_name = newValue}
+  }
+  /// Returns true if `name` has been explicitly set.
+  var hasName: Bool {self._name != nil}
+  /// Clears the value of `name`. Subsequent reads from it will return its default value.
+  mutating func clearName() {self._name = nil}
+
+  var filteredToUnread: Bool {
+    get {_filteredToUnread ?? false}
+    set {_filteredToUnread = newValue}
+  }
+  /// Returns true if `filteredToUnread` has been explicitly set.
+  var hasFilteredToUnread: Bool {self._filteredToUnread != nil}
+  /// Clears the value of `filteredToUnread`. Subsequent reads from it will return its default value.
+  mutating func clearFilteredToUnread() {self._filteredToUnread = nil}
+
+  var collapsed: Bool {
+    get {_collapsed ?? false}
+    set {_collapsed = newValue}
+  }
+  /// Returns true if `collapsed` has been explicitly set.
+  var hasCollapsed: Bool {self._collapsed != nil}
+  /// Clears the value of `collapsed`. Subsequent reads from it will return its default value.
+  mutating func clearCollapsed() {self._collapsed = nil}
+
+  var rowsShown: Int32 {
+    get {_rowsShown ?? 0}
+    set {_rowsShown = newValue}
+  }
+  /// Returns true if `rowsShown` has been explicitly set.
+  var hasRowsShown: Bool {self._rowsShown != nil}
+  /// Clears the value of `rowsShown`. Subsequent reads from it will return its default value.
+  mutating func clearRowsShown() {self._rowsShown = nil}
+
+  var contentSort: Dynamite_RosterSection.ContentSort {
+    get {_contentSort ?? Dynamite_RosterSection.ContentSort()}
+    set {_contentSort = newValue}
+  }
+  /// Returns true if `contentSort` has been explicitly set.
+  var hasContentSort: Bool {self._contentSort != nil}
+  /// Clears the value of `contentSort`. Subsequent reads from it will return its default value.
+  mutating func clearContentSort() {self._contentSort = nil}
+
+  var rowsShownInRecency: Int32 {
+    get {_rowsShownInRecency ?? 0}
+    set {_rowsShownInRecency = newValue}
+  }
+  /// Returns true if `rowsShownInRecency` has been explicitly set.
+  var hasRowsShownInRecency: Bool {self._rowsShownInRecency != nil}
+  /// Clears the value of `rowsShownInRecency`. Subsequent reads from it will return its default value.
+  mutating func clearRowsShownInRecency() {self._rowsShownInRecency = nil}
+
+  var unknownFields = SwiftProtobuf.UnknownStorage()
+
+  nonisolated struct ContentSort: Sendable {
+    // SwiftProtobuf.Message conformance is added in an extension below. See the
+    // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
+    // methods supported on all messages.
+
+    var order: Int32 {
+      get {_order ?? 0}
+      set {_order = newValue}
+    }
+    /// Returns true if `order` has been explicitly set.
+    var hasOrder: Bool {self._order != nil}
+    /// Clears the value of `order`. Subsequent reads from it will return its default value.
+    mutating func clearOrder() {self._order = nil}
+
+    var unknownFields = SwiftProtobuf.UnknownStorage()
+
+    init() {}
+
+    fileprivate var _order: Int32? = nil
+  }
+
+  init() {}
+
+  fileprivate var _id: Dynamite_RosterSectionId? = nil
+  fileprivate var _sortOrder: Int64? = nil
+  fileprivate var _name: String? = nil
+  fileprivate var _filteredToUnread: Bool? = nil
+  fileprivate var _collapsed: Bool? = nil
+  fileprivate var _rowsShown: Int32? = nil
+  fileprivate var _contentSort: Dynamite_RosterSection.ContentSort? = nil
+  fileprivate var _rowsShownInRecency: Int32? = nil
+}
+
+nonisolated struct Dynamite_FieldNumberMask: Sendable {
+  // SwiftProtobuf.Message conformance is added in an extension below. See the
+  // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
+  // methods supported on all messages.
+
+  var fields: [Int32] = []
+
+  var unknownFields = SwiftProtobuf.UnknownStorage()
+
+  init() {}
+}
+
+nonisolated struct Dynamite_CreateRosterSectionRequest: Sendable {
+  // SwiftProtobuf.Message conformance is added in an extension below. See the
+  // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
+  // methods supported on all messages.
+
+  /// the key "1" as a placeholder; Google answers with the real one
+  var section: Dynamite_RosterSection {
+    get {_section ?? Dynamite_RosterSection()}
+    set {_section = newValue}
+  }
+  /// Returns true if `section` has been explicitly set.
+  var hasSection: Bool {self._section != nil}
+  /// Clears the value of `section`. Subsequent reads from it will return its default value.
+  mutating func clearSection() {self._section = nil}
+
+  var requestHeader: Dynamite_RequestHeader {
+    get {_requestHeader ?? Dynamite_RequestHeader()}
+    set {_requestHeader = newValue}
+  }
+  /// Returns true if `requestHeader` has been explicitly set.
+  var hasRequestHeader: Bool {self._requestHeader != nil}
+  /// Clears the value of `requestHeader`. Subsequent reads from it will return its default value.
+  mutating func clearRequestHeader() {self._requestHeader = nil}
+
+  var unknownFields = SwiftProtobuf.UnknownStorage()
+
+  init() {}
+
+  fileprivate var _section: Dynamite_RosterSection? = nil
+  fileprivate var _requestHeader: Dynamite_RequestHeader? = nil
+}
+
+nonisolated struct Dynamite_CreateRosterSectionResponse: Sendable {
+  // SwiftProtobuf.Message conformance is added in an extension below. See the
+  // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
+  // methods supported on all messages.
+
+  var section: Dynamite_RosterSection {
+    get {_section ?? Dynamite_RosterSection()}
+    set {_section = newValue}
+  }
+  /// Returns true if `section` has been explicitly set.
+  var hasSection: Bool {self._section != nil}
+  /// Clears the value of `section`. Subsequent reads from it will return its default value.
+  mutating func clearSection() {self._section = nil}
+
+  var unknownFields = SwiftProtobuf.UnknownStorage()
+
+  init() {}
+
+  fileprivate var _section: Dynamite_RosterSection? = nil
+}
+
+nonisolated struct Dynamite_UpdateRosterSectionRequest: Sendable {
+  // SwiftProtobuf.Message conformance is added in an extension below. See the
+  // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
+  // methods supported on all messages.
+
+  var section: Dynamite_RosterSection {
+    get {_section ?? Dynamite_RosterSection()}
+    set {_section = newValue}
+  }
+  /// Returns true if `section` has been explicitly set.
+  var hasSection: Bool {self._section != nil}
+  /// Clears the value of `section`. Subsequent reads from it will return its default value.
+  mutating func clearSection() {self._section = nil}
+
+  var mask: Dynamite_FieldNumberMask {
+    get {_mask ?? Dynamite_FieldNumberMask()}
+    set {_mask = newValue}
+  }
+  /// Returns true if `mask` has been explicitly set.
+  var hasMask: Bool {self._mask != nil}
+  /// Clears the value of `mask`. Subsequent reads from it will return its default value.
+  mutating func clearMask() {self._mask = nil}
+
+  var requestHeader: Dynamite_RequestHeader {
+    get {_requestHeader ?? Dynamite_RequestHeader()}
+    set {_requestHeader = newValue}
+  }
+  /// Returns true if `requestHeader` has been explicitly set.
+  var hasRequestHeader: Bool {self._requestHeader != nil}
+  /// Clears the value of `requestHeader`. Subsequent reads from it will return its default value.
+  mutating func clearRequestHeader() {self._requestHeader = nil}
+
+  var unknownFields = SwiftProtobuf.UnknownStorage()
+
+  init() {}
+
+  fileprivate var _section: Dynamite_RosterSection? = nil
+  fileprivate var _mask: Dynamite_FieldNumberMask? = nil
+  fileprivate var _requestHeader: Dynamite_RequestHeader? = nil
+}
+
+nonisolated struct Dynamite_UpdateRosterSectionResponse: Sendable {
+  // SwiftProtobuf.Message conformance is added in an extension below. See the
+  // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
+  // methods supported on all messages.
+
+  var section: Dynamite_RosterSection {
+    get {_section ?? Dynamite_RosterSection()}
+    set {_section = newValue}
+  }
+  /// Returns true if `section` has been explicitly set.
+  var hasSection: Bool {self._section != nil}
+  /// Clears the value of `section`. Subsequent reads from it will return its default value.
+  mutating func clearSection() {self._section = nil}
+
+  var unknownFields = SwiftProtobuf.UnknownStorage()
+
+  init() {}
+
+  fileprivate var _section: Dynamite_RosterSection? = nil
+}
+
+nonisolated struct Dynamite_DeleteRosterSectionRequest: Sendable {
+  // SwiftProtobuf.Message conformance is added in an extension below. See the
+  // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
+  // methods supported on all messages.
+
+  var id: Dynamite_RosterSectionId {
+    get {_id ?? Dynamite_RosterSectionId()}
+    set {_id = newValue}
+  }
+  /// Returns true if `id` has been explicitly set.
+  var hasID: Bool {self._id != nil}
+  /// Clears the value of `id`. Subsequent reads from it will return its default value.
+  mutating func clearID() {self._id = nil}
+
+  var requestHeader: Dynamite_RequestHeader {
+    get {_requestHeader ?? Dynamite_RequestHeader()}
+    set {_requestHeader = newValue}
+  }
+  /// Returns true if `requestHeader` has been explicitly set.
+  var hasRequestHeader: Bool {self._requestHeader != nil}
+  /// Clears the value of `requestHeader`. Subsequent reads from it will return its default value.
+  mutating func clearRequestHeader() {self._requestHeader = nil}
+
+  var unknownFields = SwiftProtobuf.UnknownStorage()
+
+  init() {}
+
+  fileprivate var _id: Dynamite_RosterSectionId? = nil
+  fileprivate var _requestHeader: Dynamite_RequestHeader? = nil
+}
+
+nonisolated struct Dynamite_DeleteRosterSectionResponse: Sendable {
+  // SwiftProtobuf.Message conformance is added in an extension below. See the
+  // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
+  // methods supported on all messages.
+
+  var unknownFields = SwiftProtobuf.UnknownStorage()
+
+  init() {}
+}
+
+/// apply_group_label and remove_group_label
+nonisolated struct Dynamite_GroupLabelRequest: Sendable {
+  // SwiftProtobuf.Message conformance is added in an extension below. See the
+  // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
+  // methods supported on all messages.
+
+  var label: Dynamite_GroupAttribute {
+    get {_label ?? Dynamite_GroupAttribute()}
+    set {_label = newValue}
+  }
+  /// Returns true if `label` has been explicitly set.
+  var hasLabel: Bool {self._label != nil}
+  /// Clears the value of `label`. Subsequent reads from it will return its default value.
+  mutating func clearLabel() {self._label = nil}
+
+  var groupID: Dynamite_GroupId {
+    get {_groupID ?? Dynamite_GroupId()}
+    set {_groupID = newValue}
+  }
+  /// Returns true if `groupID` has been explicitly set.
+  var hasGroupID: Bool {self._groupID != nil}
+  /// Clears the value of `groupID`. Subsequent reads from it will return its default value.
+  mutating func clearGroupID() {self._groupID = nil}
+
+  var requestHeader: Dynamite_RequestHeader {
+    get {_requestHeader ?? Dynamite_RequestHeader()}
+    set {_requestHeader = newValue}
+  }
+  /// Returns true if `requestHeader` has been explicitly set.
+  var hasRequestHeader: Bool {self._requestHeader != nil}
+  /// Clears the value of `requestHeader`. Subsequent reads from it will return its default value.
+  mutating func clearRequestHeader() {self._requestHeader = nil}
+
+  var unknownFields = SwiftProtobuf.UnknownStorage()
+
+  init() {}
+
+  fileprivate var _label: Dynamite_GroupAttribute? = nil
+  fileprivate var _groupID: Dynamite_GroupId? = nil
+  fileprivate var _requestHeader: Dynamite_RequestHeader? = nil
+}
+
+nonisolated struct Dynamite_GroupLabelResponse: Sendable {
+  // SwiftProtobuf.Message conformance is added in an extension below. See the
+  // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
+  // methods supported on all messages.
+
+  var unknownFields = SwiftProtobuf.UnknownStorage()
+
+  init() {}
 }
 
 /// Which conversations a section holds. Only the fields Parley sends; Google Chat also filters on
@@ -3681,6 +4142,16 @@ nonisolated struct Dynamite_WorldSectionRequest: @unchecked Sendable {
   /// Clears the value of `constraints`. Subsequent reads from it will return its default value.
   mutating func clearConstraints() {_uniqueStorage()._constraints = nil}
 
+  /// also answer with the user's sidebar sections
+  var fetchRosterSections: Bool {
+    get {_storage._fetchRosterSections ?? false}
+    set {_uniqueStorage()._fetchRosterSections = newValue}
+  }
+  /// Returns true if `fetchRosterSections` has been explicitly set.
+  var hasFetchRosterSections: Bool {_storage._fetchRosterSections != nil}
+  /// Clears the value of `fetchRosterSections`. Subsequent reads from it will return its default value.
+  mutating func clearFetchRosterSections() {_uniqueStorage()._fetchRosterSections = nil}
+
   var unknownFields = SwiftProtobuf.UnknownStorage()
 
   init() {}
@@ -3846,7 +4317,51 @@ nonisolated struct Dynamite_WorldSectionResponse: Sendable {
   /// Clears the value of `paginationToken`. Subsequent reads from it will return its default value.
   mutating func clearPaginationToken() {self._paginationToken = nil}
 
+  /// asked for with fetch_roster_sections
+  var rosterSections: [Dynamite_WorldSectionResponse.RosterSectionPage] = []
+
   var unknownFields = SwiftProtobuf.UnknownStorage()
+
+  nonisolated struct RosterSectionPage: Sendable {
+    // SwiftProtobuf.Message conformance is added in an extension below. See the
+    // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
+    // methods supported on all messages.
+
+    var paginationToken: String {
+      get {_paginationToken ?? String()}
+      set {_paginationToken = newValue}
+    }
+    /// Returns true if `paginationToken` has been explicitly set.
+    var hasPaginationToken: Bool {self._paginationToken != nil}
+    /// Clears the value of `paginationToken`. Subsequent reads from it will return its default value.
+    mutating func clearPaginationToken() {self._paginationToken = nil}
+
+    var section: Dynamite_RosterSection {
+      get {_section ?? Dynamite_RosterSection()}
+      set {_section = newValue}
+    }
+    /// Returns true if `section` has been explicitly set.
+    var hasSection: Bool {self._section != nil}
+    /// Clears the value of `section`. Subsequent reads from it will return its default value.
+    mutating func clearSection() {self._section = nil}
+
+    var hasMore_p: Bool {
+      get {_hasMore_p ?? false}
+      set {_hasMore_p = newValue}
+    }
+    /// Returns true if `hasMore_p` has been explicitly set.
+    var hasHasMore_p: Bool {self._hasMore_p != nil}
+    /// Clears the value of `hasMore_p`. Subsequent reads from it will return its default value.
+    mutating func clearHasMore_p() {self._hasMore_p = nil}
+
+    var unknownFields = SwiftProtobuf.UnknownStorage()
+
+    init() {}
+
+    fileprivate var _paginationToken: String? = nil
+    fileprivate var _section: Dynamite_RosterSection? = nil
+    fileprivate var _hasMore_p: Bool? = nil
+  }
 
   init() {}
 
@@ -4485,6 +5000,9 @@ nonisolated struct Dynamite_ListMembersResponse: Sendable {
   // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
   // methods supported on all messages.
 
+  /// each member's state and role
+  var memberships: [Dynamite_Membership] = []
+
   var members: [Dynamite_Member] = []
 
   var nextPageToken: String {
@@ -4503,11 +5021,13 @@ nonisolated struct Dynamite_ListMembersResponse: Sendable {
   fileprivate var _nextPageToken: String? = nil
 }
 
+/// a oneof, as Google Chat sends it
 nonisolated struct Dynamite_ListTopicsFilter: Sendable {
   // SwiftProtobuf.Message conformance is added in an extension below. See the
   // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
   // methods supported on all messages.
 
+  /// PAGINATION_BACKWARDS anchor, µs sort time
   var olderThan: Int64 {
     get {_olderThan ?? 0}
     set {_olderThan = newValue}
@@ -4517,11 +5037,44 @@ nonisolated struct Dynamite_ListTopicsFilter: Sendable {
   /// Clears the value of `olderThan`. Subsequent reads from it will return its default value.
   mutating func clearOlderThan() {self._olderThan = nil}
 
+  /// PAGINATION_FORWARDS anchor, µs sort time
+  var newerThan: Int64 {
+    get {_newerThan ?? 0}
+    set {_newerThan = newValue}
+  }
+  /// Returns true if `newerThan` has been explicitly set.
+  var hasNewerThan: Bool {self._newerThan != nil}
+  /// Clears the value of `newerThan`. Subsequent reads from it will return its default value.
+  mutating func clearNewerThan() {self._newerThan = nil}
+
+  /// the page around a topic, as web Chat opens an old search result
+  var aroundTopic: Dynamite_TopicId {
+    get {_aroundTopic ?? Dynamite_TopicId()}
+    set {_aroundTopic = newValue}
+  }
+  /// Returns true if `aroundTopic` has been explicitly set.
+  var hasAroundTopic: Bool {self._aroundTopic != nil}
+  /// Clears the value of `aroundTopic`. Subsequent reads from it will return its default value.
+  mutating func clearAroundTopic() {self._aroundTopic = nil}
+
+  /// a space's threads list (not part of the oneof)
+  var threadSummary: Bool {
+    get {_threadSummary ?? false}
+    set {_threadSummary = newValue}
+  }
+  /// Returns true if `threadSummary` has been explicitly set.
+  var hasThreadSummary: Bool {self._threadSummary != nil}
+  /// Clears the value of `threadSummary`. Subsequent reads from it will return its default value.
+  mutating func clearThreadSummary() {self._threadSummary = nil}
+
   var unknownFields = SwiftProtobuf.UnknownStorage()
 
   init() {}
 
   fileprivate var _olderThan: Int64? = nil
+  fileprivate var _newerThan: Int64? = nil
+  fileprivate var _aroundTopic: Dynamite_TopicId? = nil
+  fileprivate var _threadSummary: Bool? = nil
 }
 
 nonisolated struct Dynamite_ListTopicsRequest: Sendable {
@@ -4639,6 +5192,16 @@ nonisolated struct Dynamite_ListTopicsResponse: Sendable {
   /// Clears the value of `containsFirstTopic`. Subsequent reads from it will return its default value.
   mutating func clearContainsFirstTopic() {self._containsFirstTopic = nil}
 
+  /// true: nothing newer
+  var containsLastTopic: Bool {
+    get {_containsLastTopic ?? false}
+    set {_containsLastTopic = newValue}
+  }
+  /// Returns true if `containsLastTopic` has been explicitly set.
+  var hasContainsLastTopic: Bool {self._containsLastTopic != nil}
+  /// Clears the value of `containsLastTopic`. Subsequent reads from it will return its default value.
+  mutating func clearContainsLastTopic() {self._containsLastTopic = nil}
+
   /// asked for with fetch option READ_RECEIPTS
   var readReceiptSet: Dynamite_ReadReceiptSet {
     get {_readReceiptSet ?? Dynamite_ReadReceiptSet()}
@@ -4654,6 +5217,7 @@ nonisolated struct Dynamite_ListTopicsResponse: Sendable {
   init() {}
 
   fileprivate var _containsFirstTopic: Bool? = nil
+  fileprivate var _containsLastTopic: Bool? = nil
   fileprivate var _readReceiptSet: Dynamite_ReadReceiptSet? = nil
 }
 
@@ -5012,6 +5576,16 @@ nonisolated struct Dynamite_MarkGroupReadstateRequest: Sendable {
   /// Clears the value of `lastReadTime`. Subsequent reads from it will return its default value.
   mutating func clearLastReadTime() {self._lastReadTime = nil}
 
+  /// µs: the threads list seen up to its newest thread, as Google Chat marks it
+  var threadSummaryReadTime: Int64 {
+    get {_threadSummaryReadTime ?? 0}
+    set {_threadSummaryReadTime = newValue}
+  }
+  /// Returns true if `threadSummaryReadTime` has been explicitly set.
+  var hasThreadSummaryReadTime: Bool {self._threadSummaryReadTime != nil}
+  /// Clears the value of `threadSummaryReadTime`. Subsequent reads from it will return its default value.
+  mutating func clearThreadSummaryReadTime() {self._threadSummaryReadTime = nil}
+
   var requestHeader: Dynamite_RequestHeader {
     get {_requestHeader ?? Dynamite_RequestHeader()}
     set {_requestHeader = newValue}
@@ -5027,10 +5601,169 @@ nonisolated struct Dynamite_MarkGroupReadstateRequest: Sendable {
 
   fileprivate var _id: Dynamite_GroupId? = nil
   fileprivate var _lastReadTime: Int64? = nil
+  fileprivate var _threadSummaryReadTime: Int64? = nil
   fileprivate var _requestHeader: Dynamite_RequestHeader? = nil
 }
 
 nonisolated struct Dynamite_MarkGroupReadstateResponse: Sendable {
+  // SwiftProtobuf.Message conformance is added in an extension below. See the
+  // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
+  // methods supported on all messages.
+
+  var unknownFields = SwiftProtobuf.UnknownStorage()
+
+  init() {}
+}
+
+/// A thread read up to a time, as Google Chat marks it when the thread is open.
+nonisolated struct Dynamite_MarkTopicReadstateRequest: Sendable {
+  // SwiftProtobuf.Message conformance is added in an extension below. See the
+  // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
+  // methods supported on all messages.
+
+  var topicID: Dynamite_TopicId {
+    get {_topicID ?? Dynamite_TopicId()}
+    set {_topicID = newValue}
+  }
+  /// Returns true if `topicID` has been explicitly set.
+  var hasTopicID: Bool {self._topicID != nil}
+  /// Clears the value of `topicID`. Subsequent reads from it will return its default value.
+  mutating func clearTopicID() {self._topicID = nil}
+
+  /// µs: the newest reply read
+  var lastReadTime: Int64 {
+    get {_lastReadTime ?? 0}
+    set {_lastReadTime = newValue}
+  }
+  /// Returns true if `lastReadTime` has been explicitly set.
+  var hasLastReadTime: Bool {self._lastReadTime != nil}
+  /// Clears the value of `lastReadTime`. Subsequent reads from it will return its default value.
+  mutating func clearLastReadTime() {self._lastReadTime = nil}
+
+  var requestHeader: Dynamite_RequestHeader {
+    get {_requestHeader ?? Dynamite_RequestHeader()}
+    set {_requestHeader = newValue}
+  }
+  /// Returns true if `requestHeader` has been explicitly set.
+  var hasRequestHeader: Bool {self._requestHeader != nil}
+  /// Clears the value of `requestHeader`. Subsequent reads from it will return its default value.
+  mutating func clearRequestHeader() {self._requestHeader = nil}
+
+  var unknownFields = SwiftProtobuf.UnknownStorage()
+
+  init() {}
+
+  fileprivate var _topicID: Dynamite_TopicId? = nil
+  fileprivate var _lastReadTime: Int64? = nil
+  fileprivate var _requestHeader: Dynamite_RequestHeader? = nil
+}
+
+nonisolated struct Dynamite_MarkTopicReadstateResponse: Sendable {
+  // SwiftProtobuf.Message conformance is added in an extension below. See the
+  // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
+  // methods supported on all messages.
+
+  var unknownFields = SwiftProtobuf.UnknownStorage()
+
+  init() {}
+}
+
+/// Following a thread: muted = not followed. The server answers with TOPIC_LABEL_APPLIED or _REMOVED (THREAD_FOLLOWED).
+nonisolated struct Dynamite_MarkTopicMuteStateRequest: Sendable {
+  // SwiftProtobuf.Message conformance is added in an extension below. See the
+  // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
+  // methods supported on all messages.
+
+  var topicID: Dynamite_TopicId {
+    get {_topicID ?? Dynamite_TopicId()}
+    set {_topicID = newValue}
+  }
+  /// Returns true if `topicID` has been explicitly set.
+  var hasTopicID: Bool {self._topicID != nil}
+  /// Clears the value of `topicID`. Subsequent reads from it will return its default value.
+  mutating func clearTopicID() {self._topicID = nil}
+
+  var muted: Bool {
+    get {_muted ?? false}
+    set {_muted = newValue}
+  }
+  /// Returns true if `muted` has been explicitly set.
+  var hasMuted: Bool {self._muted != nil}
+  /// Clears the value of `muted`. Subsequent reads from it will return its default value.
+  mutating func clearMuted() {self._muted = nil}
+
+  var requestHeader: Dynamite_RequestHeader {
+    get {_requestHeader ?? Dynamite_RequestHeader()}
+    set {_requestHeader = newValue}
+  }
+  /// Returns true if `requestHeader` has been explicitly set.
+  var hasRequestHeader: Bool {self._requestHeader != nil}
+  /// Clears the value of `requestHeader`. Subsequent reads from it will return its default value.
+  mutating func clearRequestHeader() {self._requestHeader = nil}
+
+  var unknownFields = SwiftProtobuf.UnknownStorage()
+
+  init() {}
+
+  fileprivate var _topicID: Dynamite_TopicId? = nil
+  fileprivate var _muted: Bool? = nil
+  fileprivate var _requestHeader: Dynamite_RequestHeader? = nil
+}
+
+nonisolated struct Dynamite_MarkTopicMuteStateResponse: Sendable {
+  // SwiftProtobuf.Message conformance is added in an extension below. See the
+  // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
+  // methods supported on all messages.
+
+  var unknownFields = SwiftProtobuf.UnknownStorage()
+
+  init() {}
+}
+
+/// "Mark as unread" from a reply inside a thread; 0 clears it.
+nonisolated struct Dynamite_SetTopicUnreadTimestampRequest: Sendable {
+  // SwiftProtobuf.Message conformance is added in an extension below. See the
+  // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
+  // methods supported on all messages.
+
+  var topicID: Dynamite_TopicId {
+    get {_topicID ?? Dynamite_TopicId()}
+    set {_topicID = newValue}
+  }
+  /// Returns true if `topicID` has been explicitly set.
+  var hasTopicID: Bool {self._topicID != nil}
+  /// Clears the value of `topicID`. Subsequent reads from it will return its default value.
+  mutating func clearTopicID() {self._topicID = nil}
+
+  /// µs: the message's create time − 1
+  var unreadTimestamp: Int64 {
+    get {_unreadTimestamp ?? 0}
+    set {_unreadTimestamp = newValue}
+  }
+  /// Returns true if `unreadTimestamp` has been explicitly set.
+  var hasUnreadTimestamp: Bool {self._unreadTimestamp != nil}
+  /// Clears the value of `unreadTimestamp`. Subsequent reads from it will return its default value.
+  mutating func clearUnreadTimestamp() {self._unreadTimestamp = nil}
+
+  var requestHeader: Dynamite_RequestHeader {
+    get {_requestHeader ?? Dynamite_RequestHeader()}
+    set {_requestHeader = newValue}
+  }
+  /// Returns true if `requestHeader` has been explicitly set.
+  var hasRequestHeader: Bool {self._requestHeader != nil}
+  /// Clears the value of `requestHeader`. Subsequent reads from it will return its default value.
+  mutating func clearRequestHeader() {self._requestHeader = nil}
+
+  var unknownFields = SwiftProtobuf.UnknownStorage()
+
+  init() {}
+
+  fileprivate var _topicID: Dynamite_TopicId? = nil
+  fileprivate var _unreadTimestamp: Int64? = nil
+  fileprivate var _requestHeader: Dynamite_RequestHeader? = nil
+}
+
+nonisolated struct Dynamite_SetTopicUnreadTimestampResponse: Sendable {
   // SwiftProtobuf.Message conformance is added in an extension below. See the
   // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
   // methods supported on all messages.
@@ -5424,6 +6157,39 @@ nonisolated struct Dynamite_GroupUpdatedEvent: Sendable {
   fileprivate var _groupUpdateType: Dynamite_GroupUpdatedEvent.GroupUpdateType? = nil
 }
 
+/// A space's history: on keeps messages, off deletes new ones after a day.
+nonisolated struct Dynamite_RetentionSettings: Sendable {
+  // SwiftProtobuf.Message conformance is added in an extension below. See the
+  // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
+  // methods supported on all messages.
+
+  var state: Dynamite_RetentionSettings.State {
+    get {_state ?? .retentionStateUnknown}
+    set {_state = newValue}
+  }
+  /// Returns true if `state` has been explicitly set.
+  var hasState: Bool {self._state != nil}
+  /// Clears the value of `state`. Subsequent reads from it will return its default value.
+  mutating func clearState() {self._state = nil}
+
+  var unknownFields = SwiftProtobuf.UnknownStorage()
+
+  nonisolated enum State: Int, SwiftProtobuf.Enum, Swift.CaseIterable {
+    case retentionStateUnknown = 0
+    case permanent = 1
+    case ephemeralOneDay = 2
+
+    init() {
+      self = .retentionStateUnknown
+    }
+
+  }
+
+  init() {}
+
+  fileprivate var _state: Dynamite_RetentionSettings.State? = nil
+}
+
 nonisolated struct Dynamite_Membership: Sendable {
   // SwiftProtobuf.Message conformance is added in an extension below. See the
   // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
@@ -5447,6 +6213,15 @@ nonisolated struct Dynamite_Membership: Sendable {
   /// Clears the value of `membershipState`. Subsequent reads from it will return its default value.
   mutating func clearMembershipState() {self._membershipState = nil}
 
+  var role: Dynamite_MemberRole {
+    get {_role ?? .unknown}
+    set {_role = newValue}
+  }
+  /// Returns true if `role` has been explicitly set.
+  var hasRole: Bool {self._role != nil}
+  /// Clears the value of `role`. Subsequent reads from it will return its default value.
+  mutating func clearRole() {self._role = nil}
+
   var unknownFields = SwiftProtobuf.UnknownStorage()
 
   nonisolated enum State: Int, SwiftProtobuf.Enum, Swift.CaseIterable {
@@ -5468,6 +6243,7 @@ nonisolated struct Dynamite_Membership: Sendable {
 
   fileprivate var _id: Dynamite_MembershipId? = nil
   fileprivate var _membershipState: Dynamite_Membership.State? = nil
+  fileprivate var _role: Dynamite_MemberRole? = nil
 }
 
 nonisolated struct Dynamite_MembershipChangedEvent: Sendable {
@@ -6257,6 +7033,15 @@ nonisolated struct Dynamite_EventBody: @unchecked Sendable {
     /// hidden from my sidebar, or shown again
     case groupHideChanged = 16
 
+    /// a conversation moved into a sidebar section (here or elsewhere)
+    case groupLabelApplied = 70
+    case groupLabelRemoved = 71
+
+    /// a sidebar section made, deleted or changed
+    case rosterSectionCreated = 72
+    case rosterSectionDeleted = 73
+    case rosterSectionUpdated = 74
+
     init() {
       self = .unknown
     }
@@ -6951,9 +7736,66 @@ nonisolated struct Dynamite_SearchFilter: Sendable {
   // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
   // methods supported on all messages.
 
+  /// needs a sort: without one Google answers 400
+  var scope: Dynamite_SearchScope {
+    get {_scope ?? Dynamite_SearchScope()}
+    set {_scope = newValue}
+  }
+  /// Returns true if `scope` has been explicitly set.
+  var hasScope: Bool {self._scope != nil}
+  /// Clears the value of `scope`. Subsequent reads from it will return its default value.
+  mutating func clearScope() {self._scope = nil}
+
   var unknownFields = SwiftProtobuf.UnknownStorage()
 
   init() {}
+
+  fileprivate var _scope: Dynamite_SearchScope? = nil
+}
+
+nonisolated struct Dynamite_SearchScope: Sendable {
+  // SwiftProtobuf.Message conformance is added in an extension below. See the
+  // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
+  // methods supported on all messages.
+
+  /// "said in": the conversations to search
+  var conversations: [Dynamite_SearchConversation] = []
+
+  var unknownFields = SwiftProtobuf.UnknownStorage()
+
+  init() {}
+}
+
+nonisolated struct Dynamite_SearchConversation: Sendable {
+  // SwiftProtobuf.Message conformance is added in an extension below. See the
+  // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
+  // methods supported on all messages.
+
+  var groupID: Dynamite_GroupId {
+    get {_groupID ?? Dynamite_GroupId()}
+    set {_groupID = newValue}
+  }
+  /// Returns true if `groupID` has been explicitly set.
+  var hasGroupID: Bool {self._groupID != nil}
+  /// Clears the value of `groupID`. Subsequent reads from it will return its default value.
+  mutating func clearGroupID() {self._groupID = nil}
+
+  /// Google Chat always sends 1
+  var kind: Int32 {
+    get {_kind ?? 0}
+    set {_kind = newValue}
+  }
+  /// Returns true if `kind` has been explicitly set.
+  var hasKind: Bool {self._kind != nil}
+  /// Clears the value of `kind`. Subsequent reads from it will return its default value.
+  mutating func clearKind() {self._kind = nil}
+
+  var unknownFields = SwiftProtobuf.UnknownStorage()
+
+  init() {}
+
+  fileprivate var _groupID: Dynamite_GroupId? = nil
+  fileprivate var _kind: Int32? = nil
 }
 
 nonisolated struct Dynamite_SearchMessagesV2Request: Sendable {
@@ -6998,6 +7840,15 @@ nonisolated struct Dynamite_SearchMessagesV2Request: Sendable {
   /// Clears the value of `query`. Subsequent reads from it will return its default value.
   mutating func clearQuery() {self._query = nil}
 
+  var sort: Dynamite_SearchSort {
+    get {_sort ?? Dynamite_SearchSort()}
+    set {_sort = newValue}
+  }
+  /// Returns true if `sort` has been explicitly set.
+  var hasSort: Bool {self._sort != nil}
+  /// Clears the value of `sort`. Subsequent reads from it will return its default value.
+  mutating func clearSort() {self._sort = nil}
+
   var requestHeader: Dynamite_RequestHeader {
     get {_requestHeader ?? Dynamite_RequestHeader()}
     set {_requestHeader = newValue}
@@ -7015,7 +7866,40 @@ nonisolated struct Dynamite_SearchMessagesV2Request: Sendable {
   fileprivate var _cursor: String? = nil
   fileprivate var _filter: Dynamite_SearchFilter? = nil
   fileprivate var _query: String? = nil
+  fileprivate var _sort: Dynamite_SearchSort? = nil
   fileprivate var _requestHeader: Dynamite_RequestHeader? = nil
+}
+
+nonisolated struct Dynamite_SearchSort: Sendable {
+  // SwiftProtobuf.Message conformance is added in an extension below. See the
+  // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
+  // methods supported on all messages.
+
+  var `operator`: Dynamite_SearchSort.Operator {
+    get {_operator ?? .sortOperatorUnspecified}
+    set {_operator = newValue}
+  }
+  /// Returns true if ``operator`` has been explicitly set.
+  var hasOperator: Bool {self._operator != nil}
+  /// Clears the value of ``operator``. Subsequent reads from it will return its default value.
+  mutating func clearOperator() {self._operator = nil}
+
+  var unknownFields = SwiftProtobuf.UnknownStorage()
+
+  nonisolated enum Operator: Int, SwiftProtobuf.Enum, Swift.CaseIterable {
+    case sortOperatorUnspecified = 0
+    case relevance = 1
+    case chronological = 2
+
+    init() {
+      self = .sortOperatorUnspecified
+    }
+
+  }
+
+  init() {}
+
+  fileprivate var _operator: Dynamite_SearchSort.Operator? = nil
 }
 
 nonisolated struct Dynamite_SearchResult: Sendable {
@@ -7181,28 +8065,6 @@ nonisolated struct Dynamite_ListMessagesResponse: Sendable {
 }
 
 /// --- New conversations: DMs, the space directory, joining ---
-nonisolated struct Dynamite_RetentionSettings: Sendable {
-  // SwiftProtobuf.Message conformance is added in an extension below. See the
-  // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
-  // methods supported on all messages.
-
-  var state: Int32 {
-    get {_state ?? 0}
-    set {_state = newValue}
-  }
-  /// Returns true if `state` has been explicitly set.
-  var hasState: Bool {self._state != nil}
-  /// Clears the value of `state`. Subsequent reads from it will return its default value.
-  mutating func clearState() {self._state = nil}
-
-  var unknownFields = SwiftProtobuf.UnknownStorage()
-
-  init() {}
-
-  fileprivate var _state: Int32? = nil
-}
-
-/// purple's members(1) / invitees(7) layout is gone
 nonisolated struct Dynamite_CreateDmRequest: Sendable {
   // SwiftProtobuf.Message conformance is added in an extension below. See the
   // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
@@ -7495,6 +8357,58 @@ nonisolated struct Dynamite_CreateGroupResponse: Sendable {
   init() {}
 
   fileprivate var _group: Dynamite_Group? = nil
+}
+
+nonisolated struct Dynamite_DeleteGroupRequest: Sendable {
+  // SwiftProtobuf.Message conformance is added in an extension below. See the
+  // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
+  // methods supported on all messages.
+
+  var groupID: Dynamite_GroupId {
+    get {_groupID ?? Dynamite_GroupId()}
+    set {_groupID = newValue}
+  }
+  /// Returns true if `groupID` has been explicitly set.
+  var hasGroupID: Bool {self._groupID != nil}
+  /// Clears the value of `groupID`. Subsequent reads from it will return its default value.
+  mutating func clearGroupID() {self._groupID = nil}
+
+  /// true for a space without a linked Google Group: delete the space only
+  var keepRoster: Bool {
+    get {_keepRoster ?? false}
+    set {_keepRoster = newValue}
+  }
+  /// Returns true if `keepRoster` has been explicitly set.
+  var hasKeepRoster: Bool {self._keepRoster != nil}
+  /// Clears the value of `keepRoster`. Subsequent reads from it will return its default value.
+  mutating func clearKeepRoster() {self._keepRoster = nil}
+
+  var requestHeader: Dynamite_RequestHeader {
+    get {_requestHeader ?? Dynamite_RequestHeader()}
+    set {_requestHeader = newValue}
+  }
+  /// Returns true if `requestHeader` has been explicitly set.
+  var hasRequestHeader: Bool {self._requestHeader != nil}
+  /// Clears the value of `requestHeader`. Subsequent reads from it will return its default value.
+  mutating func clearRequestHeader() {self._requestHeader = nil}
+
+  var unknownFields = SwiftProtobuf.UnknownStorage()
+
+  init() {}
+
+  fileprivate var _groupID: Dynamite_GroupId? = nil
+  fileprivate var _keepRoster: Bool? = nil
+  fileprivate var _requestHeader: Dynamite_RequestHeader? = nil
+}
+
+nonisolated struct Dynamite_DeleteGroupResponse: Sendable {
+  // SwiftProtobuf.Message conformance is added in an extension below. See the
+  // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
+  // methods supported on all messages.
+
+  var unknownFields = SwiftProtobuf.UnknownStorage()
+
+  init() {}
 }
 
 nonisolated struct Dynamite_SearchSpaceDirectoryRequest: Sendable {
@@ -7835,6 +8749,16 @@ nonisolated struct Dynamite_UpdateGroupRequest: @unchecked Sendable {
   /// Clears the value of `avatarInfo`. Subsequent reads from it will return its default value.
   mutating func clearAvatarInfo() {_uniqueStorage()._avatarInfo = nil}
 
+  /// description and guidelines, sent together
+  var groupDetails: Dynamite_GroupDetails {
+    get {_storage._groupDetails ?? Dynamite_GroupDetails()}
+    set {_uniqueStorage()._groupDetails = newValue}
+  }
+  /// Returns true if `groupDetails` has been explicitly set.
+  var hasGroupDetails: Bool {_storage._groupDetails != nil}
+  /// Clears the value of `groupDetails`. Subsequent reads from it will return its default value.
+  mutating func clearGroupDetails() {_uniqueStorage()._groupDetails = nil}
+
   var groupID: Dynamite_GroupId {
     get {_storage._groupID ?? Dynamite_GroupId()}
     set {_uniqueStorage()._groupID = newValue}
@@ -7873,6 +8797,488 @@ nonisolated struct Dynamite_UpdateGroupRequest: @unchecked Sendable {
 }
 
 nonisolated struct Dynamite_UpdateGroupResponse: Sendable {
+  // SwiftProtobuf.Message conformance is added in an extension below. See the
+  // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
+  // methods supported on all messages.
+
+  var unknownFields = SwiftProtobuf.UnknownStorage()
+
+  init() {}
+}
+
+nonisolated struct Dynamite_UpdateMembershipRoleRequest: Sendable {
+  // SwiftProtobuf.Message conformance is added in an extension below. See the
+  // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
+  // methods supported on all messages.
+
+  var changes: [Dynamite_UpdateMembershipRoleRequest.Change] = []
+
+  var requestHeader: Dynamite_RequestHeader {
+    get {_requestHeader ?? Dynamite_RequestHeader()}
+    set {_requestHeader = newValue}
+  }
+  /// Returns true if `requestHeader` has been explicitly set.
+  var hasRequestHeader: Bool {self._requestHeader != nil}
+  /// Clears the value of `requestHeader`. Subsequent reads from it will return its default value.
+  mutating func clearRequestHeader() {self._requestHeader = nil}
+
+  var unknownFields = SwiftProtobuf.UnknownStorage()
+
+  nonisolated struct Change: Sendable {
+    // SwiftProtobuf.Message conformance is added in an extension below. See the
+    // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
+    // methods supported on all messages.
+
+    var role: Dynamite_MemberRole {
+      get {_role ?? .unknown}
+      set {_role = newValue}
+    }
+    /// Returns true if `role` has been explicitly set.
+    var hasRole: Bool {self._role != nil}
+    /// Clears the value of `role`. Subsequent reads from it will return its default value.
+    mutating func clearRole() {self._role = nil}
+
+    var userID: Dynamite_UserId {
+      get {_userID ?? Dynamite_UserId()}
+      set {_userID = newValue}
+    }
+    /// Returns true if `userID` has been explicitly set.
+    var hasUserID: Bool {self._userID != nil}
+    /// Clears the value of `userID`. Subsequent reads from it will return its default value.
+    mutating func clearUserID() {self._userID = nil}
+
+    var groupID: Dynamite_GroupId {
+      get {_groupID ?? Dynamite_GroupId()}
+      set {_groupID = newValue}
+    }
+    /// Returns true if `groupID` has been explicitly set.
+    var hasGroupID: Bool {self._groupID != nil}
+    /// Clears the value of `groupID`. Subsequent reads from it will return its default value.
+    mutating func clearGroupID() {self._groupID = nil}
+
+    var unknownFields = SwiftProtobuf.UnknownStorage()
+
+    init() {}
+
+    fileprivate var _role: Dynamite_MemberRole? = nil
+    fileprivate var _userID: Dynamite_UserId? = nil
+    fileprivate var _groupID: Dynamite_GroupId? = nil
+  }
+
+  init() {}
+
+  fileprivate var _requestHeader: Dynamite_RequestHeader? = nil
+}
+
+nonisolated struct Dynamite_UpdateMembershipRoleResponse: Sendable {
+  // SwiftProtobuf.Message conformance is added in an extension below. See the
+  // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
+  // methods supported on all messages.
+
+  var unknownFields = SwiftProtobuf.UnknownStorage()
+
+  init() {}
+}
+
+nonisolated struct Dynamite_UpdateGroupRetentionSettingsRequest: Sendable {
+  // SwiftProtobuf.Message conformance is added in an extension below. See the
+  // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
+  // methods supported on all messages.
+
+  var groupID: Dynamite_GroupId {
+    get {_groupID ?? Dynamite_GroupId()}
+    set {_groupID = newValue}
+  }
+  /// Returns true if `groupID` has been explicitly set.
+  var hasGroupID: Bool {self._groupID != nil}
+  /// Clears the value of `groupID`. Subsequent reads from it will return its default value.
+  mutating func clearGroupID() {self._groupID = nil}
+
+  var retention: Dynamite_RetentionSettings {
+    get {_retention ?? Dynamite_RetentionSettings()}
+    set {_retention = newValue}
+  }
+  /// Returns true if `retention` has been explicitly set.
+  var hasRetention: Bool {self._retention != nil}
+  /// Clears the value of `retention`. Subsequent reads from it will return its default value.
+  mutating func clearRetention() {self._retention = nil}
+
+  /// the id of the system message announcing the change
+  var localID: String {
+    get {_localID ?? String()}
+    set {_localID = newValue}
+  }
+  /// Returns true if `localID` has been explicitly set.
+  var hasLocalID: Bool {self._localID != nil}
+  /// Clears the value of `localID`. Subsequent reads from it will return its default value.
+  mutating func clearLocalID() {self._localID = nil}
+
+  var requestHeader: Dynamite_RequestHeader {
+    get {_requestHeader ?? Dynamite_RequestHeader()}
+    set {_requestHeader = newValue}
+  }
+  /// Returns true if `requestHeader` has been explicitly set.
+  var hasRequestHeader: Bool {self._requestHeader != nil}
+  /// Clears the value of `requestHeader`. Subsequent reads from it will return its default value.
+  mutating func clearRequestHeader() {self._requestHeader = nil}
+
+  var unknownFields = SwiftProtobuf.UnknownStorage()
+
+  init() {}
+
+  fileprivate var _groupID: Dynamite_GroupId? = nil
+  fileprivate var _retention: Dynamite_RetentionSettings? = nil
+  fileprivate var _localID: String? = nil
+  fileprivate var _requestHeader: Dynamite_RequestHeader? = nil
+}
+
+nonisolated struct Dynamite_UpdateGroupRetentionSettingsResponse: Sendable {
+  // SwiftProtobuf.Message conformance is added in an extension below. See the
+  // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
+  // methods supported on all messages.
+
+  var unknownFields = SwiftProtobuf.UnknownStorage()
+
+  init() {}
+}
+
+/// Block and report, as Google Chat's Block and report dialog sends it: a person (with their DM) or a space.
+nonisolated struct Dynamite_BlockEntityRequest: Sendable {
+  // SwiftProtobuf.Message conformance is added in an extension below. See the
+  // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
+  // methods supported on all messages.
+
+  var userID: Dynamite_UserId {
+    get {_userID ?? Dynamite_UserId()}
+    set {_userID = newValue}
+  }
+  /// Returns true if `userID` has been explicitly set.
+  var hasUserID: Bool {self._userID != nil}
+  /// Clears the value of `userID`. Subsequent reads from it will return its default value.
+  mutating func clearUserID() {self._userID = nil}
+
+  /// a space
+  var groupID: Dynamite_GroupId {
+    get {_groupID ?? Dynamite_GroupId()}
+    set {_groupID = newValue}
+  }
+  /// Returns true if `groupID` has been explicitly set.
+  var hasGroupID: Bool {self._groupID != nil}
+  /// Clears the value of `groupID`. Subsequent reads from it will return its default value.
+  mutating func clearGroupID() {self._groupID = nil}
+
+  /// false unblocks
+  var blocked: Bool {
+    get {_blocked ?? false}
+    set {_blocked = newValue}
+  }
+  /// Returns true if `blocked` has been explicitly set.
+  var hasBlocked: Bool {self._blocked != nil}
+  /// Clears the value of `blocked`. Subsequent reads from it will return its default value.
+  mutating func clearBlocked() {self._blocked = nil}
+
+  /// also send Google the last 50 messages
+  var report: Bool {
+    get {_report ?? false}
+    set {_report = newValue}
+  }
+  /// Returns true if `report` has been explicitly set.
+  var hasReport: Bool {self._report != nil}
+  /// Clears the value of `report`. Subsequent reads from it will return its default value.
+  mutating func clearReport() {self._report = nil}
+
+  /// the person's DM with me
+  var dmGroupID: Dynamite_GroupId {
+    get {_dmGroupID ?? Dynamite_GroupId()}
+    set {_dmGroupID = newValue}
+  }
+  /// Returns true if `dmGroupID` has been explicitly set.
+  var hasDmGroupID: Bool {self._dmGroupID != nil}
+  /// Clears the value of `dmGroupID`. Subsequent reads from it will return its default value.
+  mutating func clearDmGroupID() {self._dmGroupID = nil}
+
+  var requestHeader: Dynamite_RequestHeader {
+    get {_requestHeader ?? Dynamite_RequestHeader()}
+    set {_requestHeader = newValue}
+  }
+  /// Returns true if `requestHeader` has been explicitly set.
+  var hasRequestHeader: Bool {self._requestHeader != nil}
+  /// Clears the value of `requestHeader`. Subsequent reads from it will return its default value.
+  mutating func clearRequestHeader() {self._requestHeader = nil}
+
+  var unknownFields = SwiftProtobuf.UnknownStorage()
+
+  init() {}
+
+  fileprivate var _userID: Dynamite_UserId? = nil
+  fileprivate var _groupID: Dynamite_GroupId? = nil
+  fileprivate var _blocked: Bool? = nil
+  fileprivate var _report: Bool? = nil
+  fileprivate var _dmGroupID: Dynamite_GroupId? = nil
+  fileprivate var _requestHeader: Dynamite_RequestHeader? = nil
+}
+
+nonisolated struct Dynamite_BlockEntityResponse: Sendable {
+  // SwiftProtobuf.Message conformance is added in an extension below. See the
+  // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
+  // methods supported on all messages.
+
+  var unknownFields = SwiftProtobuf.UnknownStorage()
+
+  init() {}
+}
+
+nonisolated struct Dynamite_ListBlockedUsersRequest: Sendable {
+  // SwiftProtobuf.Message conformance is added in an extension below. See the
+  // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
+  // methods supported on all messages.
+
+  var requestHeader: Dynamite_RequestHeader {
+    get {_requestHeader ?? Dynamite_RequestHeader()}
+    set {_requestHeader = newValue}
+  }
+  /// Returns true if `requestHeader` has been explicitly set.
+  var hasRequestHeader: Bool {self._requestHeader != nil}
+  /// Clears the value of `requestHeader`. Subsequent reads from it will return its default value.
+  mutating func clearRequestHeader() {self._requestHeader = nil}
+
+  var unknownFields = SwiftProtobuf.UnknownStorage()
+
+  init() {}
+
+  fileprivate var _requestHeader: Dynamite_RequestHeader? = nil
+}
+
+nonisolated struct Dynamite_ListBlockedUsersResponse: Sendable {
+  // SwiftProtobuf.Message conformance is added in an extension below. See the
+  // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
+  // methods supported on all messages.
+
+  var userIds: [Dynamite_UserId] = []
+
+  var unknownFields = SwiftProtobuf.UnknownStorage()
+
+  init() {}
+}
+
+nonisolated struct Dynamite_ManageBlockedRoomsRequest: Sendable {
+  // SwiftProtobuf.Message conformance is added in an extension below. See the
+  // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
+  // methods supported on all messages.
+
+  var requestHeader: Dynamite_RequestHeader {
+    get {_requestHeader ?? Dynamite_RequestHeader()}
+    set {_requestHeader = newValue}
+  }
+  /// Returns true if `requestHeader` has been explicitly set.
+  var hasRequestHeader: Bool {self._requestHeader != nil}
+  /// Clears the value of `requestHeader`. Subsequent reads from it will return its default value.
+  mutating func clearRequestHeader() {self._requestHeader = nil}
+
+  var unknownFields = SwiftProtobuf.UnknownStorage()
+
+  init() {}
+
+  fileprivate var _requestHeader: Dynamite_RequestHeader? = nil
+}
+
+nonisolated struct Dynamite_ManageBlockedRoomsResponse: Sendable {
+  // SwiftProtobuf.Message conformance is added in an extension below. See the
+  // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
+  // methods supported on all messages.
+
+  var rooms: [Dynamite_ManageBlockedRoomsResponse.BlockedRoom] = []
+
+  var unknownFields = SwiftProtobuf.UnknownStorage()
+
+  nonisolated struct BlockedRoom: Sendable {
+    // SwiftProtobuf.Message conformance is added in an extension below. See the
+    // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
+    // methods supported on all messages.
+
+    var groupID: Dynamite_GroupId {
+      get {_groupID ?? Dynamite_GroupId()}
+      set {_groupID = newValue}
+    }
+    /// Returns true if `groupID` has been explicitly set.
+    var hasGroupID: Bool {self._groupID != nil}
+    /// Clears the value of `groupID`. Subsequent reads from it will return its default value.
+    mutating func clearGroupID() {self._groupID = nil}
+
+    var name: String {
+      get {_name ?? String()}
+      set {_name = newValue}
+    }
+    /// Returns true if `name` has been explicitly set.
+    var hasName: Bool {self._name != nil}
+    /// Clears the value of `name`. Subsequent reads from it will return its default value.
+    mutating func clearName() {self._name = nil}
+
+    /// µs
+    var blockedTime: Int64 {
+      get {_blockedTime ?? 0}
+      set {_blockedTime = newValue}
+    }
+    /// Returns true if `blockedTime` has been explicitly set.
+    var hasBlockedTime: Bool {self._blockedTime != nil}
+    /// Clears the value of `blockedTime`. Subsequent reads from it will return its default value.
+    mutating func clearBlockedTime() {self._blockedTime = nil}
+
+    var unknownFields = SwiftProtobuf.UnknownStorage()
+
+    init() {}
+
+    fileprivate var _groupID: Dynamite_GroupId? = nil
+    fileprivate var _name: String? = nil
+    fileprivate var _blockedTime: Int64? = nil
+  }
+
+  init() {}
+}
+
+/// Reports one message to the organisation's admin, with a reason and an optional explanation.
+nonisolated struct Dynamite_ReportMessageRequest: Sendable {
+  // SwiftProtobuf.Message conformance is added in an extension below. See the
+  // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
+  // methods supported on all messages.
+
+  var messageID: Dynamite_MessageId {
+    get {_messageID ?? Dynamite_MessageId()}
+    set {_messageID = newValue}
+  }
+  /// Returns true if `messageID` has been explicitly set.
+  var hasMessageID: Bool {self._messageID != nil}
+  /// Clears the value of `messageID`. Subsequent reads from it will return its default value.
+  mutating func clearMessageID() {self._messageID = nil}
+
+  var messageUpdateTime: Dynamite_ReportMessageRequest.Micros {
+    get {_messageUpdateTime ?? Dynamite_ReportMessageRequest.Micros()}
+    set {_messageUpdateTime = newValue}
+  }
+  /// Returns true if `messageUpdateTime` has been explicitly set.
+  var hasMessageUpdateTime: Bool {self._messageUpdateTime != nil}
+  /// Clears the value of `messageUpdateTime`. Subsequent reads from it will return its default value.
+  mutating func clearMessageUpdateTime() {self._messageUpdateTime = nil}
+
+  var reason: Dynamite_ReportMessageRequest.Reason {
+    get {_reason ?? Dynamite_ReportMessageRequest.Reason()}
+    set {_reason = newValue}
+  }
+  /// Returns true if `reason` has been explicitly set.
+  var hasReason: Bool {self._reason != nil}
+  /// Clears the value of `reason`. Subsequent reads from it will return its default value.
+  mutating func clearReason() {self._reason = nil}
+
+  /// always sent, its text only when there is one
+  var explanation: Dynamite_ReportMessageRequest.Explanation {
+    get {_explanation ?? Dynamite_ReportMessageRequest.Explanation()}
+    set {_explanation = newValue}
+  }
+  /// Returns true if `explanation` has been explicitly set.
+  var hasExplanation: Bool {self._explanation != nil}
+  /// Clears the value of `explanation`. Subsequent reads from it will return its default value.
+  mutating func clearExplanation() {self._explanation = nil}
+
+  var requestHeader: Dynamite_RequestHeader {
+    get {_requestHeader ?? Dynamite_RequestHeader()}
+    set {_requestHeader = newValue}
+  }
+  /// Returns true if `requestHeader` has been explicitly set.
+  var hasRequestHeader: Bool {self._requestHeader != nil}
+  /// Clears the value of `requestHeader`. Subsequent reads from it will return its default value.
+  mutating func clearRequestHeader() {self._requestHeader = nil}
+
+  var unknownFields = SwiftProtobuf.UnknownStorage()
+
+  nonisolated struct Micros: Sendable {
+    // SwiftProtobuf.Message conformance is added in an extension below. See the
+    // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
+    // methods supported on all messages.
+
+    var micros: Int64 {
+      get {_micros ?? 0}
+      set {_micros = newValue}
+    }
+    /// Returns true if `micros` has been explicitly set.
+    var hasMicros: Bool {self._micros != nil}
+    /// Clears the value of `micros`. Subsequent reads from it will return its default value.
+    mutating func clearMicros() {self._micros = nil}
+
+    var unknownFields = SwiftProtobuf.UnknownStorage()
+
+    init() {}
+
+    fileprivate var _micros: Int64? = nil
+  }
+
+  nonisolated struct Reason: Sendable {
+    // SwiftProtobuf.Message conformance is added in an extension below. See the
+    // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
+    // methods supported on all messages.
+
+    var kind: Dynamite_ReportMessageRequest.Reason.Kind {
+      get {_kind ?? .violationUnspecified}
+      set {_kind = newValue}
+    }
+    /// Returns true if `kind` has been explicitly set.
+    var hasKind: Bool {self._kind != nil}
+    /// Clears the value of `kind`. Subsequent reads from it will return its default value.
+    mutating func clearKind() {self._kind = nil}
+
+    var unknownFields = SwiftProtobuf.UnknownStorage()
+
+    nonisolated enum Kind: Int, SwiftProtobuf.Enum, Swift.CaseIterable {
+      case violationUnspecified = 0
+      case harassment = 1
+      case discrimination = 2
+      case explicitContent = 3
+      case spam = 4
+      case confidentialInformation = 5
+      case other = 6
+      case sensitiveInformation = 7
+
+      init() {
+        self = .violationUnspecified
+      }
+
+    }
+
+    init() {}
+
+    fileprivate var _kind: Dynamite_ReportMessageRequest.Reason.Kind? = nil
+  }
+
+  nonisolated struct Explanation: Sendable {
+    // SwiftProtobuf.Message conformance is added in an extension below. See the
+    // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
+    // methods supported on all messages.
+
+    var text: String {
+      get {_text ?? String()}
+      set {_text = newValue}
+    }
+    /// Returns true if `text` has been explicitly set.
+    var hasText: Bool {self._text != nil}
+    /// Clears the value of `text`. Subsequent reads from it will return its default value.
+    mutating func clearText() {self._text = nil}
+
+    var unknownFields = SwiftProtobuf.UnknownStorage()
+
+    init() {}
+
+    fileprivate var _text: String? = nil
+  }
+
+  init() {}
+
+  fileprivate var _messageID: Dynamite_MessageId? = nil
+  fileprivate var _messageUpdateTime: Dynamite_ReportMessageRequest.Micros? = nil
+  fileprivate var _reason: Dynamite_ReportMessageRequest.Reason? = nil
+  fileprivate var _explanation: Dynamite_ReportMessageRequest.Explanation? = nil
+  fileprivate var _requestHeader: Dynamite_RequestHeader? = nil
+}
+
+nonisolated struct Dynamite_ReportMessageResponse: Sendable {
   // SwiftProtobuf.Message conformance is added in an extension below. See the
   // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
   // methods supported on all messages.
@@ -7940,6 +9346,33 @@ nonisolated struct Dynamite_GroupScopedCapabilities: Sendable {
   // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
   // methods supported on all messages.
 
+  var canUpdateMemberRoles: Bool {
+    get {_canUpdateMemberRoles ?? false}
+    set {_canUpdateMemberRoles = newValue}
+  }
+  /// Returns true if `canUpdateMemberRoles` has been explicitly set.
+  var hasCanUpdateMemberRoles: Bool {self._canUpdateMemberRoles != nil}
+  /// Clears the value of `canUpdateMemberRoles`. Subsequent reads from it will return its default value.
+  mutating func clearCanUpdateMemberRoles() {self._canUpdateMemberRoles = nil}
+
+  var canDeleteGroup: Bool {
+    get {_canDeleteGroup ?? false}
+    set {_canDeleteGroup = newValue}
+  }
+  /// Returns true if `canDeleteGroup` has been explicitly set.
+  var hasCanDeleteGroup: Bool {self._canDeleteGroup != nil}
+  /// Clears the value of `canDeleteGroup`. Subsequent reads from it will return its default value.
+  mutating func clearCanDeleteGroup() {self._canDeleteGroup = nil}
+
+  var canEditGuidelines: Bool {
+    get {_canEditGuidelines ?? false}
+    set {_canEditGuidelines = newValue}
+  }
+  /// Returns true if `canEditGuidelines` has been explicitly set.
+  var hasCanEditGuidelines: Bool {self._canEditGuidelines != nil}
+  /// Clears the value of `canEditGuidelines`. Subsequent reads from it will return its default value.
+  mutating func clearCanEditGuidelines() {self._canEditGuidelines = nil}
+
   var canEditDescription: Bool {
     get {_canEditDescription ?? false}
     set {_canEditDescription = newValue}
@@ -7948,6 +9381,15 @@ nonisolated struct Dynamite_GroupScopedCapabilities: Sendable {
   var hasCanEditDescription: Bool {self._canEditDescription != nil}
   /// Clears the value of `canEditDescription`. Subsequent reads from it will return its default value.
   mutating func clearCanEditDescription() {self._canEditDescription = nil}
+
+  var canReportMessages: Bool {
+    get {_canReportMessages ?? false}
+    set {_canReportMessages = newValue}
+  }
+  /// Returns true if `canReportMessages` has been explicitly set.
+  var hasCanReportMessages: Bool {self._canReportMessages != nil}
+  /// Clears the value of `canReportMessages`. Subsequent reads from it will return its default value.
+  mutating func clearCanReportMessages() {self._canReportMessages = nil}
 
   /// name and emoji
   var canEditSpaceProfile: Bool {
@@ -7969,13 +9411,48 @@ nonisolated struct Dynamite_GroupScopedCapabilities: Sendable {
   /// Clears the value of `canManageMembers`. Subsequent reads from it will return its default value.
   mutating func clearCanManageMembers() {self._canManageMembers = nil}
 
+  /// Google answers set_typing_state with 403 where this is false
+  var canTriggerTypingIndicator: Bool {
+    get {_canTriggerTypingIndicator ?? false}
+    set {_canTriggerTypingIndicator = newValue}
+  }
+  /// Returns true if `canTriggerTypingIndicator` has been explicitly set.
+  var hasCanTriggerTypingIndicator: Bool {self._canTriggerTypingIndicator != nil}
+  /// Clears the value of `canTriggerTypingIndicator`. Subsequent reads from it will return its default value.
+  mutating func clearCanTriggerTypingIndicator() {self._canTriggerTypingIndicator = nil}
+
+  var canToggleHistory: Bool {
+    get {_canToggleHistory ?? false}
+    set {_canToggleHistory = newValue}
+  }
+  /// Returns true if `canToggleHistory` has been explicitly set.
+  var hasCanToggleHistory: Bool {self._canToggleHistory != nil}
+  /// Clears the value of `canToggleHistory`. Subsequent reads from it will return its default value.
+  mutating func clearCanToggleHistory() {self._canToggleHistory = nil}
+
+  var canUpdateManagerRoles: Bool {
+    get {_canUpdateManagerRoles ?? false}
+    set {_canUpdateManagerRoles = newValue}
+  }
+  /// Returns true if `canUpdateManagerRoles` has been explicitly set.
+  var hasCanUpdateManagerRoles: Bool {self._canUpdateManagerRoles != nil}
+  /// Clears the value of `canUpdateManagerRoles`. Subsequent reads from it will return its default value.
+  mutating func clearCanUpdateManagerRoles() {self._canUpdateManagerRoles = nil}
+
   var unknownFields = SwiftProtobuf.UnknownStorage()
 
   init() {}
 
+  fileprivate var _canUpdateMemberRoles: Bool? = nil
+  fileprivate var _canDeleteGroup: Bool? = nil
+  fileprivate var _canEditGuidelines: Bool? = nil
   fileprivate var _canEditDescription: Bool? = nil
+  fileprivate var _canReportMessages: Bool? = nil
   fileprivate var _canEditSpaceProfile: Bool? = nil
   fileprivate var _canManageMembers: Bool? = nil
+  fileprivate var _canTriggerTypingIndicator: Bool? = nil
+  fileprivate var _canToggleHistory: Bool? = nil
+  fileprivate var _canUpdateManagerRoles: Bool? = nil
 }
 
 nonisolated struct Dynamite_GetGroupScopedCapabilitiesRequest: Sendable {
@@ -11909,6 +13386,10 @@ nonisolated extension Dynamite_DndState: SwiftProtobuf._ProtoNameProviding {
   static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{2}\0DND_STATE_UNKNOWN\0\u{1}DND_STATE_AVAILABLE\0\u{1}DND_STATE_DND\0")
 }
 
+nonisolated extension Dynamite_MemberRole: SwiftProtobuf._ProtoNameProviding {
+  static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{2}\0MEMBER_ROLE_UNKNOWN\0\u{2}\u{3}MEMBER_ROLE_MEMBER\0\u{1}MEMBER_ROLE_OWNER\0\u{2}\u{2}MEMBER_ROLE_MANAGER\0")
+}
+
 nonisolated extension Dynamite_TypingState: SwiftProtobuf._ProtoNameProviding {
   static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{2}\0TYPING_STATE_UNSPECIFIED\0\u{1}TYPING_STATE_TYPING\0\u{1}TYPING_STATE_STOPPED\0")
 }
@@ -14316,10 +15797,12 @@ nonisolated extension Dynamite_RoomUpdatedMetadata: SwiftProtobuf.Message, Swift
 
 nonisolated extension Dynamite_QuotedMessageMetadata: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
   static let protoMessageName: String = _protobuf_package + ".QuotedMessageMetadata"
-  static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{3}message_id\0\u{3}last_update_time_when_quoted\0\u{2}\u{3}creator\0\u{3}text_body\0\u{1}annotations\0\u{4}\u{8}quote_type\0\u{2}\u{2}group\0")
+  static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{3}message_id\0\u{3}last_update_time_when_quoted\0\u{3}message_state\0\u{2}\u{2}creator\0\u{3}text_body\0\u{1}annotations\0\u{4}\u{4}retention_settings\0\u{4}\u{4}quote_type\0\u{2}\u{2}group\0")
 
   fileprivate class _StorageClass {
     var _messageID: Dynamite_MessageId? = nil
+    var _messageState: Dynamite_QuotedMessageMetadata.MessageState? = nil
+    var _retentionSettings: Dynamite_RetentionSettings? = nil
     var _lastUpdateTimeWhenQuoted: Int64? = nil
     var _creator: Dynamite_User? = nil
     var _textBody: String? = nil
@@ -14337,6 +15820,8 @@ nonisolated extension Dynamite_QuotedMessageMetadata: SwiftProtobuf.Message, Swi
 
     init(copying source: _StorageClass) {
       _messageID = source._messageID
+      _messageState = source._messageState
+      _retentionSettings = source._retentionSettings
       _lastUpdateTimeWhenQuoted = source._lastUpdateTimeWhenQuoted
       _creator = source._creator
       _textBody = source._textBody
@@ -14363,9 +15848,11 @@ nonisolated extension Dynamite_QuotedMessageMetadata: SwiftProtobuf.Message, Swi
         switch fieldNumber {
         case 1: try { try decoder.decodeSingularMessageField(value: &_storage._messageID) }()
         case 2: try { try decoder.decodeSingularInt64Field(value: &_storage._lastUpdateTimeWhenQuoted) }()
+        case 3: try { try decoder.decodeSingularEnumField(value: &_storage._messageState) }()
         case 5: try { try decoder.decodeSingularMessageField(value: &_storage._creator) }()
         case 6: try { try decoder.decodeSingularStringField(value: &_storage._textBody) }()
         case 7: try { try decoder.decodeRepeatedMessageField(value: &_storage._annotations) }()
+        case 11: try { try decoder.decodeSingularMessageField(value: &_storage._retentionSettings) }()
         case 15: try { try decoder.decodeSingularEnumField(value: &_storage._quoteType) }()
         case 17: try { try decoder.decodeSingularMessageField(value: &_storage._group) }()
         default: break
@@ -14386,6 +15873,9 @@ nonisolated extension Dynamite_QuotedMessageMetadata: SwiftProtobuf.Message, Swi
       try { if let v = _storage._lastUpdateTimeWhenQuoted {
         try visitor.visitSingularInt64Field(value: v, fieldNumber: 2)
       } }()
+      try { if let v = _storage._messageState {
+        try visitor.visitSingularEnumField(value: v, fieldNumber: 3)
+      } }()
       try { if let v = _storage._creator {
         try visitor.visitSingularMessageField(value: v, fieldNumber: 5)
       } }()
@@ -14395,6 +15885,9 @@ nonisolated extension Dynamite_QuotedMessageMetadata: SwiftProtobuf.Message, Swi
       if !_storage._annotations.isEmpty {
         try visitor.visitRepeatedMessageField(value: _storage._annotations, fieldNumber: 7)
       }
+      try { if let v = _storage._retentionSettings {
+        try visitor.visitSingularMessageField(value: v, fieldNumber: 11)
+      } }()
       try { if let v = _storage._quoteType {
         try visitor.visitSingularEnumField(value: v, fieldNumber: 15)
       } }()
@@ -14411,6 +15904,8 @@ nonisolated extension Dynamite_QuotedMessageMetadata: SwiftProtobuf.Message, Swi
         let _storage = _args.0
         let rhs_storage = _args.1
         if _storage._messageID != rhs_storage._messageID {return false}
+        if _storage._messageState != rhs_storage._messageState {return false}
+        if _storage._retentionSettings != rhs_storage._retentionSettings {return false}
         if _storage._lastUpdateTimeWhenQuoted != rhs_storage._lastUpdateTimeWhenQuoted {return false}
         if _storage._creator != rhs_storage._creator {return false}
         if _storage._textBody != rhs_storage._textBody {return false}
@@ -14424,6 +15919,10 @@ nonisolated extension Dynamite_QuotedMessageMetadata: SwiftProtobuf.Message, Swi
     if lhs.unknownFields != rhs.unknownFields {return false}
     return true
   }
+}
+
+nonisolated extension Dynamite_QuotedMessageMetadata.MessageState: SwiftProtobuf._ProtoNameProviding {
+  static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{2}\0MESSAGE_STATE_UNSPECIFIED\0\u{1}ACTIVE\0\u{1}DELETED\0\u{1}OTR_EDITED\0")
 }
 
 nonisolated extension Dynamite_QuotedGroup: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
@@ -14893,7 +16392,7 @@ nonisolated extension Dynamite_RemoveMessageLabelResponse: SwiftProtobuf.Message
 
 nonisolated extension Dynamite_ReplySummary: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
   static let protoMessageName: String = _protobuf_package + ".ReplySummary"
-  static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{3}total_reply_count\0")
+  static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{3}total_reply_count\0\u{3}unread_reply_count\0\u{3}unread_attributes\0")
 
   mutating func decodeMessage<D: SwiftProtobuf.Decoder>(decoder: inout D) throws {
     while let fieldNumber = try decoder.nextFieldNumber() {
@@ -14902,6 +16401,8 @@ nonisolated extension Dynamite_ReplySummary: SwiftProtobuf.Message, SwiftProtobu
       // enabled. https://github.com/apple/swift-protobuf/issues/1034
       switch fieldNumber {
       case 1: try { try decoder.decodeSingularInt64Field(value: &self._totalReplyCount) }()
+      case 2: try { try decoder.decodeSingularInt64Field(value: &self._unreadReplyCount) }()
+      case 3: try { try decoder.decodeRepeatedEnumField(value: &self.unreadAttributes) }()
       default: break
       }
     }
@@ -14915,14 +16416,26 @@ nonisolated extension Dynamite_ReplySummary: SwiftProtobuf.Message, SwiftProtobu
     try { if let v = self._totalReplyCount {
       try visitor.visitSingularInt64Field(value: v, fieldNumber: 1)
     } }()
+    try { if let v = self._unreadReplyCount {
+      try visitor.visitSingularInt64Field(value: v, fieldNumber: 2)
+    } }()
+    if !self.unreadAttributes.isEmpty {
+      try visitor.visitPackedEnumField(value: self.unreadAttributes, fieldNumber: 3)
+    }
     try unknownFields.traverse(visitor: &visitor)
   }
 
   static func ==(lhs: Dynamite_ReplySummary, rhs: Dynamite_ReplySummary) -> Bool {
     if lhs._totalReplyCount != rhs._totalReplyCount {return false}
+    if lhs._unreadReplyCount != rhs._unreadReplyCount {return false}
+    if lhs.unreadAttributes != rhs.unreadAttributes {return false}
     if lhs.unknownFields != rhs.unknownFields {return false}
     return true
   }
+}
+
+nonisolated extension Dynamite_ReplySummary.UnreadAttribute: SwiftProtobuf._ProtoNameProviding {
+  static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{2}\0UNREAD_ATTRIBUTE_UNSPECIFIED\0\u{1}USER_MENTIONED\0\u{1}ALL_MENTIONED\0")
 }
 
 nonisolated extension Dynamite_TopicReadState: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
@@ -15068,7 +16581,7 @@ nonisolated extension Dynamite_Topic: SwiftProtobuf.Message, SwiftProtobuf._Mess
 
 nonisolated extension Dynamite_GroupReadState: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
   static let protoMessageName: String = _protobuf_package + ".GroupReadState"
-  static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{4}\u{2}last_read_time\0\u{4}\u{2}unread_message_count\0\u{1}starred\0\u{4}\u{2}unread_subscribed_topic_count\0\u{4}\u{2}hide_timestamp\0\u{4}\u{3}notification_settings\0\u{4}\u{6}mark_as_unread_timestamp\0\u{4}\u{b}last_head_message_create_time\0")
+  static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{4}\u{2}last_read_time\0\u{4}\u{2}unread_message_count\0\u{1}starred\0\u{4}\u{2}unread_subscribed_topic_count\0\u{4}\u{2}hide_timestamp\0\u{4}\u{3}notification_settings\0\u{4}\u{6}mark_as_unread_timestamp\0\u{4}\u{b}last_head_message_create_time\0\u{2}\u{2}labels\0")
 
   mutating func decodeMessage<D: SwiftProtobuf.Decoder>(decoder: inout D) throws {
     while let fieldNumber = try decoder.nextFieldNumber() {
@@ -15084,6 +16597,7 @@ nonisolated extension Dynamite_GroupReadState: SwiftProtobuf.Message, SwiftProto
       case 12: try { try decoder.decodeSingularMessageField(value: &self._notificationSettings) }()
       case 18: try { try decoder.decodeSingularInt64Field(value: &self._markAsUnreadTimestamp) }()
       case 29: try { try decoder.decodeSingularInt64Field(value: &self._lastHeadMessageCreateTime) }()
+      case 31: try { try decoder.decodeRepeatedMessageField(value: &self.labels) }()
       default: break
       }
     }
@@ -15118,11 +16632,15 @@ nonisolated extension Dynamite_GroupReadState: SwiftProtobuf.Message, SwiftProto
     try { if let v = self._lastHeadMessageCreateTime {
       try visitor.visitSingularInt64Field(value: v, fieldNumber: 29)
     } }()
+    if !self.labels.isEmpty {
+      try visitor.visitRepeatedMessageField(value: self.labels, fieldNumber: 31)
+    }
     try unknownFields.traverse(visitor: &visitor)
   }
 
   static func ==(lhs: Dynamite_GroupReadState, rhs: Dynamite_GroupReadState) -> Bool {
     if lhs._lastReadTime != rhs._lastReadTime {return false}
+    if lhs.labels != rhs.labels {return false}
     if lhs._unreadMessageCount != rhs._unreadMessageCount {return false}
     if lhs._starred != rhs._starred {return false}
     if lhs._unreadSubscribedTopicCount != rhs._unreadSubscribedTopicCount {return false}
@@ -15427,7 +16945,7 @@ nonisolated extension Dynamite_WorldItemLite: SwiftProtobuf.Message, SwiftProtob
 
 nonisolated extension Dynamite_WorldItemLite.GroupLite: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
   static let protoMessageName: String = Dynamite_WorldItemLite.protoMessageName + ".GroupLite"
-  static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{4}\u{8}space_details\0")
+  static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{2}\u{4}retention\0\u{4}\u{4}space_details\0")
 
   mutating func decodeMessage<D: SwiftProtobuf.Decoder>(decoder: inout D) throws {
     while let fieldNumber = try decoder.nextFieldNumber() {
@@ -15435,6 +16953,7 @@ nonisolated extension Dynamite_WorldItemLite.GroupLite: SwiftProtobuf.Message, S
       // allocates stack space for every case branch when no optimizations are
       // enabled. https://github.com/apple/swift-protobuf/issues/1034
       switch fieldNumber {
+      case 4: try { try decoder.decodeSingularMessageField(value: &self._retention) }()
       case 8: try { try decoder.decodeSingularMessageField(value: &self._spaceDetails) }()
       default: break
       }
@@ -15446,6 +16965,9 @@ nonisolated extension Dynamite_WorldItemLite.GroupLite: SwiftProtobuf.Message, S
     // allocates stack space for every if/case branch local when no optimizations
     // are enabled. https://github.com/apple/swift-protobuf/issues/1034 and
     // https://github.com/apple/swift-protobuf/issues/1182
+    try { if let v = self._retention {
+      try visitor.visitSingularMessageField(value: v, fieldNumber: 4)
+    } }()
     try { if let v = self._spaceDetails {
       try visitor.visitSingularMessageField(value: v, fieldNumber: 8)
     } }()
@@ -15453,6 +16975,7 @@ nonisolated extension Dynamite_WorldItemLite.GroupLite: SwiftProtobuf.Message, S
   }
 
   static func ==(lhs: Dynamite_WorldItemLite.GroupLite, rhs: Dynamite_WorldItemLite.GroupLite) -> Bool {
+    if lhs._retention != rhs._retention {return false}
     if lhs._spaceDetails != rhs._spaceDetails {return false}
     if lhs.unknownFields != rhs.unknownFields {return false}
     return true
@@ -15493,6 +17016,455 @@ nonisolated extension Dynamite_GroupAttribute: SwiftProtobuf.Message, SwiftProto
   static func ==(lhs: Dynamite_GroupAttribute, rhs: Dynamite_GroupAttribute) -> Bool {
     if lhs._type != rhs._type {return false}
     if lhs._value != rhs._value {return false}
+    if lhs.unknownFields != rhs.unknownFields {return false}
+    return true
+  }
+}
+
+nonisolated extension Dynamite_RosterSectionId: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
+  static let protoMessageName: String = _protobuf_package + ".RosterSectionId"
+  static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{1}type\0\u{1}label\0\u{3}secondary_key\0")
+
+  mutating func decodeMessage<D: SwiftProtobuf.Decoder>(decoder: inout D) throws {
+    while let fieldNumber = try decoder.nextFieldNumber() {
+      // The use of inline closures is to circumvent an issue where the compiler
+      // allocates stack space for every case branch when no optimizations are
+      // enabled. https://github.com/apple/swift-protobuf/issues/1034
+      switch fieldNumber {
+      case 1: try { try decoder.decodeSingularInt32Field(value: &self._type) }()
+      case 2: try { try decoder.decodeSingularMessageField(value: &self._label) }()
+      case 3: try { try decoder.decodeSingularStringField(value: &self._secondaryKey) }()
+      default: break
+      }
+    }
+  }
+
+  func traverse<V: SwiftProtobuf.Visitor>(visitor: inout V) throws {
+    // The use of inline closures is to circumvent an issue where the compiler
+    // allocates stack space for every if/case branch local when no optimizations
+    // are enabled. https://github.com/apple/swift-protobuf/issues/1034 and
+    // https://github.com/apple/swift-protobuf/issues/1182
+    try { if let v = self._type {
+      try visitor.visitSingularInt32Field(value: v, fieldNumber: 1)
+    } }()
+    try { if let v = self._label {
+      try visitor.visitSingularMessageField(value: v, fieldNumber: 2)
+    } }()
+    try { if let v = self._secondaryKey {
+      try visitor.visitSingularStringField(value: v, fieldNumber: 3)
+    } }()
+    try unknownFields.traverse(visitor: &visitor)
+  }
+
+  static func ==(lhs: Dynamite_RosterSectionId, rhs: Dynamite_RosterSectionId) -> Bool {
+    if lhs._type != rhs._type {return false}
+    if lhs._label != rhs._label {return false}
+    if lhs._secondaryKey != rhs._secondaryKey {return false}
+    if lhs.unknownFields != rhs.unknownFields {return false}
+    return true
+  }
+}
+
+nonisolated extension Dynamite_RosterSection: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
+  static let protoMessageName: String = _protobuf_package + ".RosterSection"
+  static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{1}id\0\u{3}sort_order\0\u{1}name\0\u{3}filtered_to_unread\0\u{1}collapsed\0\u{3}rows_shown\0\u{4}\u{4}content_sort\0\u{3}rows_shown_in_recency\0")
+
+  mutating func decodeMessage<D: SwiftProtobuf.Decoder>(decoder: inout D) throws {
+    while let fieldNumber = try decoder.nextFieldNumber() {
+      // The use of inline closures is to circumvent an issue where the compiler
+      // allocates stack space for every case branch when no optimizations are
+      // enabled. https://github.com/apple/swift-protobuf/issues/1034
+      switch fieldNumber {
+      case 1: try { try decoder.decodeSingularMessageField(value: &self._id) }()
+      case 2: try { try decoder.decodeSingularInt64Field(value: &self._sortOrder) }()
+      case 3: try { try decoder.decodeSingularStringField(value: &self._name) }()
+      case 4: try { try decoder.decodeSingularBoolField(value: &self._filteredToUnread) }()
+      case 5: try { try decoder.decodeSingularBoolField(value: &self._collapsed) }()
+      case 6: try { try decoder.decodeSingularInt32Field(value: &self._rowsShown) }()
+      case 10: try { try decoder.decodeSingularMessageField(value: &self._contentSort) }()
+      case 11: try { try decoder.decodeSingularInt32Field(value: &self._rowsShownInRecency) }()
+      default: break
+      }
+    }
+  }
+
+  func traverse<V: SwiftProtobuf.Visitor>(visitor: inout V) throws {
+    // The use of inline closures is to circumvent an issue where the compiler
+    // allocates stack space for every if/case branch local when no optimizations
+    // are enabled. https://github.com/apple/swift-protobuf/issues/1034 and
+    // https://github.com/apple/swift-protobuf/issues/1182
+    try { if let v = self._id {
+      try visitor.visitSingularMessageField(value: v, fieldNumber: 1)
+    } }()
+    try { if let v = self._sortOrder {
+      try visitor.visitSingularInt64Field(value: v, fieldNumber: 2)
+    } }()
+    try { if let v = self._name {
+      try visitor.visitSingularStringField(value: v, fieldNumber: 3)
+    } }()
+    try { if let v = self._filteredToUnread {
+      try visitor.visitSingularBoolField(value: v, fieldNumber: 4)
+    } }()
+    try { if let v = self._collapsed {
+      try visitor.visitSingularBoolField(value: v, fieldNumber: 5)
+    } }()
+    try { if let v = self._rowsShown {
+      try visitor.visitSingularInt32Field(value: v, fieldNumber: 6)
+    } }()
+    try { if let v = self._contentSort {
+      try visitor.visitSingularMessageField(value: v, fieldNumber: 10)
+    } }()
+    try { if let v = self._rowsShownInRecency {
+      try visitor.visitSingularInt32Field(value: v, fieldNumber: 11)
+    } }()
+    try unknownFields.traverse(visitor: &visitor)
+  }
+
+  static func ==(lhs: Dynamite_RosterSection, rhs: Dynamite_RosterSection) -> Bool {
+    if lhs._id != rhs._id {return false}
+    if lhs._sortOrder != rhs._sortOrder {return false}
+    if lhs._name != rhs._name {return false}
+    if lhs._filteredToUnread != rhs._filteredToUnread {return false}
+    if lhs._collapsed != rhs._collapsed {return false}
+    if lhs._rowsShown != rhs._rowsShown {return false}
+    if lhs._contentSort != rhs._contentSort {return false}
+    if lhs._rowsShownInRecency != rhs._rowsShownInRecency {return false}
+    if lhs.unknownFields != rhs.unknownFields {return false}
+    return true
+  }
+}
+
+nonisolated extension Dynamite_RosterSection.ContentSort: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
+  static let protoMessageName: String = Dynamite_RosterSection.protoMessageName + ".ContentSort"
+  static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{1}order\0")
+
+  mutating func decodeMessage<D: SwiftProtobuf.Decoder>(decoder: inout D) throws {
+    while let fieldNumber = try decoder.nextFieldNumber() {
+      // The use of inline closures is to circumvent an issue where the compiler
+      // allocates stack space for every case branch when no optimizations are
+      // enabled. https://github.com/apple/swift-protobuf/issues/1034
+      switch fieldNumber {
+      case 1: try { try decoder.decodeSingularInt32Field(value: &self._order) }()
+      default: break
+      }
+    }
+  }
+
+  func traverse<V: SwiftProtobuf.Visitor>(visitor: inout V) throws {
+    // The use of inline closures is to circumvent an issue where the compiler
+    // allocates stack space for every if/case branch local when no optimizations
+    // are enabled. https://github.com/apple/swift-protobuf/issues/1034 and
+    // https://github.com/apple/swift-protobuf/issues/1182
+    try { if let v = self._order {
+      try visitor.visitSingularInt32Field(value: v, fieldNumber: 1)
+    } }()
+    try unknownFields.traverse(visitor: &visitor)
+  }
+
+  static func ==(lhs: Dynamite_RosterSection.ContentSort, rhs: Dynamite_RosterSection.ContentSort) -> Bool {
+    if lhs._order != rhs._order {return false}
+    if lhs.unknownFields != rhs.unknownFields {return false}
+    return true
+  }
+}
+
+nonisolated extension Dynamite_FieldNumberMask: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
+  static let protoMessageName: String = _protobuf_package + ".FieldNumberMask"
+  static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{2}\u{2}fields\0")
+
+  mutating func decodeMessage<D: SwiftProtobuf.Decoder>(decoder: inout D) throws {
+    while let fieldNumber = try decoder.nextFieldNumber() {
+      // The use of inline closures is to circumvent an issue where the compiler
+      // allocates stack space for every case branch when no optimizations are
+      // enabled. https://github.com/apple/swift-protobuf/issues/1034
+      switch fieldNumber {
+      case 2: try { try decoder.decodeRepeatedInt32Field(value: &self.fields) }()
+      default: break
+      }
+    }
+  }
+
+  func traverse<V: SwiftProtobuf.Visitor>(visitor: inout V) throws {
+    if !self.fields.isEmpty {
+      try visitor.visitPackedInt32Field(value: self.fields, fieldNumber: 2)
+    }
+    try unknownFields.traverse(visitor: &visitor)
+  }
+
+  static func ==(lhs: Dynamite_FieldNumberMask, rhs: Dynamite_FieldNumberMask) -> Bool {
+    if lhs.fields != rhs.fields {return false}
+    if lhs.unknownFields != rhs.unknownFields {return false}
+    return true
+  }
+}
+
+nonisolated extension Dynamite_CreateRosterSectionRequest: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
+  static let protoMessageName: String = _protobuf_package + ".CreateRosterSectionRequest"
+  static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{1}section\0\u{4}c\u{1}request_header\0")
+
+  mutating func decodeMessage<D: SwiftProtobuf.Decoder>(decoder: inout D) throws {
+    while let fieldNumber = try decoder.nextFieldNumber() {
+      // The use of inline closures is to circumvent an issue where the compiler
+      // allocates stack space for every case branch when no optimizations are
+      // enabled. https://github.com/apple/swift-protobuf/issues/1034
+      switch fieldNumber {
+      case 1: try { try decoder.decodeSingularMessageField(value: &self._section) }()
+      case 100: try { try decoder.decodeSingularMessageField(value: &self._requestHeader) }()
+      default: break
+      }
+    }
+  }
+
+  func traverse<V: SwiftProtobuf.Visitor>(visitor: inout V) throws {
+    // The use of inline closures is to circumvent an issue where the compiler
+    // allocates stack space for every if/case branch local when no optimizations
+    // are enabled. https://github.com/apple/swift-protobuf/issues/1034 and
+    // https://github.com/apple/swift-protobuf/issues/1182
+    try { if let v = self._section {
+      try visitor.visitSingularMessageField(value: v, fieldNumber: 1)
+    } }()
+    try { if let v = self._requestHeader {
+      try visitor.visitSingularMessageField(value: v, fieldNumber: 100)
+    } }()
+    try unknownFields.traverse(visitor: &visitor)
+  }
+
+  static func ==(lhs: Dynamite_CreateRosterSectionRequest, rhs: Dynamite_CreateRosterSectionRequest) -> Bool {
+    if lhs._section != rhs._section {return false}
+    if lhs._requestHeader != rhs._requestHeader {return false}
+    if lhs.unknownFields != rhs.unknownFields {return false}
+    return true
+  }
+}
+
+nonisolated extension Dynamite_CreateRosterSectionResponse: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
+  static let protoMessageName: String = _protobuf_package + ".CreateRosterSectionResponse"
+  static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{1}section\0")
+
+  mutating func decodeMessage<D: SwiftProtobuf.Decoder>(decoder: inout D) throws {
+    while let fieldNumber = try decoder.nextFieldNumber() {
+      // The use of inline closures is to circumvent an issue where the compiler
+      // allocates stack space for every case branch when no optimizations are
+      // enabled. https://github.com/apple/swift-protobuf/issues/1034
+      switch fieldNumber {
+      case 1: try { try decoder.decodeSingularMessageField(value: &self._section) }()
+      default: break
+      }
+    }
+  }
+
+  func traverse<V: SwiftProtobuf.Visitor>(visitor: inout V) throws {
+    // The use of inline closures is to circumvent an issue where the compiler
+    // allocates stack space for every if/case branch local when no optimizations
+    // are enabled. https://github.com/apple/swift-protobuf/issues/1034 and
+    // https://github.com/apple/swift-protobuf/issues/1182
+    try { if let v = self._section {
+      try visitor.visitSingularMessageField(value: v, fieldNumber: 1)
+    } }()
+    try unknownFields.traverse(visitor: &visitor)
+  }
+
+  static func ==(lhs: Dynamite_CreateRosterSectionResponse, rhs: Dynamite_CreateRosterSectionResponse) -> Bool {
+    if lhs._section != rhs._section {return false}
+    if lhs.unknownFields != rhs.unknownFields {return false}
+    return true
+  }
+}
+
+nonisolated extension Dynamite_UpdateRosterSectionRequest: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
+  static let protoMessageName: String = _protobuf_package + ".UpdateRosterSectionRequest"
+  static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{1}section\0\u{2}\u{2}mask\0\u{4}a\u{1}request_header\0")
+
+  mutating func decodeMessage<D: SwiftProtobuf.Decoder>(decoder: inout D) throws {
+    while let fieldNumber = try decoder.nextFieldNumber() {
+      // The use of inline closures is to circumvent an issue where the compiler
+      // allocates stack space for every case branch when no optimizations are
+      // enabled. https://github.com/apple/swift-protobuf/issues/1034
+      switch fieldNumber {
+      case 1: try { try decoder.decodeSingularMessageField(value: &self._section) }()
+      case 3: try { try decoder.decodeSingularMessageField(value: &self._mask) }()
+      case 100: try { try decoder.decodeSingularMessageField(value: &self._requestHeader) }()
+      default: break
+      }
+    }
+  }
+
+  func traverse<V: SwiftProtobuf.Visitor>(visitor: inout V) throws {
+    // The use of inline closures is to circumvent an issue where the compiler
+    // allocates stack space for every if/case branch local when no optimizations
+    // are enabled. https://github.com/apple/swift-protobuf/issues/1034 and
+    // https://github.com/apple/swift-protobuf/issues/1182
+    try { if let v = self._section {
+      try visitor.visitSingularMessageField(value: v, fieldNumber: 1)
+    } }()
+    try { if let v = self._mask {
+      try visitor.visitSingularMessageField(value: v, fieldNumber: 3)
+    } }()
+    try { if let v = self._requestHeader {
+      try visitor.visitSingularMessageField(value: v, fieldNumber: 100)
+    } }()
+    try unknownFields.traverse(visitor: &visitor)
+  }
+
+  static func ==(lhs: Dynamite_UpdateRosterSectionRequest, rhs: Dynamite_UpdateRosterSectionRequest) -> Bool {
+    if lhs._section != rhs._section {return false}
+    if lhs._mask != rhs._mask {return false}
+    if lhs._requestHeader != rhs._requestHeader {return false}
+    if lhs.unknownFields != rhs.unknownFields {return false}
+    return true
+  }
+}
+
+nonisolated extension Dynamite_UpdateRosterSectionResponse: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
+  static let protoMessageName: String = _protobuf_package + ".UpdateRosterSectionResponse"
+  static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{1}section\0")
+
+  mutating func decodeMessage<D: SwiftProtobuf.Decoder>(decoder: inout D) throws {
+    while let fieldNumber = try decoder.nextFieldNumber() {
+      // The use of inline closures is to circumvent an issue where the compiler
+      // allocates stack space for every case branch when no optimizations are
+      // enabled. https://github.com/apple/swift-protobuf/issues/1034
+      switch fieldNumber {
+      case 1: try { try decoder.decodeSingularMessageField(value: &self._section) }()
+      default: break
+      }
+    }
+  }
+
+  func traverse<V: SwiftProtobuf.Visitor>(visitor: inout V) throws {
+    // The use of inline closures is to circumvent an issue where the compiler
+    // allocates stack space for every if/case branch local when no optimizations
+    // are enabled. https://github.com/apple/swift-protobuf/issues/1034 and
+    // https://github.com/apple/swift-protobuf/issues/1182
+    try { if let v = self._section {
+      try visitor.visitSingularMessageField(value: v, fieldNumber: 1)
+    } }()
+    try unknownFields.traverse(visitor: &visitor)
+  }
+
+  static func ==(lhs: Dynamite_UpdateRosterSectionResponse, rhs: Dynamite_UpdateRosterSectionResponse) -> Bool {
+    if lhs._section != rhs._section {return false}
+    if lhs.unknownFields != rhs.unknownFields {return false}
+    return true
+  }
+}
+
+nonisolated extension Dynamite_DeleteRosterSectionRequest: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
+  static let protoMessageName: String = _protobuf_package + ".DeleteRosterSectionRequest"
+  static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{2}\u{2}id\0\u{4}b\u{1}request_header\0")
+
+  mutating func decodeMessage<D: SwiftProtobuf.Decoder>(decoder: inout D) throws {
+    while let fieldNumber = try decoder.nextFieldNumber() {
+      // The use of inline closures is to circumvent an issue where the compiler
+      // allocates stack space for every case branch when no optimizations are
+      // enabled. https://github.com/apple/swift-protobuf/issues/1034
+      switch fieldNumber {
+      case 2: try { try decoder.decodeSingularMessageField(value: &self._id) }()
+      case 100: try { try decoder.decodeSingularMessageField(value: &self._requestHeader) }()
+      default: break
+      }
+    }
+  }
+
+  func traverse<V: SwiftProtobuf.Visitor>(visitor: inout V) throws {
+    // The use of inline closures is to circumvent an issue where the compiler
+    // allocates stack space for every if/case branch local when no optimizations
+    // are enabled. https://github.com/apple/swift-protobuf/issues/1034 and
+    // https://github.com/apple/swift-protobuf/issues/1182
+    try { if let v = self._id {
+      try visitor.visitSingularMessageField(value: v, fieldNumber: 2)
+    } }()
+    try { if let v = self._requestHeader {
+      try visitor.visitSingularMessageField(value: v, fieldNumber: 100)
+    } }()
+    try unknownFields.traverse(visitor: &visitor)
+  }
+
+  static func ==(lhs: Dynamite_DeleteRosterSectionRequest, rhs: Dynamite_DeleteRosterSectionRequest) -> Bool {
+    if lhs._id != rhs._id {return false}
+    if lhs._requestHeader != rhs._requestHeader {return false}
+    if lhs.unknownFields != rhs.unknownFields {return false}
+    return true
+  }
+}
+
+nonisolated extension Dynamite_DeleteRosterSectionResponse: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
+  static let protoMessageName: String = _protobuf_package + ".DeleteRosterSectionResponse"
+  static let _protobuf_nameMap = SwiftProtobuf._NameMap()
+
+  mutating func decodeMessage<D: SwiftProtobuf.Decoder>(decoder: inout D) throws {
+    // Load everything into unknown fields
+    while try decoder.nextFieldNumber() != nil {}
+  }
+
+  func traverse<V: SwiftProtobuf.Visitor>(visitor: inout V) throws {
+    try unknownFields.traverse(visitor: &visitor)
+  }
+
+  static func ==(lhs: Dynamite_DeleteRosterSectionResponse, rhs: Dynamite_DeleteRosterSectionResponse) -> Bool {
+    if lhs.unknownFields != rhs.unknownFields {return false}
+    return true
+  }
+}
+
+nonisolated extension Dynamite_GroupLabelRequest: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
+  static let protoMessageName: String = _protobuf_package + ".GroupLabelRequest"
+  static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{1}label\0\u{3}group_id\0\u{4}b\u{1}request_header\0")
+
+  mutating func decodeMessage<D: SwiftProtobuf.Decoder>(decoder: inout D) throws {
+    while let fieldNumber = try decoder.nextFieldNumber() {
+      // The use of inline closures is to circumvent an issue where the compiler
+      // allocates stack space for every case branch when no optimizations are
+      // enabled. https://github.com/apple/swift-protobuf/issues/1034
+      switch fieldNumber {
+      case 1: try { try decoder.decodeSingularMessageField(value: &self._label) }()
+      case 2: try { try decoder.decodeSingularMessageField(value: &self._groupID) }()
+      case 100: try { try decoder.decodeSingularMessageField(value: &self._requestHeader) }()
+      default: break
+      }
+    }
+  }
+
+  func traverse<V: SwiftProtobuf.Visitor>(visitor: inout V) throws {
+    // The use of inline closures is to circumvent an issue where the compiler
+    // allocates stack space for every if/case branch local when no optimizations
+    // are enabled. https://github.com/apple/swift-protobuf/issues/1034 and
+    // https://github.com/apple/swift-protobuf/issues/1182
+    try { if let v = self._label {
+      try visitor.visitSingularMessageField(value: v, fieldNumber: 1)
+    } }()
+    try { if let v = self._groupID {
+      try visitor.visitSingularMessageField(value: v, fieldNumber: 2)
+    } }()
+    try { if let v = self._requestHeader {
+      try visitor.visitSingularMessageField(value: v, fieldNumber: 100)
+    } }()
+    try unknownFields.traverse(visitor: &visitor)
+  }
+
+  static func ==(lhs: Dynamite_GroupLabelRequest, rhs: Dynamite_GroupLabelRequest) -> Bool {
+    if lhs._label != rhs._label {return false}
+    if lhs._groupID != rhs._groupID {return false}
+    if lhs._requestHeader != rhs._requestHeader {return false}
+    if lhs.unknownFields != rhs.unknownFields {return false}
+    return true
+  }
+}
+
+nonisolated extension Dynamite_GroupLabelResponse: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
+  static let protoMessageName: String = _protobuf_package + ".GroupLabelResponse"
+  static let _protobuf_nameMap = SwiftProtobuf._NameMap()
+
+  mutating func decodeMessage<D: SwiftProtobuf.Decoder>(decoder: inout D) throws {
+    // Load everything into unknown fields
+    while try decoder.nextFieldNumber() != nil {}
+  }
+
+  func traverse<V: SwiftProtobuf.Visitor>(visitor: inout V) throws {
+    try unknownFields.traverse(visitor: &visitor)
+  }
+
+  static func ==(lhs: Dynamite_GroupLabelResponse, rhs: Dynamite_GroupLabelResponse) -> Bool {
     if lhs.unknownFields != rhs.unknownFields {return false}
     return true
   }
@@ -15893,7 +17865,7 @@ nonisolated extension Dynamite_WorldView: SwiftProtobuf.Message, SwiftProtobuf._
 
 nonisolated extension Dynamite_WorldSectionRequest: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
   static let protoMessageName: String = _protobuf_package + ".WorldSectionRequest"
-  static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{3}page_size\0\u{4}\u{3}world_filter\0\u{4}\u{2}pagination_token\0\u{3}field_7\0\u{4}\u{2}topic_filter\0\u{3}topic_option\0\u{3}sort_key\0\u{2}\u{4}view\0\u{1}constraints\0")
+  static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{3}page_size\0\u{4}\u{3}world_filter\0\u{4}\u{2}pagination_token\0\u{3}field_7\0\u{4}\u{2}topic_filter\0\u{3}topic_option\0\u{3}sort_key\0\u{4}\u{2}fetch_roster_sections\0\u{2}\u{2}view\0\u{1}constraints\0")
 
   fileprivate class _StorageClass {
     var _pageSize: Int32? = nil
@@ -15905,6 +17877,7 @@ nonisolated extension Dynamite_WorldSectionRequest: SwiftProtobuf.Message, Swift
     var _sortKey: Dynamite_WorldSortKey? = nil
     var _view: Dynamite_WorldView? = nil
     var _constraints: Dynamite_WorldConstraints? = nil
+    var _fetchRosterSections: Bool? = nil
 
       // This property is used as the initial default value for new instances of the type.
       // The type itself is protecting the reference to its storage via CoW semantics.
@@ -15924,6 +17897,7 @@ nonisolated extension Dynamite_WorldSectionRequest: SwiftProtobuf.Message, Swift
       _sortKey = source._sortKey
       _view = source._view
       _constraints = source._constraints
+      _fetchRosterSections = source._fetchRosterSections
     }
   }
 
@@ -15949,6 +17923,7 @@ nonisolated extension Dynamite_WorldSectionRequest: SwiftProtobuf.Message, Swift
         case 9: try { try decoder.decodeSingularMessageField(value: &_storage._topicFilter) }()
         case 10: try { try decoder.decodeSingularMessageField(value: &_storage._topicOption) }()
         case 11: try { try decoder.decodeSingularMessageField(value: &_storage._sortKey) }()
+        case 13: try { try decoder.decodeSingularBoolField(value: &_storage._fetchRosterSections) }()
         case 15: try { try decoder.decodeSingularMessageField(value: &_storage._view) }()
         case 16: try { try decoder.decodeSingularMessageField(value: &_storage._constraints) }()
         default: break
@@ -15984,6 +17959,9 @@ nonisolated extension Dynamite_WorldSectionRequest: SwiftProtobuf.Message, Swift
       try { if let v = _storage._sortKey {
         try visitor.visitSingularMessageField(value: v, fieldNumber: 11)
       } }()
+      try { if let v = _storage._fetchRosterSections {
+        try visitor.visitSingularBoolField(value: v, fieldNumber: 13)
+      } }()
       try { if let v = _storage._view {
         try visitor.visitSingularMessageField(value: v, fieldNumber: 15)
       } }()
@@ -16008,6 +17986,7 @@ nonisolated extension Dynamite_WorldSectionRequest: SwiftProtobuf.Message, Swift
         if _storage._sortKey != rhs_storage._sortKey {return false}
         if _storage._view != rhs_storage._view {return false}
         if _storage._constraints != rhs_storage._constraints {return false}
+        if _storage._fetchRosterSections != rhs_storage._fetchRosterSections {return false}
         return true
       }
       if !storagesAreEqual {return false}
@@ -16270,7 +18249,7 @@ nonisolated extension Dynamite_WorldConstraints: SwiftProtobuf.Message, SwiftPro
 
 nonisolated extension Dynamite_WorldSectionResponse: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
   static let protoMessageName: String = _protobuf_package + ".WorldSectionResponse"
-  static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{4}\u{2}world_items\0\u{4}\u{2}world_filter\0\u{3}more_items\0\u{3}pagination_token\0")
+  static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{4}\u{2}world_items\0\u{4}\u{2}world_filter\0\u{3}more_items\0\u{3}pagination_token\0\u{4}\u{3}roster_sections\0")
 
   mutating func decodeMessage<D: SwiftProtobuf.Decoder>(decoder: inout D) throws {
     while let fieldNumber = try decoder.nextFieldNumber() {
@@ -16282,6 +18261,7 @@ nonisolated extension Dynamite_WorldSectionResponse: SwiftProtobuf.Message, Swif
       case 4: try { try decoder.decodeSingularMessageField(value: &self._worldFilter) }()
       case 5: try { try decoder.decodeSingularBoolField(value: &self._moreItems) }()
       case 6: try { try decoder.decodeSingularStringField(value: &self._paginationToken) }()
+      case 9: try { try decoder.decodeRepeatedMessageField(value: &self.rosterSections) }()
       default: break
       }
     }
@@ -16304,6 +18284,9 @@ nonisolated extension Dynamite_WorldSectionResponse: SwiftProtobuf.Message, Swif
     try { if let v = self._paginationToken {
       try visitor.visitSingularStringField(value: v, fieldNumber: 6)
     } }()
+    if !self.rosterSections.isEmpty {
+      try visitor.visitRepeatedMessageField(value: self.rosterSections, fieldNumber: 9)
+    }
     try unknownFields.traverse(visitor: &visitor)
   }
 
@@ -16312,6 +18295,51 @@ nonisolated extension Dynamite_WorldSectionResponse: SwiftProtobuf.Message, Swif
     if lhs._worldFilter != rhs._worldFilter {return false}
     if lhs._moreItems != rhs._moreItems {return false}
     if lhs._paginationToken != rhs._paginationToken {return false}
+    if lhs.rosterSections != rhs.rosterSections {return false}
+    if lhs.unknownFields != rhs.unknownFields {return false}
+    return true
+  }
+}
+
+nonisolated extension Dynamite_WorldSectionResponse.RosterSectionPage: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
+  static let protoMessageName: String = Dynamite_WorldSectionResponse.protoMessageName + ".RosterSectionPage"
+  static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{3}pagination_token\0\u{1}section\0\u{4}\u{2}has_more\0")
+
+  mutating func decodeMessage<D: SwiftProtobuf.Decoder>(decoder: inout D) throws {
+    while let fieldNumber = try decoder.nextFieldNumber() {
+      // The use of inline closures is to circumvent an issue where the compiler
+      // allocates stack space for every case branch when no optimizations are
+      // enabled. https://github.com/apple/swift-protobuf/issues/1034
+      switch fieldNumber {
+      case 1: try { try decoder.decodeSingularStringField(value: &self._paginationToken) }()
+      case 2: try { try decoder.decodeSingularMessageField(value: &self._section) }()
+      case 4: try { try decoder.decodeSingularBoolField(value: &self._hasMore_p) }()
+      default: break
+      }
+    }
+  }
+
+  func traverse<V: SwiftProtobuf.Visitor>(visitor: inout V) throws {
+    // The use of inline closures is to circumvent an issue where the compiler
+    // allocates stack space for every if/case branch local when no optimizations
+    // are enabled. https://github.com/apple/swift-protobuf/issues/1034 and
+    // https://github.com/apple/swift-protobuf/issues/1182
+    try { if let v = self._paginationToken {
+      try visitor.visitSingularStringField(value: v, fieldNumber: 1)
+    } }()
+    try { if let v = self._section {
+      try visitor.visitSingularMessageField(value: v, fieldNumber: 2)
+    } }()
+    try { if let v = self._hasMore_p {
+      try visitor.visitSingularBoolField(value: v, fieldNumber: 4)
+    } }()
+    try unknownFields.traverse(visitor: &visitor)
+  }
+
+  static func ==(lhs: Dynamite_WorldSectionResponse.RosterSectionPage, rhs: Dynamite_WorldSectionResponse.RosterSectionPage) -> Bool {
+    if lhs._paginationToken != rhs._paginationToken {return false}
+    if lhs._section != rhs._section {return false}
+    if lhs._hasMore_p != rhs._hasMore_p {return false}
     if lhs.unknownFields != rhs.unknownFields {return false}
     return true
   }
@@ -17204,7 +19232,7 @@ nonisolated extension Dynamite_ListMembersRequest: SwiftProtobuf.Message, SwiftP
 
 nonisolated extension Dynamite_ListMembersResponse: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
   static let protoMessageName: String = _protobuf_package + ".ListMembersResponse"
-  static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{2}\u{2}members\0\u{3}next_page_token\0")
+  static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{1}memberships\0\u{1}members\0\u{3}next_page_token\0")
 
   mutating func decodeMessage<D: SwiftProtobuf.Decoder>(decoder: inout D) throws {
     while let fieldNumber = try decoder.nextFieldNumber() {
@@ -17212,6 +19240,7 @@ nonisolated extension Dynamite_ListMembersResponse: SwiftProtobuf.Message, Swift
       // allocates stack space for every case branch when no optimizations are
       // enabled. https://github.com/apple/swift-protobuf/issues/1034
       switch fieldNumber {
+      case 1: try { try decoder.decodeRepeatedMessageField(value: &self.memberships) }()
       case 2: try { try decoder.decodeRepeatedMessageField(value: &self.members) }()
       case 3: try { try decoder.decodeSingularStringField(value: &self._nextPageToken) }()
       default: break
@@ -17224,6 +19253,9 @@ nonisolated extension Dynamite_ListMembersResponse: SwiftProtobuf.Message, Swift
     // allocates stack space for every if/case branch local when no optimizations
     // are enabled. https://github.com/apple/swift-protobuf/issues/1034 and
     // https://github.com/apple/swift-protobuf/issues/1182
+    if !self.memberships.isEmpty {
+      try visitor.visitRepeatedMessageField(value: self.memberships, fieldNumber: 1)
+    }
     if !self.members.isEmpty {
       try visitor.visitRepeatedMessageField(value: self.members, fieldNumber: 2)
     }
@@ -17234,6 +19266,7 @@ nonisolated extension Dynamite_ListMembersResponse: SwiftProtobuf.Message, Swift
   }
 
   static func ==(lhs: Dynamite_ListMembersResponse, rhs: Dynamite_ListMembersResponse) -> Bool {
+    if lhs.memberships != rhs.memberships {return false}
     if lhs.members != rhs.members {return false}
     if lhs._nextPageToken != rhs._nextPageToken {return false}
     if lhs.unknownFields != rhs.unknownFields {return false}
@@ -17243,7 +19276,7 @@ nonisolated extension Dynamite_ListMembersResponse: SwiftProtobuf.Message, Swift
 
 nonisolated extension Dynamite_ListTopicsFilter: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
   static let protoMessageName: String = _protobuf_package + ".ListTopicsFilter"
-  static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{3}older_than\0")
+  static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{3}older_than\0\u{3}newer_than\0\u{4}\u{2}around_topic\0\u{4}\u{3}thread_summary\0")
 
   mutating func decodeMessage<D: SwiftProtobuf.Decoder>(decoder: inout D) throws {
     while let fieldNumber = try decoder.nextFieldNumber() {
@@ -17252,6 +19285,9 @@ nonisolated extension Dynamite_ListTopicsFilter: SwiftProtobuf.Message, SwiftPro
       // enabled. https://github.com/apple/swift-protobuf/issues/1034
       switch fieldNumber {
       case 1: try { try decoder.decodeSingularInt64Field(value: &self._olderThan) }()
+      case 2: try { try decoder.decodeSingularInt64Field(value: &self._newerThan) }()
+      case 4: try { try decoder.decodeSingularMessageField(value: &self._aroundTopic) }()
+      case 7: try { try decoder.decodeSingularBoolField(value: &self._threadSummary) }()
       default: break
       }
     }
@@ -17265,11 +19301,23 @@ nonisolated extension Dynamite_ListTopicsFilter: SwiftProtobuf.Message, SwiftPro
     try { if let v = self._olderThan {
       try visitor.visitSingularInt64Field(value: v, fieldNumber: 1)
     } }()
+    try { if let v = self._newerThan {
+      try visitor.visitSingularInt64Field(value: v, fieldNumber: 2)
+    } }()
+    try { if let v = self._aroundTopic {
+      try visitor.visitSingularMessageField(value: v, fieldNumber: 4)
+    } }()
+    try { if let v = self._threadSummary {
+      try visitor.visitSingularBoolField(value: v, fieldNumber: 7)
+    } }()
     try unknownFields.traverse(visitor: &visitor)
   }
 
   static func ==(lhs: Dynamite_ListTopicsFilter, rhs: Dynamite_ListTopicsFilter) -> Bool {
     if lhs._olderThan != rhs._olderThan {return false}
+    if lhs._newerThan != rhs._newerThan {return false}
+    if lhs._aroundTopic != rhs._aroundTopic {return false}
+    if lhs._threadSummary != rhs._threadSummary {return false}
     if lhs.unknownFields != rhs.unknownFields {return false}
     return true
   }
@@ -17350,7 +19398,7 @@ nonisolated extension Dynamite_ListTopicsRequest.FetchOption: SwiftProtobuf._Pro
 
 nonisolated extension Dynamite_ListTopicsResponse: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
   static let protoMessageName: String = _protobuf_package + ".ListTopicsResponse"
-  static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{1}topics\0\u{4}\u{3}contains_first_topic\0\u{4}\u{2}read_receipt_set\0")
+  static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{1}topics\0\u{4}\u{3}contains_first_topic\0\u{3}contains_last_topic\0\u{3}read_receipt_set\0")
 
   mutating func decodeMessage<D: SwiftProtobuf.Decoder>(decoder: inout D) throws {
     while let fieldNumber = try decoder.nextFieldNumber() {
@@ -17360,6 +19408,7 @@ nonisolated extension Dynamite_ListTopicsResponse: SwiftProtobuf.Message, SwiftP
       switch fieldNumber {
       case 1: try { try decoder.decodeRepeatedMessageField(value: &self.topics) }()
       case 4: try { try decoder.decodeSingularBoolField(value: &self._containsFirstTopic) }()
+      case 5: try { try decoder.decodeSingularBoolField(value: &self._containsLastTopic) }()
       case 6: try { try decoder.decodeSingularMessageField(value: &self._readReceiptSet) }()
       default: break
       }
@@ -17377,6 +19426,9 @@ nonisolated extension Dynamite_ListTopicsResponse: SwiftProtobuf.Message, SwiftP
     try { if let v = self._containsFirstTopic {
       try visitor.visitSingularBoolField(value: v, fieldNumber: 4)
     } }()
+    try { if let v = self._containsLastTopic {
+      try visitor.visitSingularBoolField(value: v, fieldNumber: 5)
+    } }()
     try { if let v = self._readReceiptSet {
       try visitor.visitSingularMessageField(value: v, fieldNumber: 6)
     } }()
@@ -17386,6 +19438,7 @@ nonisolated extension Dynamite_ListTopicsResponse: SwiftProtobuf.Message, SwiftP
   static func ==(lhs: Dynamite_ListTopicsResponse, rhs: Dynamite_ListTopicsResponse) -> Bool {
     if lhs.topics != rhs.topics {return false}
     if lhs._containsFirstTopic != rhs._containsFirstTopic {return false}
+    if lhs._containsLastTopic != rhs._containsLastTopic {return false}
     if lhs._readReceiptSet != rhs._readReceiptSet {return false}
     if lhs.unknownFields != rhs.unknownFields {return false}
     return true
@@ -17844,7 +19897,7 @@ nonisolated extension Dynamite_CreateMessageResponse: SwiftProtobuf.Message, Swi
 
 nonisolated extension Dynamite_MarkGroupReadstateRequest: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
   static let protoMessageName: String = _protobuf_package + ".MarkGroupReadstateRequest"
-  static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{1}id\0\u{3}last_read_time\0\u{4}b\u{1}request_header\0")
+  static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{1}id\0\u{3}last_read_time\0\u{3}thread_summary_read_time\0\u{4}a\u{1}request_header\0")
 
   mutating func decodeMessage<D: SwiftProtobuf.Decoder>(decoder: inout D) throws {
     while let fieldNumber = try decoder.nextFieldNumber() {
@@ -17854,6 +19907,7 @@ nonisolated extension Dynamite_MarkGroupReadstateRequest: SwiftProtobuf.Message,
       switch fieldNumber {
       case 1: try { try decoder.decodeSingularMessageField(value: &self._id) }()
       case 2: try { try decoder.decodeSingularInt64Field(value: &self._lastReadTime) }()
+      case 3: try { try decoder.decodeSingularInt64Field(value: &self._threadSummaryReadTime) }()
       case 100: try { try decoder.decodeSingularMessageField(value: &self._requestHeader) }()
       default: break
       }
@@ -17871,6 +19925,9 @@ nonisolated extension Dynamite_MarkGroupReadstateRequest: SwiftProtobuf.Message,
     try { if let v = self._lastReadTime {
       try visitor.visitSingularInt64Field(value: v, fieldNumber: 2)
     } }()
+    try { if let v = self._threadSummaryReadTime {
+      try visitor.visitSingularInt64Field(value: v, fieldNumber: 3)
+    } }()
     try { if let v = self._requestHeader {
       try visitor.visitSingularMessageField(value: v, fieldNumber: 100)
     } }()
@@ -17880,6 +19937,7 @@ nonisolated extension Dynamite_MarkGroupReadstateRequest: SwiftProtobuf.Message,
   static func ==(lhs: Dynamite_MarkGroupReadstateRequest, rhs: Dynamite_MarkGroupReadstateRequest) -> Bool {
     if lhs._id != rhs._id {return false}
     if lhs._lastReadTime != rhs._lastReadTime {return false}
+    if lhs._threadSummaryReadTime != rhs._threadSummaryReadTime {return false}
     if lhs._requestHeader != rhs._requestHeader {return false}
     if lhs.unknownFields != rhs.unknownFields {return false}
     return true
@@ -17900,6 +19958,195 @@ nonisolated extension Dynamite_MarkGroupReadstateResponse: SwiftProtobuf.Message
   }
 
   static func ==(lhs: Dynamite_MarkGroupReadstateResponse, rhs: Dynamite_MarkGroupReadstateResponse) -> Bool {
+    if lhs.unknownFields != rhs.unknownFields {return false}
+    return true
+  }
+}
+
+nonisolated extension Dynamite_MarkTopicReadstateRequest: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
+  static let protoMessageName: String = _protobuf_package + ".MarkTopicReadstateRequest"
+  static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{3}topic_id\0\u{3}last_read_time\0\u{4}b\u{1}request_header\0")
+
+  mutating func decodeMessage<D: SwiftProtobuf.Decoder>(decoder: inout D) throws {
+    while let fieldNumber = try decoder.nextFieldNumber() {
+      // The use of inline closures is to circumvent an issue where the compiler
+      // allocates stack space for every case branch when no optimizations are
+      // enabled. https://github.com/apple/swift-protobuf/issues/1034
+      switch fieldNumber {
+      case 1: try { try decoder.decodeSingularMessageField(value: &self._topicID) }()
+      case 2: try { try decoder.decodeSingularInt64Field(value: &self._lastReadTime) }()
+      case 100: try { try decoder.decodeSingularMessageField(value: &self._requestHeader) }()
+      default: break
+      }
+    }
+  }
+
+  func traverse<V: SwiftProtobuf.Visitor>(visitor: inout V) throws {
+    // The use of inline closures is to circumvent an issue where the compiler
+    // allocates stack space for every if/case branch local when no optimizations
+    // are enabled. https://github.com/apple/swift-protobuf/issues/1034 and
+    // https://github.com/apple/swift-protobuf/issues/1182
+    try { if let v = self._topicID {
+      try visitor.visitSingularMessageField(value: v, fieldNumber: 1)
+    } }()
+    try { if let v = self._lastReadTime {
+      try visitor.visitSingularInt64Field(value: v, fieldNumber: 2)
+    } }()
+    try { if let v = self._requestHeader {
+      try visitor.visitSingularMessageField(value: v, fieldNumber: 100)
+    } }()
+    try unknownFields.traverse(visitor: &visitor)
+  }
+
+  static func ==(lhs: Dynamite_MarkTopicReadstateRequest, rhs: Dynamite_MarkTopicReadstateRequest) -> Bool {
+    if lhs._topicID != rhs._topicID {return false}
+    if lhs._lastReadTime != rhs._lastReadTime {return false}
+    if lhs._requestHeader != rhs._requestHeader {return false}
+    if lhs.unknownFields != rhs.unknownFields {return false}
+    return true
+  }
+}
+
+nonisolated extension Dynamite_MarkTopicReadstateResponse: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
+  static let protoMessageName: String = _protobuf_package + ".MarkTopicReadstateResponse"
+  static let _protobuf_nameMap = SwiftProtobuf._NameMap()
+
+  mutating func decodeMessage<D: SwiftProtobuf.Decoder>(decoder: inout D) throws {
+    // Load everything into unknown fields
+    while try decoder.nextFieldNumber() != nil {}
+  }
+
+  func traverse<V: SwiftProtobuf.Visitor>(visitor: inout V) throws {
+    try unknownFields.traverse(visitor: &visitor)
+  }
+
+  static func ==(lhs: Dynamite_MarkTopicReadstateResponse, rhs: Dynamite_MarkTopicReadstateResponse) -> Bool {
+    if lhs.unknownFields != rhs.unknownFields {return false}
+    return true
+  }
+}
+
+nonisolated extension Dynamite_MarkTopicMuteStateRequest: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
+  static let protoMessageName: String = _protobuf_package + ".MarkTopicMuteStateRequest"
+  static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{3}topic_id\0\u{1}muted\0\u{4}b\u{1}request_header\0")
+
+  mutating func decodeMessage<D: SwiftProtobuf.Decoder>(decoder: inout D) throws {
+    while let fieldNumber = try decoder.nextFieldNumber() {
+      // The use of inline closures is to circumvent an issue where the compiler
+      // allocates stack space for every case branch when no optimizations are
+      // enabled. https://github.com/apple/swift-protobuf/issues/1034
+      switch fieldNumber {
+      case 1: try { try decoder.decodeSingularMessageField(value: &self._topicID) }()
+      case 2: try { try decoder.decodeSingularBoolField(value: &self._muted) }()
+      case 100: try { try decoder.decodeSingularMessageField(value: &self._requestHeader) }()
+      default: break
+      }
+    }
+  }
+
+  func traverse<V: SwiftProtobuf.Visitor>(visitor: inout V) throws {
+    // The use of inline closures is to circumvent an issue where the compiler
+    // allocates stack space for every if/case branch local when no optimizations
+    // are enabled. https://github.com/apple/swift-protobuf/issues/1034 and
+    // https://github.com/apple/swift-protobuf/issues/1182
+    try { if let v = self._topicID {
+      try visitor.visitSingularMessageField(value: v, fieldNumber: 1)
+    } }()
+    try { if let v = self._muted {
+      try visitor.visitSingularBoolField(value: v, fieldNumber: 2)
+    } }()
+    try { if let v = self._requestHeader {
+      try visitor.visitSingularMessageField(value: v, fieldNumber: 100)
+    } }()
+    try unknownFields.traverse(visitor: &visitor)
+  }
+
+  static func ==(lhs: Dynamite_MarkTopicMuteStateRequest, rhs: Dynamite_MarkTopicMuteStateRequest) -> Bool {
+    if lhs._topicID != rhs._topicID {return false}
+    if lhs._muted != rhs._muted {return false}
+    if lhs._requestHeader != rhs._requestHeader {return false}
+    if lhs.unknownFields != rhs.unknownFields {return false}
+    return true
+  }
+}
+
+nonisolated extension Dynamite_MarkTopicMuteStateResponse: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
+  static let protoMessageName: String = _protobuf_package + ".MarkTopicMuteStateResponse"
+  static let _protobuf_nameMap = SwiftProtobuf._NameMap()
+
+  mutating func decodeMessage<D: SwiftProtobuf.Decoder>(decoder: inout D) throws {
+    // Load everything into unknown fields
+    while try decoder.nextFieldNumber() != nil {}
+  }
+
+  func traverse<V: SwiftProtobuf.Visitor>(visitor: inout V) throws {
+    try unknownFields.traverse(visitor: &visitor)
+  }
+
+  static func ==(lhs: Dynamite_MarkTopicMuteStateResponse, rhs: Dynamite_MarkTopicMuteStateResponse) -> Bool {
+    if lhs.unknownFields != rhs.unknownFields {return false}
+    return true
+  }
+}
+
+nonisolated extension Dynamite_SetTopicUnreadTimestampRequest: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
+  static let protoMessageName: String = _protobuf_package + ".SetTopicUnreadTimestampRequest"
+  static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{3}topic_id\0\u{3}unread_timestamp\0\u{4}b\u{1}request_header\0")
+
+  mutating func decodeMessage<D: SwiftProtobuf.Decoder>(decoder: inout D) throws {
+    while let fieldNumber = try decoder.nextFieldNumber() {
+      // The use of inline closures is to circumvent an issue where the compiler
+      // allocates stack space for every case branch when no optimizations are
+      // enabled. https://github.com/apple/swift-protobuf/issues/1034
+      switch fieldNumber {
+      case 1: try { try decoder.decodeSingularMessageField(value: &self._topicID) }()
+      case 2: try { try decoder.decodeSingularInt64Field(value: &self._unreadTimestamp) }()
+      case 100: try { try decoder.decodeSingularMessageField(value: &self._requestHeader) }()
+      default: break
+      }
+    }
+  }
+
+  func traverse<V: SwiftProtobuf.Visitor>(visitor: inout V) throws {
+    // The use of inline closures is to circumvent an issue where the compiler
+    // allocates stack space for every if/case branch local when no optimizations
+    // are enabled. https://github.com/apple/swift-protobuf/issues/1034 and
+    // https://github.com/apple/swift-protobuf/issues/1182
+    try { if let v = self._topicID {
+      try visitor.visitSingularMessageField(value: v, fieldNumber: 1)
+    } }()
+    try { if let v = self._unreadTimestamp {
+      try visitor.visitSingularInt64Field(value: v, fieldNumber: 2)
+    } }()
+    try { if let v = self._requestHeader {
+      try visitor.visitSingularMessageField(value: v, fieldNumber: 100)
+    } }()
+    try unknownFields.traverse(visitor: &visitor)
+  }
+
+  static func ==(lhs: Dynamite_SetTopicUnreadTimestampRequest, rhs: Dynamite_SetTopicUnreadTimestampRequest) -> Bool {
+    if lhs._topicID != rhs._topicID {return false}
+    if lhs._unreadTimestamp != rhs._unreadTimestamp {return false}
+    if lhs._requestHeader != rhs._requestHeader {return false}
+    if lhs.unknownFields != rhs.unknownFields {return false}
+    return true
+  }
+}
+
+nonisolated extension Dynamite_SetTopicUnreadTimestampResponse: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
+  static let protoMessageName: String = _protobuf_package + ".SetTopicUnreadTimestampResponse"
+  static let _protobuf_nameMap = SwiftProtobuf._NameMap()
+
+  mutating func decodeMessage<D: SwiftProtobuf.Decoder>(decoder: inout D) throws {
+    // Load everything into unknown fields
+    while try decoder.nextFieldNumber() != nil {}
+  }
+
+  func traverse<V: SwiftProtobuf.Visitor>(visitor: inout V) throws {
+    try unknownFields.traverse(visitor: &visitor)
+  }
+
+  static func ==(lhs: Dynamite_SetTopicUnreadTimestampResponse, rhs: Dynamite_SetTopicUnreadTimestampResponse) -> Bool {
     if lhs.unknownFields != rhs.unknownFields {return false}
     return true
   }
@@ -18416,9 +20663,47 @@ nonisolated extension Dynamite_GroupUpdatedEvent.GroupUpdateType: SwiftProtobuf.
   static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{2}\0GROUP_UPDATE_TYPE_UNKNOWN\0\u{1}GROUP_CREATED\0\u{1}GROUP_UPDATED\0\u{1}GROUP_DELETED\0\u{1}GROUP_UNDELETED\0")
 }
 
+nonisolated extension Dynamite_RetentionSettings: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
+  static let protoMessageName: String = _protobuf_package + ".RetentionSettings"
+  static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{1}state\0")
+
+  mutating func decodeMessage<D: SwiftProtobuf.Decoder>(decoder: inout D) throws {
+    while let fieldNumber = try decoder.nextFieldNumber() {
+      // The use of inline closures is to circumvent an issue where the compiler
+      // allocates stack space for every case branch when no optimizations are
+      // enabled. https://github.com/apple/swift-protobuf/issues/1034
+      switch fieldNumber {
+      case 1: try { try decoder.decodeSingularEnumField(value: &self._state) }()
+      default: break
+      }
+    }
+  }
+
+  func traverse<V: SwiftProtobuf.Visitor>(visitor: inout V) throws {
+    // The use of inline closures is to circumvent an issue where the compiler
+    // allocates stack space for every if/case branch local when no optimizations
+    // are enabled. https://github.com/apple/swift-protobuf/issues/1034 and
+    // https://github.com/apple/swift-protobuf/issues/1182
+    try { if let v = self._state {
+      try visitor.visitSingularEnumField(value: v, fieldNumber: 1)
+    } }()
+    try unknownFields.traverse(visitor: &visitor)
+  }
+
+  static func ==(lhs: Dynamite_RetentionSettings, rhs: Dynamite_RetentionSettings) -> Bool {
+    if lhs._state != rhs._state {return false}
+    if lhs.unknownFields != rhs.unknownFields {return false}
+    return true
+  }
+}
+
+nonisolated extension Dynamite_RetentionSettings.State: SwiftProtobuf._ProtoNameProviding {
+  static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{2}\0RETENTION_STATE_UNKNOWN\0\u{1}PERMANENT\0\u{1}EPHEMERAL_ONE_DAY\0")
+}
+
 nonisolated extension Dynamite_Membership: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
   static let protoMessageName: String = _protobuf_package + ".Membership"
-  static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{1}id\0\u{4}\u{2}membership_state\0")
+  static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{1}id\0\u{4}\u{2}membership_state\0\u{2}\u{2}role\0")
 
   mutating func decodeMessage<D: SwiftProtobuf.Decoder>(decoder: inout D) throws {
     while let fieldNumber = try decoder.nextFieldNumber() {
@@ -18428,6 +20713,7 @@ nonisolated extension Dynamite_Membership: SwiftProtobuf.Message, SwiftProtobuf.
       switch fieldNumber {
       case 1: try { try decoder.decodeSingularMessageField(value: &self._id) }()
       case 3: try { try decoder.decodeSingularEnumField(value: &self._membershipState) }()
+      case 5: try { try decoder.decodeSingularEnumField(value: &self._role) }()
       default: break
       }
     }
@@ -18444,12 +20730,16 @@ nonisolated extension Dynamite_Membership: SwiftProtobuf.Message, SwiftProtobuf.
     try { if let v = self._membershipState {
       try visitor.visitSingularEnumField(value: v, fieldNumber: 3)
     } }()
+    try { if let v = self._role {
+      try visitor.visitSingularEnumField(value: v, fieldNumber: 5)
+    } }()
     try unknownFields.traverse(visitor: &visitor)
   }
 
   static func ==(lhs: Dynamite_Membership, rhs: Dynamite_Membership) -> Bool {
     if lhs._id != rhs._id {return false}
     if lhs._membershipState != rhs._membershipState {return false}
+    if lhs._role != rhs._role {return false}
     if lhs.unknownFields != rhs.unknownFields {return false}
     return true
   }
@@ -19497,7 +21787,7 @@ nonisolated extension Dynamite_EventBody: SwiftProtobuf.Message, SwiftProtobuf._
 }
 
 nonisolated extension Dynamite_EventBody.EventType: SwiftProtobuf._ProtoNameProviding {
-  static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{2}\0UNKNOWN\0\u{2}\u{5}GROUP_UPDATED\0\u{1}MESSAGE_POSTED\0\u{1}MESSAGE_UPDATED\0\u{1}MESSAGE_DELETED\0\u{2}\u{7}MEMBERSHIP_CHANGED\0\u{1}GROUP_HIDE_CHANGED\0\u{2}\u{2}GROUP_NOTIFICATION_SETTINGS_UPDATED\0\u{2}\u{6}MESSAGE_REACTED\0\u{1}USER_STATUS_UPDATED_EVENT\0\u{2}\u{4}TYPING_STATE_CHANGED\0\u{1}GROUP_DELETED\0\u{2}\u{3}SESSION_READY\0\u{2}\u{3}READ_RECEIPT_CHANGED\0\u{2}\u{16}BATCH_REACTIONS_UPDATED\0\u{2}\u{7}TOPIC_LABEL_APPLIED\0\u{1}TOPIC_LABEL_REMOVED\0\u{2}\u{15}UNSENT_MESSAGE_CREATED\0\u{1}UNSENT_MESSAGE_DELETED\0\u{1}UNSENT_MESSAGE_UPDATED\0\u{2}\u{7}ACTIVITY_INDICATOR_CHANGED\0")
+  static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{2}\0UNKNOWN\0\u{2}\u{5}GROUP_UPDATED\0\u{1}MESSAGE_POSTED\0\u{1}MESSAGE_UPDATED\0\u{1}MESSAGE_DELETED\0\u{2}\u{7}MEMBERSHIP_CHANGED\0\u{1}GROUP_HIDE_CHANGED\0\u{2}\u{2}GROUP_NOTIFICATION_SETTINGS_UPDATED\0\u{2}\u{6}MESSAGE_REACTED\0\u{1}USER_STATUS_UPDATED_EVENT\0\u{2}\u{4}TYPING_STATE_CHANGED\0\u{1}GROUP_DELETED\0\u{2}\u{3}SESSION_READY\0\u{2}\u{3}READ_RECEIPT_CHANGED\0\u{2}\u{16}BATCH_REACTIONS_UPDATED\0\u{2}\u{7}TOPIC_LABEL_APPLIED\0\u{1}TOPIC_LABEL_REMOVED\0\u{2}\u{4}GROUP_LABEL_APPLIED\0\u{1}GROUP_LABEL_REMOVED\0\u{1}ROSTER_SECTION_CREATED\0\u{1}ROSTER_SECTION_DELETED\0\u{1}ROSTER_SECTION_UPDATED\0\u{2}\u{d}UNSENT_MESSAGE_CREATED\0\u{1}UNSENT_MESSAGE_DELETED\0\u{1}UNSENT_MESSAGE_UPDATED\0\u{2}\u{7}ACTIVITY_INDICATOR_CHANGED\0")
 }
 
 nonisolated extension Dynamite_GroupHideChangedEvent: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
@@ -20378,18 +22668,102 @@ nonisolated extension Dynamite_ListReactorsResponse: SwiftProtobuf.Message, Swif
 
 nonisolated extension Dynamite_SearchFilter: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
   static let protoMessageName: String = _protobuf_package + ".SearchFilter"
-  static let _protobuf_nameMap = SwiftProtobuf._NameMap()
+  static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{2}\u{8}scope\0")
 
   mutating func decodeMessage<D: SwiftProtobuf.Decoder>(decoder: inout D) throws {
-    // Load everything into unknown fields
-    while try decoder.nextFieldNumber() != nil {}
+    while let fieldNumber = try decoder.nextFieldNumber() {
+      // The use of inline closures is to circumvent an issue where the compiler
+      // allocates stack space for every case branch when no optimizations are
+      // enabled. https://github.com/apple/swift-protobuf/issues/1034
+      switch fieldNumber {
+      case 8: try { try decoder.decodeSingularMessageField(value: &self._scope) }()
+      default: break
+      }
+    }
   }
 
   func traverse<V: SwiftProtobuf.Visitor>(visitor: inout V) throws {
+    // The use of inline closures is to circumvent an issue where the compiler
+    // allocates stack space for every if/case branch local when no optimizations
+    // are enabled. https://github.com/apple/swift-protobuf/issues/1034 and
+    // https://github.com/apple/swift-protobuf/issues/1182
+    try { if let v = self._scope {
+      try visitor.visitSingularMessageField(value: v, fieldNumber: 8)
+    } }()
     try unknownFields.traverse(visitor: &visitor)
   }
 
   static func ==(lhs: Dynamite_SearchFilter, rhs: Dynamite_SearchFilter) -> Bool {
+    if lhs._scope != rhs._scope {return false}
+    if lhs.unknownFields != rhs.unknownFields {return false}
+    return true
+  }
+}
+
+nonisolated extension Dynamite_SearchScope: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
+  static let protoMessageName: String = _protobuf_package + ".SearchScope"
+  static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{2}\u{4}conversations\0")
+
+  mutating func decodeMessage<D: SwiftProtobuf.Decoder>(decoder: inout D) throws {
+    while let fieldNumber = try decoder.nextFieldNumber() {
+      // The use of inline closures is to circumvent an issue where the compiler
+      // allocates stack space for every case branch when no optimizations are
+      // enabled. https://github.com/apple/swift-protobuf/issues/1034
+      switch fieldNumber {
+      case 4: try { try decoder.decodeRepeatedMessageField(value: &self.conversations) }()
+      default: break
+      }
+    }
+  }
+
+  func traverse<V: SwiftProtobuf.Visitor>(visitor: inout V) throws {
+    if !self.conversations.isEmpty {
+      try visitor.visitRepeatedMessageField(value: self.conversations, fieldNumber: 4)
+    }
+    try unknownFields.traverse(visitor: &visitor)
+  }
+
+  static func ==(lhs: Dynamite_SearchScope, rhs: Dynamite_SearchScope) -> Bool {
+    if lhs.conversations != rhs.conversations {return false}
+    if lhs.unknownFields != rhs.unknownFields {return false}
+    return true
+  }
+}
+
+nonisolated extension Dynamite_SearchConversation: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
+  static let protoMessageName: String = _protobuf_package + ".SearchConversation"
+  static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{3}group_id\0\u{1}kind\0")
+
+  mutating func decodeMessage<D: SwiftProtobuf.Decoder>(decoder: inout D) throws {
+    while let fieldNumber = try decoder.nextFieldNumber() {
+      // The use of inline closures is to circumvent an issue where the compiler
+      // allocates stack space for every case branch when no optimizations are
+      // enabled. https://github.com/apple/swift-protobuf/issues/1034
+      switch fieldNumber {
+      case 1: try { try decoder.decodeSingularMessageField(value: &self._groupID) }()
+      case 2: try { try decoder.decodeSingularInt32Field(value: &self._kind) }()
+      default: break
+      }
+    }
+  }
+
+  func traverse<V: SwiftProtobuf.Visitor>(visitor: inout V) throws {
+    // The use of inline closures is to circumvent an issue where the compiler
+    // allocates stack space for every if/case branch local when no optimizations
+    // are enabled. https://github.com/apple/swift-protobuf/issues/1034 and
+    // https://github.com/apple/swift-protobuf/issues/1182
+    try { if let v = self._groupID {
+      try visitor.visitSingularMessageField(value: v, fieldNumber: 1)
+    } }()
+    try { if let v = self._kind {
+      try visitor.visitSingularInt32Field(value: v, fieldNumber: 2)
+    } }()
+    try unknownFields.traverse(visitor: &visitor)
+  }
+
+  static func ==(lhs: Dynamite_SearchConversation, rhs: Dynamite_SearchConversation) -> Bool {
+    if lhs._groupID != rhs._groupID {return false}
+    if lhs._kind != rhs._kind {return false}
     if lhs.unknownFields != rhs.unknownFields {return false}
     return true
   }
@@ -20397,7 +22771,7 @@ nonisolated extension Dynamite_SearchFilter: SwiftProtobuf.Message, SwiftProtobu
 
 nonisolated extension Dynamite_SearchMessagesV2Request: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
   static let protoMessageName: String = _protobuf_package + ".SearchMessagesV2Request"
-  static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{1}size\0\u{1}cursor\0\u{1}filter\0\u{1}query\0\u{4}`\u{1}request_header\0")
+  static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{1}size\0\u{1}cursor\0\u{1}filter\0\u{1}query\0\u{2}\u{3}sort\0\u{4}]\u{1}request_header\0")
 
   mutating func decodeMessage<D: SwiftProtobuf.Decoder>(decoder: inout D) throws {
     while let fieldNumber = try decoder.nextFieldNumber() {
@@ -20409,6 +22783,7 @@ nonisolated extension Dynamite_SearchMessagesV2Request: SwiftProtobuf.Message, S
       case 2: try { try decoder.decodeSingularStringField(value: &self._cursor) }()
       case 3: try { try decoder.decodeSingularMessageField(value: &self._filter) }()
       case 4: try { try decoder.decodeSingularStringField(value: &self._query) }()
+      case 7: try { try decoder.decodeSingularMessageField(value: &self._sort) }()
       case 100: try { try decoder.decodeSingularMessageField(value: &self._requestHeader) }()
       default: break
       }
@@ -20432,6 +22807,9 @@ nonisolated extension Dynamite_SearchMessagesV2Request: SwiftProtobuf.Message, S
     try { if let v = self._query {
       try visitor.visitSingularStringField(value: v, fieldNumber: 4)
     } }()
+    try { if let v = self._sort {
+      try visitor.visitSingularMessageField(value: v, fieldNumber: 7)
+    } }()
     try { if let v = self._requestHeader {
       try visitor.visitSingularMessageField(value: v, fieldNumber: 100)
     } }()
@@ -20443,10 +22821,49 @@ nonisolated extension Dynamite_SearchMessagesV2Request: SwiftProtobuf.Message, S
     if lhs._cursor != rhs._cursor {return false}
     if lhs._filter != rhs._filter {return false}
     if lhs._query != rhs._query {return false}
+    if lhs._sort != rhs._sort {return false}
     if lhs._requestHeader != rhs._requestHeader {return false}
     if lhs.unknownFields != rhs.unknownFields {return false}
     return true
   }
+}
+
+nonisolated extension Dynamite_SearchSort: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
+  static let protoMessageName: String = _protobuf_package + ".SearchSort"
+  static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{1}operator\0")
+
+  mutating func decodeMessage<D: SwiftProtobuf.Decoder>(decoder: inout D) throws {
+    while let fieldNumber = try decoder.nextFieldNumber() {
+      // The use of inline closures is to circumvent an issue where the compiler
+      // allocates stack space for every case branch when no optimizations are
+      // enabled. https://github.com/apple/swift-protobuf/issues/1034
+      switch fieldNumber {
+      case 1: try { try decoder.decodeSingularEnumField(value: &self._operator) }()
+      default: break
+      }
+    }
+  }
+
+  func traverse<V: SwiftProtobuf.Visitor>(visitor: inout V) throws {
+    // The use of inline closures is to circumvent an issue where the compiler
+    // allocates stack space for every if/case branch local when no optimizations
+    // are enabled. https://github.com/apple/swift-protobuf/issues/1034 and
+    // https://github.com/apple/swift-protobuf/issues/1182
+    try { if let v = self._operator {
+      try visitor.visitSingularEnumField(value: v, fieldNumber: 1)
+    } }()
+    try unknownFields.traverse(visitor: &visitor)
+  }
+
+  static func ==(lhs: Dynamite_SearchSort, rhs: Dynamite_SearchSort) -> Bool {
+    if lhs._operator != rhs._operator {return false}
+    if lhs.unknownFields != rhs.unknownFields {return false}
+    return true
+  }
+}
+
+nonisolated extension Dynamite_SearchSort.Operator: SwiftProtobuf._ProtoNameProviding {
+  static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{2}\0SORT_OPERATOR_UNSPECIFIED\0\u{1}RELEVANCE\0\u{1}CHRONOLOGICAL\0")
 }
 
 nonisolated extension Dynamite_SearchResult: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
@@ -20669,40 +23086,6 @@ nonisolated extension Dynamite_ListMessagesResponse: SwiftProtobuf.Message, Swif
   static func ==(lhs: Dynamite_ListMessagesResponse, rhs: Dynamite_ListMessagesResponse) -> Bool {
     if lhs.messages != rhs.messages {return false}
     if lhs._containsFirstMessage != rhs._containsFirstMessage {return false}
-    if lhs.unknownFields != rhs.unknownFields {return false}
-    return true
-  }
-}
-
-nonisolated extension Dynamite_RetentionSettings: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
-  static let protoMessageName: String = _protobuf_package + ".RetentionSettings"
-  static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{1}state\0")
-
-  mutating func decodeMessage<D: SwiftProtobuf.Decoder>(decoder: inout D) throws {
-    while let fieldNumber = try decoder.nextFieldNumber() {
-      // The use of inline closures is to circumvent an issue where the compiler
-      // allocates stack space for every case branch when no optimizations are
-      // enabled. https://github.com/apple/swift-protobuf/issues/1034
-      switch fieldNumber {
-      case 1: try { try decoder.decodeSingularInt32Field(value: &self._state) }()
-      default: break
-      }
-    }
-  }
-
-  func traverse<V: SwiftProtobuf.Visitor>(visitor: inout V) throws {
-    // The use of inline closures is to circumvent an issue where the compiler
-    // allocates stack space for every if/case branch local when no optimizations
-    // are enabled. https://github.com/apple/swift-protobuf/issues/1034 and
-    // https://github.com/apple/swift-protobuf/issues/1182
-    try { if let v = self._state {
-      try visitor.visitSingularInt32Field(value: v, fieldNumber: 1)
-    } }()
-    try unknownFields.traverse(visitor: &visitor)
-  }
-
-  static func ==(lhs: Dynamite_RetentionSettings, rhs: Dynamite_RetentionSettings) -> Bool {
-    if lhs._state != rhs._state {return false}
     if lhs.unknownFields != rhs.unknownFields {return false}
     return true
   }
@@ -21065,6 +23448,69 @@ nonisolated extension Dynamite_CreateGroupResponse: SwiftProtobuf.Message, Swift
 
   static func ==(lhs: Dynamite_CreateGroupResponse, rhs: Dynamite_CreateGroupResponse) -> Bool {
     if lhs._group != rhs._group {return false}
+    if lhs.unknownFields != rhs.unknownFields {return false}
+    return true
+  }
+}
+
+nonisolated extension Dynamite_DeleteGroupRequest: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
+  static let protoMessageName: String = _protobuf_package + ".DeleteGroupRequest"
+  static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{3}group_id\0\u{3}keep_roster\0\u{4}b\u{1}request_header\0")
+
+  mutating func decodeMessage<D: SwiftProtobuf.Decoder>(decoder: inout D) throws {
+    while let fieldNumber = try decoder.nextFieldNumber() {
+      // The use of inline closures is to circumvent an issue where the compiler
+      // allocates stack space for every case branch when no optimizations are
+      // enabled. https://github.com/apple/swift-protobuf/issues/1034
+      switch fieldNumber {
+      case 1: try { try decoder.decodeSingularMessageField(value: &self._groupID) }()
+      case 2: try { try decoder.decodeSingularBoolField(value: &self._keepRoster) }()
+      case 100: try { try decoder.decodeSingularMessageField(value: &self._requestHeader) }()
+      default: break
+      }
+    }
+  }
+
+  func traverse<V: SwiftProtobuf.Visitor>(visitor: inout V) throws {
+    // The use of inline closures is to circumvent an issue where the compiler
+    // allocates stack space for every if/case branch local when no optimizations
+    // are enabled. https://github.com/apple/swift-protobuf/issues/1034 and
+    // https://github.com/apple/swift-protobuf/issues/1182
+    try { if let v = self._groupID {
+      try visitor.visitSingularMessageField(value: v, fieldNumber: 1)
+    } }()
+    try { if let v = self._keepRoster {
+      try visitor.visitSingularBoolField(value: v, fieldNumber: 2)
+    } }()
+    try { if let v = self._requestHeader {
+      try visitor.visitSingularMessageField(value: v, fieldNumber: 100)
+    } }()
+    try unknownFields.traverse(visitor: &visitor)
+  }
+
+  static func ==(lhs: Dynamite_DeleteGroupRequest, rhs: Dynamite_DeleteGroupRequest) -> Bool {
+    if lhs._groupID != rhs._groupID {return false}
+    if lhs._keepRoster != rhs._keepRoster {return false}
+    if lhs._requestHeader != rhs._requestHeader {return false}
+    if lhs.unknownFields != rhs.unknownFields {return false}
+    return true
+  }
+}
+
+nonisolated extension Dynamite_DeleteGroupResponse: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
+  static let protoMessageName: String = _protobuf_package + ".DeleteGroupResponse"
+  static let _protobuf_nameMap = SwiftProtobuf._NameMap()
+
+  mutating func decodeMessage<D: SwiftProtobuf.Decoder>(decoder: inout D) throws {
+    // Load everything into unknown fields
+    while try decoder.nextFieldNumber() != nil {}
+  }
+
+  func traverse<V: SwiftProtobuf.Visitor>(visitor: inout V) throws {
+    try unknownFields.traverse(visitor: &visitor)
+  }
+
+  static func ==(lhs: Dynamite_DeleteGroupResponse, rhs: Dynamite_DeleteGroupResponse) -> Bool {
     if lhs.unknownFields != rhs.unknownFields {return false}
     return true
   }
@@ -21474,12 +23920,13 @@ nonisolated extension Dynamite_CreateMembershipResponse: SwiftProtobuf.Message, 
 
 nonisolated extension Dynamite_UpdateGroupRequest: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
   static let protoMessageName: String = _protobuf_package + ".UpdateGroupRequest"
-  static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{2}\u{2}name\0\u{4}\u{2}update_masks\0\u{4}\u{2}avatar_info\0\u{4}\u{5}group_id\0\u{4}Y\u{1}request_header\0")
+  static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{2}\u{2}name\0\u{4}\u{2}update_masks\0\u{4}\u{2}avatar_info\0\u{3}group_details\0\u{4}\u{4}group_id\0\u{4}Y\u{1}request_header\0")
 
   fileprivate class _StorageClass {
     var _name: String? = nil
     var _updateMasks: [Dynamite_UpdateGroupRequest.Field] = []
     var _avatarInfo: Dynamite_AvatarInfo? = nil
+    var _groupDetails: Dynamite_GroupDetails? = nil
     var _groupID: Dynamite_GroupId? = nil
     var _requestHeader: Dynamite_RequestHeader? = nil
 
@@ -21495,6 +23942,7 @@ nonisolated extension Dynamite_UpdateGroupRequest: SwiftProtobuf.Message, SwiftP
       _name = source._name
       _updateMasks = source._updateMasks
       _avatarInfo = source._avatarInfo
+      _groupDetails = source._groupDetails
       _groupID = source._groupID
       _requestHeader = source._requestHeader
     }
@@ -21518,6 +23966,7 @@ nonisolated extension Dynamite_UpdateGroupRequest: SwiftProtobuf.Message, SwiftP
         case 2: try { try decoder.decodeSingularStringField(value: &_storage._name) }()
         case 4: try { try decoder.decodeRepeatedEnumField(value: &_storage._updateMasks) }()
         case 6: try { try decoder.decodeSingularMessageField(value: &_storage._avatarInfo) }()
+        case 7: try { try decoder.decodeSingularMessageField(value: &_storage._groupDetails) }()
         case 11: try { try decoder.decodeSingularMessageField(value: &_storage._groupID) }()
         case 100: try { try decoder.decodeSingularMessageField(value: &_storage._requestHeader) }()
         default: break
@@ -21541,6 +23990,9 @@ nonisolated extension Dynamite_UpdateGroupRequest: SwiftProtobuf.Message, SwiftP
       try { if let v = _storage._avatarInfo {
         try visitor.visitSingularMessageField(value: v, fieldNumber: 6)
       } }()
+      try { if let v = _storage._groupDetails {
+        try visitor.visitSingularMessageField(value: v, fieldNumber: 7)
+      } }()
       try { if let v = _storage._groupID {
         try visitor.visitSingularMessageField(value: v, fieldNumber: 11)
       } }()
@@ -21559,6 +24011,7 @@ nonisolated extension Dynamite_UpdateGroupRequest: SwiftProtobuf.Message, SwiftP
         if _storage._name != rhs_storage._name {return false}
         if _storage._updateMasks != rhs_storage._updateMasks {return false}
         if _storage._avatarInfo != rhs_storage._avatarInfo {return false}
+        if _storage._groupDetails != rhs_storage._groupDetails {return false}
         if _storage._groupID != rhs_storage._groupID {return false}
         if _storage._requestHeader != rhs_storage._requestHeader {return false}
         return true
@@ -21588,6 +24041,605 @@ nonisolated extension Dynamite_UpdateGroupResponse: SwiftProtobuf.Message, Swift
   }
 
   static func ==(lhs: Dynamite_UpdateGroupResponse, rhs: Dynamite_UpdateGroupResponse) -> Bool {
+    if lhs.unknownFields != rhs.unknownFields {return false}
+    return true
+  }
+}
+
+nonisolated extension Dynamite_UpdateMembershipRoleRequest: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
+  static let protoMessageName: String = _protobuf_package + ".UpdateMembershipRoleRequest"
+  static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{1}changes\0\u{4}c\u{1}request_header\0")
+
+  mutating func decodeMessage<D: SwiftProtobuf.Decoder>(decoder: inout D) throws {
+    while let fieldNumber = try decoder.nextFieldNumber() {
+      // The use of inline closures is to circumvent an issue where the compiler
+      // allocates stack space for every case branch when no optimizations are
+      // enabled. https://github.com/apple/swift-protobuf/issues/1034
+      switch fieldNumber {
+      case 1: try { try decoder.decodeRepeatedMessageField(value: &self.changes) }()
+      case 100: try { try decoder.decodeSingularMessageField(value: &self._requestHeader) }()
+      default: break
+      }
+    }
+  }
+
+  func traverse<V: SwiftProtobuf.Visitor>(visitor: inout V) throws {
+    // The use of inline closures is to circumvent an issue where the compiler
+    // allocates stack space for every if/case branch local when no optimizations
+    // are enabled. https://github.com/apple/swift-protobuf/issues/1034 and
+    // https://github.com/apple/swift-protobuf/issues/1182
+    if !self.changes.isEmpty {
+      try visitor.visitRepeatedMessageField(value: self.changes, fieldNumber: 1)
+    }
+    try { if let v = self._requestHeader {
+      try visitor.visitSingularMessageField(value: v, fieldNumber: 100)
+    } }()
+    try unknownFields.traverse(visitor: &visitor)
+  }
+
+  static func ==(lhs: Dynamite_UpdateMembershipRoleRequest, rhs: Dynamite_UpdateMembershipRoleRequest) -> Bool {
+    if lhs.changes != rhs.changes {return false}
+    if lhs._requestHeader != rhs._requestHeader {return false}
+    if lhs.unknownFields != rhs.unknownFields {return false}
+    return true
+  }
+}
+
+nonisolated extension Dynamite_UpdateMembershipRoleRequest.Change: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
+  static let protoMessageName: String = Dynamite_UpdateMembershipRoleRequest.protoMessageName + ".Change"
+  static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{2}\u{2}role\0\u{3}user_id\0\u{3}group_id\0")
+
+  mutating func decodeMessage<D: SwiftProtobuf.Decoder>(decoder: inout D) throws {
+    while let fieldNumber = try decoder.nextFieldNumber() {
+      // The use of inline closures is to circumvent an issue where the compiler
+      // allocates stack space for every case branch when no optimizations are
+      // enabled. https://github.com/apple/swift-protobuf/issues/1034
+      switch fieldNumber {
+      case 2: try { try decoder.decodeSingularEnumField(value: &self._role) }()
+      case 3: try { try decoder.decodeSingularMessageField(value: &self._userID) }()
+      case 4: try { try decoder.decodeSingularMessageField(value: &self._groupID) }()
+      default: break
+      }
+    }
+  }
+
+  func traverse<V: SwiftProtobuf.Visitor>(visitor: inout V) throws {
+    // The use of inline closures is to circumvent an issue where the compiler
+    // allocates stack space for every if/case branch local when no optimizations
+    // are enabled. https://github.com/apple/swift-protobuf/issues/1034 and
+    // https://github.com/apple/swift-protobuf/issues/1182
+    try { if let v = self._role {
+      try visitor.visitSingularEnumField(value: v, fieldNumber: 2)
+    } }()
+    try { if let v = self._userID {
+      try visitor.visitSingularMessageField(value: v, fieldNumber: 3)
+    } }()
+    try { if let v = self._groupID {
+      try visitor.visitSingularMessageField(value: v, fieldNumber: 4)
+    } }()
+    try unknownFields.traverse(visitor: &visitor)
+  }
+
+  static func ==(lhs: Dynamite_UpdateMembershipRoleRequest.Change, rhs: Dynamite_UpdateMembershipRoleRequest.Change) -> Bool {
+    if lhs._role != rhs._role {return false}
+    if lhs._userID != rhs._userID {return false}
+    if lhs._groupID != rhs._groupID {return false}
+    if lhs.unknownFields != rhs.unknownFields {return false}
+    return true
+  }
+}
+
+nonisolated extension Dynamite_UpdateMembershipRoleResponse: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
+  static let protoMessageName: String = _protobuf_package + ".UpdateMembershipRoleResponse"
+  static let _protobuf_nameMap = SwiftProtobuf._NameMap()
+
+  mutating func decodeMessage<D: SwiftProtobuf.Decoder>(decoder: inout D) throws {
+    // Load everything into unknown fields
+    while try decoder.nextFieldNumber() != nil {}
+  }
+
+  func traverse<V: SwiftProtobuf.Visitor>(visitor: inout V) throws {
+    try unknownFields.traverse(visitor: &visitor)
+  }
+
+  static func ==(lhs: Dynamite_UpdateMembershipRoleResponse, rhs: Dynamite_UpdateMembershipRoleResponse) -> Bool {
+    if lhs.unknownFields != rhs.unknownFields {return false}
+    return true
+  }
+}
+
+nonisolated extension Dynamite_UpdateGroupRetentionSettingsRequest: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
+  static let protoMessageName: String = _protobuf_package + ".UpdateGroupRetentionSettingsRequest"
+  static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{3}group_id\0\u{1}retention\0\u{3}local_id\0\u{4}a\u{1}request_header\0")
+
+  mutating func decodeMessage<D: SwiftProtobuf.Decoder>(decoder: inout D) throws {
+    while let fieldNumber = try decoder.nextFieldNumber() {
+      // The use of inline closures is to circumvent an issue where the compiler
+      // allocates stack space for every case branch when no optimizations are
+      // enabled. https://github.com/apple/swift-protobuf/issues/1034
+      switch fieldNumber {
+      case 1: try { try decoder.decodeSingularMessageField(value: &self._groupID) }()
+      case 2: try { try decoder.decodeSingularMessageField(value: &self._retention) }()
+      case 3: try { try decoder.decodeSingularStringField(value: &self._localID) }()
+      case 100: try { try decoder.decodeSingularMessageField(value: &self._requestHeader) }()
+      default: break
+      }
+    }
+  }
+
+  func traverse<V: SwiftProtobuf.Visitor>(visitor: inout V) throws {
+    // The use of inline closures is to circumvent an issue where the compiler
+    // allocates stack space for every if/case branch local when no optimizations
+    // are enabled. https://github.com/apple/swift-protobuf/issues/1034 and
+    // https://github.com/apple/swift-protobuf/issues/1182
+    try { if let v = self._groupID {
+      try visitor.visitSingularMessageField(value: v, fieldNumber: 1)
+    } }()
+    try { if let v = self._retention {
+      try visitor.visitSingularMessageField(value: v, fieldNumber: 2)
+    } }()
+    try { if let v = self._localID {
+      try visitor.visitSingularStringField(value: v, fieldNumber: 3)
+    } }()
+    try { if let v = self._requestHeader {
+      try visitor.visitSingularMessageField(value: v, fieldNumber: 100)
+    } }()
+    try unknownFields.traverse(visitor: &visitor)
+  }
+
+  static func ==(lhs: Dynamite_UpdateGroupRetentionSettingsRequest, rhs: Dynamite_UpdateGroupRetentionSettingsRequest) -> Bool {
+    if lhs._groupID != rhs._groupID {return false}
+    if lhs._retention != rhs._retention {return false}
+    if lhs._localID != rhs._localID {return false}
+    if lhs._requestHeader != rhs._requestHeader {return false}
+    if lhs.unknownFields != rhs.unknownFields {return false}
+    return true
+  }
+}
+
+nonisolated extension Dynamite_UpdateGroupRetentionSettingsResponse: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
+  static let protoMessageName: String = _protobuf_package + ".UpdateGroupRetentionSettingsResponse"
+  static let _protobuf_nameMap = SwiftProtobuf._NameMap()
+
+  mutating func decodeMessage<D: SwiftProtobuf.Decoder>(decoder: inout D) throws {
+    // Load everything into unknown fields
+    while try decoder.nextFieldNumber() != nil {}
+  }
+
+  func traverse<V: SwiftProtobuf.Visitor>(visitor: inout V) throws {
+    try unknownFields.traverse(visitor: &visitor)
+  }
+
+  static func ==(lhs: Dynamite_UpdateGroupRetentionSettingsResponse, rhs: Dynamite_UpdateGroupRetentionSettingsResponse) -> Bool {
+    if lhs.unknownFields != rhs.unknownFields {return false}
+    return true
+  }
+}
+
+nonisolated extension Dynamite_BlockEntityRequest: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
+  static let protoMessageName: String = _protobuf_package + ".BlockEntityRequest"
+  static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{3}user_id\0\u{3}group_id\0\u{1}blocked\0\u{1}report\0\u{3}dm_group_id\0\u{4}_\u{1}request_header\0")
+
+  mutating func decodeMessage<D: SwiftProtobuf.Decoder>(decoder: inout D) throws {
+    while let fieldNumber = try decoder.nextFieldNumber() {
+      // The use of inline closures is to circumvent an issue where the compiler
+      // allocates stack space for every case branch when no optimizations are
+      // enabled. https://github.com/apple/swift-protobuf/issues/1034
+      switch fieldNumber {
+      case 1: try { try decoder.decodeSingularMessageField(value: &self._userID) }()
+      case 2: try { try decoder.decodeSingularMessageField(value: &self._groupID) }()
+      case 3: try { try decoder.decodeSingularBoolField(value: &self._blocked) }()
+      case 4: try { try decoder.decodeSingularBoolField(value: &self._report) }()
+      case 5: try { try decoder.decodeSingularMessageField(value: &self._dmGroupID) }()
+      case 100: try { try decoder.decodeSingularMessageField(value: &self._requestHeader) }()
+      default: break
+      }
+    }
+  }
+
+  func traverse<V: SwiftProtobuf.Visitor>(visitor: inout V) throws {
+    // The use of inline closures is to circumvent an issue where the compiler
+    // allocates stack space for every if/case branch local when no optimizations
+    // are enabled. https://github.com/apple/swift-protobuf/issues/1034 and
+    // https://github.com/apple/swift-protobuf/issues/1182
+    try { if let v = self._userID {
+      try visitor.visitSingularMessageField(value: v, fieldNumber: 1)
+    } }()
+    try { if let v = self._groupID {
+      try visitor.visitSingularMessageField(value: v, fieldNumber: 2)
+    } }()
+    try { if let v = self._blocked {
+      try visitor.visitSingularBoolField(value: v, fieldNumber: 3)
+    } }()
+    try { if let v = self._report {
+      try visitor.visitSingularBoolField(value: v, fieldNumber: 4)
+    } }()
+    try { if let v = self._dmGroupID {
+      try visitor.visitSingularMessageField(value: v, fieldNumber: 5)
+    } }()
+    try { if let v = self._requestHeader {
+      try visitor.visitSingularMessageField(value: v, fieldNumber: 100)
+    } }()
+    try unknownFields.traverse(visitor: &visitor)
+  }
+
+  static func ==(lhs: Dynamite_BlockEntityRequest, rhs: Dynamite_BlockEntityRequest) -> Bool {
+    if lhs._userID != rhs._userID {return false}
+    if lhs._groupID != rhs._groupID {return false}
+    if lhs._blocked != rhs._blocked {return false}
+    if lhs._report != rhs._report {return false}
+    if lhs._dmGroupID != rhs._dmGroupID {return false}
+    if lhs._requestHeader != rhs._requestHeader {return false}
+    if lhs.unknownFields != rhs.unknownFields {return false}
+    return true
+  }
+}
+
+nonisolated extension Dynamite_BlockEntityResponse: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
+  static let protoMessageName: String = _protobuf_package + ".BlockEntityResponse"
+  static let _protobuf_nameMap = SwiftProtobuf._NameMap()
+
+  mutating func decodeMessage<D: SwiftProtobuf.Decoder>(decoder: inout D) throws {
+    // Load everything into unknown fields
+    while try decoder.nextFieldNumber() != nil {}
+  }
+
+  func traverse<V: SwiftProtobuf.Visitor>(visitor: inout V) throws {
+    try unknownFields.traverse(visitor: &visitor)
+  }
+
+  static func ==(lhs: Dynamite_BlockEntityResponse, rhs: Dynamite_BlockEntityResponse) -> Bool {
+    if lhs.unknownFields != rhs.unknownFields {return false}
+    return true
+  }
+}
+
+nonisolated extension Dynamite_ListBlockedUsersRequest: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
+  static let protoMessageName: String = _protobuf_package + ".ListBlockedUsersRequest"
+  static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{4}d\u{1}request_header\0")
+
+  mutating func decodeMessage<D: SwiftProtobuf.Decoder>(decoder: inout D) throws {
+    while let fieldNumber = try decoder.nextFieldNumber() {
+      // The use of inline closures is to circumvent an issue where the compiler
+      // allocates stack space for every case branch when no optimizations are
+      // enabled. https://github.com/apple/swift-protobuf/issues/1034
+      switch fieldNumber {
+      case 100: try { try decoder.decodeSingularMessageField(value: &self._requestHeader) }()
+      default: break
+      }
+    }
+  }
+
+  func traverse<V: SwiftProtobuf.Visitor>(visitor: inout V) throws {
+    // The use of inline closures is to circumvent an issue where the compiler
+    // allocates stack space for every if/case branch local when no optimizations
+    // are enabled. https://github.com/apple/swift-protobuf/issues/1034 and
+    // https://github.com/apple/swift-protobuf/issues/1182
+    try { if let v = self._requestHeader {
+      try visitor.visitSingularMessageField(value: v, fieldNumber: 100)
+    } }()
+    try unknownFields.traverse(visitor: &visitor)
+  }
+
+  static func ==(lhs: Dynamite_ListBlockedUsersRequest, rhs: Dynamite_ListBlockedUsersRequest) -> Bool {
+    if lhs._requestHeader != rhs._requestHeader {return false}
+    if lhs.unknownFields != rhs.unknownFields {return false}
+    return true
+  }
+}
+
+nonisolated extension Dynamite_ListBlockedUsersResponse: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
+  static let protoMessageName: String = _protobuf_package + ".ListBlockedUsersResponse"
+  static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{3}user_ids\0")
+
+  mutating func decodeMessage<D: SwiftProtobuf.Decoder>(decoder: inout D) throws {
+    while let fieldNumber = try decoder.nextFieldNumber() {
+      // The use of inline closures is to circumvent an issue where the compiler
+      // allocates stack space for every case branch when no optimizations are
+      // enabled. https://github.com/apple/swift-protobuf/issues/1034
+      switch fieldNumber {
+      case 1: try { try decoder.decodeRepeatedMessageField(value: &self.userIds) }()
+      default: break
+      }
+    }
+  }
+
+  func traverse<V: SwiftProtobuf.Visitor>(visitor: inout V) throws {
+    if !self.userIds.isEmpty {
+      try visitor.visitRepeatedMessageField(value: self.userIds, fieldNumber: 1)
+    }
+    try unknownFields.traverse(visitor: &visitor)
+  }
+
+  static func ==(lhs: Dynamite_ListBlockedUsersResponse, rhs: Dynamite_ListBlockedUsersResponse) -> Bool {
+    if lhs.userIds != rhs.userIds {return false}
+    if lhs.unknownFields != rhs.unknownFields {return false}
+    return true
+  }
+}
+
+nonisolated extension Dynamite_ManageBlockedRoomsRequest: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
+  static let protoMessageName: String = _protobuf_package + ".ManageBlockedRoomsRequest"
+  static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{4}d\u{1}request_header\0")
+
+  mutating func decodeMessage<D: SwiftProtobuf.Decoder>(decoder: inout D) throws {
+    while let fieldNumber = try decoder.nextFieldNumber() {
+      // The use of inline closures is to circumvent an issue where the compiler
+      // allocates stack space for every case branch when no optimizations are
+      // enabled. https://github.com/apple/swift-protobuf/issues/1034
+      switch fieldNumber {
+      case 100: try { try decoder.decodeSingularMessageField(value: &self._requestHeader) }()
+      default: break
+      }
+    }
+  }
+
+  func traverse<V: SwiftProtobuf.Visitor>(visitor: inout V) throws {
+    // The use of inline closures is to circumvent an issue where the compiler
+    // allocates stack space for every if/case branch local when no optimizations
+    // are enabled. https://github.com/apple/swift-protobuf/issues/1034 and
+    // https://github.com/apple/swift-protobuf/issues/1182
+    try { if let v = self._requestHeader {
+      try visitor.visitSingularMessageField(value: v, fieldNumber: 100)
+    } }()
+    try unknownFields.traverse(visitor: &visitor)
+  }
+
+  static func ==(lhs: Dynamite_ManageBlockedRoomsRequest, rhs: Dynamite_ManageBlockedRoomsRequest) -> Bool {
+    if lhs._requestHeader != rhs._requestHeader {return false}
+    if lhs.unknownFields != rhs.unknownFields {return false}
+    return true
+  }
+}
+
+nonisolated extension Dynamite_ManageBlockedRoomsResponse: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
+  static let protoMessageName: String = _protobuf_package + ".ManageBlockedRoomsResponse"
+  static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{1}rooms\0")
+
+  mutating func decodeMessage<D: SwiftProtobuf.Decoder>(decoder: inout D) throws {
+    while let fieldNumber = try decoder.nextFieldNumber() {
+      // The use of inline closures is to circumvent an issue where the compiler
+      // allocates stack space for every case branch when no optimizations are
+      // enabled. https://github.com/apple/swift-protobuf/issues/1034
+      switch fieldNumber {
+      case 1: try { try decoder.decodeRepeatedMessageField(value: &self.rooms) }()
+      default: break
+      }
+    }
+  }
+
+  func traverse<V: SwiftProtobuf.Visitor>(visitor: inout V) throws {
+    if !self.rooms.isEmpty {
+      try visitor.visitRepeatedMessageField(value: self.rooms, fieldNumber: 1)
+    }
+    try unknownFields.traverse(visitor: &visitor)
+  }
+
+  static func ==(lhs: Dynamite_ManageBlockedRoomsResponse, rhs: Dynamite_ManageBlockedRoomsResponse) -> Bool {
+    if lhs.rooms != rhs.rooms {return false}
+    if lhs.unknownFields != rhs.unknownFields {return false}
+    return true
+  }
+}
+
+nonisolated extension Dynamite_ManageBlockedRoomsResponse.BlockedRoom: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
+  static let protoMessageName: String = Dynamite_ManageBlockedRoomsResponse.protoMessageName + ".BlockedRoom"
+  static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{3}group_id\0\u{1}name\0\u{3}blocked_time\0")
+
+  mutating func decodeMessage<D: SwiftProtobuf.Decoder>(decoder: inout D) throws {
+    while let fieldNumber = try decoder.nextFieldNumber() {
+      // The use of inline closures is to circumvent an issue where the compiler
+      // allocates stack space for every case branch when no optimizations are
+      // enabled. https://github.com/apple/swift-protobuf/issues/1034
+      switch fieldNumber {
+      case 1: try { try decoder.decodeSingularMessageField(value: &self._groupID) }()
+      case 2: try { try decoder.decodeSingularStringField(value: &self._name) }()
+      case 3: try { try decoder.decodeSingularInt64Field(value: &self._blockedTime) }()
+      default: break
+      }
+    }
+  }
+
+  func traverse<V: SwiftProtobuf.Visitor>(visitor: inout V) throws {
+    // The use of inline closures is to circumvent an issue where the compiler
+    // allocates stack space for every if/case branch local when no optimizations
+    // are enabled. https://github.com/apple/swift-protobuf/issues/1034 and
+    // https://github.com/apple/swift-protobuf/issues/1182
+    try { if let v = self._groupID {
+      try visitor.visitSingularMessageField(value: v, fieldNumber: 1)
+    } }()
+    try { if let v = self._name {
+      try visitor.visitSingularStringField(value: v, fieldNumber: 2)
+    } }()
+    try { if let v = self._blockedTime {
+      try visitor.visitSingularInt64Field(value: v, fieldNumber: 3)
+    } }()
+    try unknownFields.traverse(visitor: &visitor)
+  }
+
+  static func ==(lhs: Dynamite_ManageBlockedRoomsResponse.BlockedRoom, rhs: Dynamite_ManageBlockedRoomsResponse.BlockedRoom) -> Bool {
+    if lhs._groupID != rhs._groupID {return false}
+    if lhs._name != rhs._name {return false}
+    if lhs._blockedTime != rhs._blockedTime {return false}
+    if lhs.unknownFields != rhs.unknownFields {return false}
+    return true
+  }
+}
+
+nonisolated extension Dynamite_ReportMessageRequest: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
+  static let protoMessageName: String = _protobuf_package + ".ReportMessageRequest"
+  static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{3}message_id\0\u{3}message_update_time\0\u{1}reason\0\u{1}explanation\0\u{4}`\u{1}request_header\0")
+
+  mutating func decodeMessage<D: SwiftProtobuf.Decoder>(decoder: inout D) throws {
+    while let fieldNumber = try decoder.nextFieldNumber() {
+      // The use of inline closures is to circumvent an issue where the compiler
+      // allocates stack space for every case branch when no optimizations are
+      // enabled. https://github.com/apple/swift-protobuf/issues/1034
+      switch fieldNumber {
+      case 1: try { try decoder.decodeSingularMessageField(value: &self._messageID) }()
+      case 2: try { try decoder.decodeSingularMessageField(value: &self._messageUpdateTime) }()
+      case 3: try { try decoder.decodeSingularMessageField(value: &self._reason) }()
+      case 4: try { try decoder.decodeSingularMessageField(value: &self._explanation) }()
+      case 100: try { try decoder.decodeSingularMessageField(value: &self._requestHeader) }()
+      default: break
+      }
+    }
+  }
+
+  func traverse<V: SwiftProtobuf.Visitor>(visitor: inout V) throws {
+    // The use of inline closures is to circumvent an issue where the compiler
+    // allocates stack space for every if/case branch local when no optimizations
+    // are enabled. https://github.com/apple/swift-protobuf/issues/1034 and
+    // https://github.com/apple/swift-protobuf/issues/1182
+    try { if let v = self._messageID {
+      try visitor.visitSingularMessageField(value: v, fieldNumber: 1)
+    } }()
+    try { if let v = self._messageUpdateTime {
+      try visitor.visitSingularMessageField(value: v, fieldNumber: 2)
+    } }()
+    try { if let v = self._reason {
+      try visitor.visitSingularMessageField(value: v, fieldNumber: 3)
+    } }()
+    try { if let v = self._explanation {
+      try visitor.visitSingularMessageField(value: v, fieldNumber: 4)
+    } }()
+    try { if let v = self._requestHeader {
+      try visitor.visitSingularMessageField(value: v, fieldNumber: 100)
+    } }()
+    try unknownFields.traverse(visitor: &visitor)
+  }
+
+  static func ==(lhs: Dynamite_ReportMessageRequest, rhs: Dynamite_ReportMessageRequest) -> Bool {
+    if lhs._messageID != rhs._messageID {return false}
+    if lhs._messageUpdateTime != rhs._messageUpdateTime {return false}
+    if lhs._reason != rhs._reason {return false}
+    if lhs._explanation != rhs._explanation {return false}
+    if lhs._requestHeader != rhs._requestHeader {return false}
+    if lhs.unknownFields != rhs.unknownFields {return false}
+    return true
+  }
+}
+
+nonisolated extension Dynamite_ReportMessageRequest.Micros: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
+  static let protoMessageName: String = Dynamite_ReportMessageRequest.protoMessageName + ".Micros"
+  static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{1}micros\0")
+
+  mutating func decodeMessage<D: SwiftProtobuf.Decoder>(decoder: inout D) throws {
+    while let fieldNumber = try decoder.nextFieldNumber() {
+      // The use of inline closures is to circumvent an issue where the compiler
+      // allocates stack space for every case branch when no optimizations are
+      // enabled. https://github.com/apple/swift-protobuf/issues/1034
+      switch fieldNumber {
+      case 1: try { try decoder.decodeSingularInt64Field(value: &self._micros) }()
+      default: break
+      }
+    }
+  }
+
+  func traverse<V: SwiftProtobuf.Visitor>(visitor: inout V) throws {
+    // The use of inline closures is to circumvent an issue where the compiler
+    // allocates stack space for every if/case branch local when no optimizations
+    // are enabled. https://github.com/apple/swift-protobuf/issues/1034 and
+    // https://github.com/apple/swift-protobuf/issues/1182
+    try { if let v = self._micros {
+      try visitor.visitSingularInt64Field(value: v, fieldNumber: 1)
+    } }()
+    try unknownFields.traverse(visitor: &visitor)
+  }
+
+  static func ==(lhs: Dynamite_ReportMessageRequest.Micros, rhs: Dynamite_ReportMessageRequest.Micros) -> Bool {
+    if lhs._micros != rhs._micros {return false}
+    if lhs.unknownFields != rhs.unknownFields {return false}
+    return true
+  }
+}
+
+nonisolated extension Dynamite_ReportMessageRequest.Reason: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
+  static let protoMessageName: String = Dynamite_ReportMessageRequest.protoMessageName + ".Reason"
+  static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{1}kind\0")
+
+  mutating func decodeMessage<D: SwiftProtobuf.Decoder>(decoder: inout D) throws {
+    while let fieldNumber = try decoder.nextFieldNumber() {
+      // The use of inline closures is to circumvent an issue where the compiler
+      // allocates stack space for every case branch when no optimizations are
+      // enabled. https://github.com/apple/swift-protobuf/issues/1034
+      switch fieldNumber {
+      case 1: try { try decoder.decodeSingularEnumField(value: &self._kind) }()
+      default: break
+      }
+    }
+  }
+
+  func traverse<V: SwiftProtobuf.Visitor>(visitor: inout V) throws {
+    // The use of inline closures is to circumvent an issue where the compiler
+    // allocates stack space for every if/case branch local when no optimizations
+    // are enabled. https://github.com/apple/swift-protobuf/issues/1034 and
+    // https://github.com/apple/swift-protobuf/issues/1182
+    try { if let v = self._kind {
+      try visitor.visitSingularEnumField(value: v, fieldNumber: 1)
+    } }()
+    try unknownFields.traverse(visitor: &visitor)
+  }
+
+  static func ==(lhs: Dynamite_ReportMessageRequest.Reason, rhs: Dynamite_ReportMessageRequest.Reason) -> Bool {
+    if lhs._kind != rhs._kind {return false}
+    if lhs.unknownFields != rhs.unknownFields {return false}
+    return true
+  }
+}
+
+nonisolated extension Dynamite_ReportMessageRequest.Reason.Kind: SwiftProtobuf._ProtoNameProviding {
+  static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{2}\0VIOLATION_UNSPECIFIED\0\u{1}HARASSMENT\0\u{1}DISCRIMINATION\0\u{1}EXPLICIT_CONTENT\0\u{1}SPAM\0\u{1}CONFIDENTIAL_INFORMATION\0\u{1}OTHER\0\u{1}SENSITIVE_INFORMATION\0")
+}
+
+nonisolated extension Dynamite_ReportMessageRequest.Explanation: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
+  static let protoMessageName: String = Dynamite_ReportMessageRequest.protoMessageName + ".Explanation"
+  static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{1}text\0")
+
+  mutating func decodeMessage<D: SwiftProtobuf.Decoder>(decoder: inout D) throws {
+    while let fieldNumber = try decoder.nextFieldNumber() {
+      // The use of inline closures is to circumvent an issue where the compiler
+      // allocates stack space for every case branch when no optimizations are
+      // enabled. https://github.com/apple/swift-protobuf/issues/1034
+      switch fieldNumber {
+      case 1: try { try decoder.decodeSingularStringField(value: &self._text) }()
+      default: break
+      }
+    }
+  }
+
+  func traverse<V: SwiftProtobuf.Visitor>(visitor: inout V) throws {
+    // The use of inline closures is to circumvent an issue where the compiler
+    // allocates stack space for every if/case branch local when no optimizations
+    // are enabled. https://github.com/apple/swift-protobuf/issues/1034 and
+    // https://github.com/apple/swift-protobuf/issues/1182
+    try { if let v = self._text {
+      try visitor.visitSingularStringField(value: v, fieldNumber: 1)
+    } }()
+    try unknownFields.traverse(visitor: &visitor)
+  }
+
+  static func ==(lhs: Dynamite_ReportMessageRequest.Explanation, rhs: Dynamite_ReportMessageRequest.Explanation) -> Bool {
+    if lhs._text != rhs._text {return false}
+    if lhs.unknownFields != rhs.unknownFields {return false}
+    return true
+  }
+}
+
+nonisolated extension Dynamite_ReportMessageResponse: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
+  static let protoMessageName: String = _protobuf_package + ".ReportMessageResponse"
+  static let _protobuf_nameMap = SwiftProtobuf._NameMap()
+
+  mutating func decodeMessage<D: SwiftProtobuf.Decoder>(decoder: inout D) throws {
+    // Load everything into unknown fields
+    while try decoder.nextFieldNumber() != nil {}
+  }
+
+  func traverse<V: SwiftProtobuf.Visitor>(visitor: inout V) throws {
+    try unknownFields.traverse(visitor: &visitor)
+  }
+
+  static func ==(lhs: Dynamite_ReportMessageResponse, rhs: Dynamite_ReportMessageResponse) -> Bool {
     if lhs.unknownFields != rhs.unknownFields {return false}
     return true
   }
@@ -21658,7 +24710,7 @@ nonisolated extension Dynamite_HideGroupResponse: SwiftProtobuf.Message, SwiftPr
 
 nonisolated extension Dynamite_GroupScopedCapabilities: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
   static let protoMessageName: String = _protobuf_package + ".GroupScopedCapabilities"
-  static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{4}\u{7}can_edit_description\0\u{4}\u{2}can_edit_space_profile\0\u{4}\u{5}can_manage_members\0")
+  static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{4}\u{2}can_update_member_roles\0\u{3}can_delete_group\0\u{3}can_edit_guidelines\0\u{4}\u{3}can_edit_description\0\u{3}can_report_messages\0\u{3}can_edit_space_profile\0\u{3}can_toggle_history\0\u{4}\u{4}can_manage_members\0\u{3}can_trigger_typing_indicator\0\u{4}-can_update_manager_roles\0")
 
   mutating func decodeMessage<D: SwiftProtobuf.Decoder>(decoder: inout D) throws {
     while let fieldNumber = try decoder.nextFieldNumber() {
@@ -21666,9 +24718,16 @@ nonisolated extension Dynamite_GroupScopedCapabilities: SwiftProtobuf.Message, S
       // allocates stack space for every case branch when no optimizations are
       // enabled. https://github.com/apple/swift-protobuf/issues/1034
       switch fieldNumber {
+      case 2: try { try decoder.decodeSingularBoolField(value: &self._canUpdateMemberRoles) }()
+      case 3: try { try decoder.decodeSingularBoolField(value: &self._canDeleteGroup) }()
+      case 4: try { try decoder.decodeSingularBoolField(value: &self._canEditGuidelines) }()
       case 7: try { try decoder.decodeSingularBoolField(value: &self._canEditDescription) }()
+      case 8: try { try decoder.decodeSingularBoolField(value: &self._canReportMessages) }()
       case 9: try { try decoder.decodeSingularBoolField(value: &self._canEditSpaceProfile) }()
+      case 10: try { try decoder.decodeSingularBoolField(value: &self._canToggleHistory) }()
       case 14: try { try decoder.decodeSingularBoolField(value: &self._canManageMembers) }()
+      case 15: try { try decoder.decodeSingularBoolField(value: &self._canTriggerTypingIndicator) }()
+      case 60: try { try decoder.decodeSingularBoolField(value: &self._canUpdateManagerRoles) }()
       default: break
       }
     }
@@ -21679,22 +24738,50 @@ nonisolated extension Dynamite_GroupScopedCapabilities: SwiftProtobuf.Message, S
     // allocates stack space for every if/case branch local when no optimizations
     // are enabled. https://github.com/apple/swift-protobuf/issues/1034 and
     // https://github.com/apple/swift-protobuf/issues/1182
+    try { if let v = self._canUpdateMemberRoles {
+      try visitor.visitSingularBoolField(value: v, fieldNumber: 2)
+    } }()
+    try { if let v = self._canDeleteGroup {
+      try visitor.visitSingularBoolField(value: v, fieldNumber: 3)
+    } }()
+    try { if let v = self._canEditGuidelines {
+      try visitor.visitSingularBoolField(value: v, fieldNumber: 4)
+    } }()
     try { if let v = self._canEditDescription {
       try visitor.visitSingularBoolField(value: v, fieldNumber: 7)
+    } }()
+    try { if let v = self._canReportMessages {
+      try visitor.visitSingularBoolField(value: v, fieldNumber: 8)
     } }()
     try { if let v = self._canEditSpaceProfile {
       try visitor.visitSingularBoolField(value: v, fieldNumber: 9)
     } }()
+    try { if let v = self._canToggleHistory {
+      try visitor.visitSingularBoolField(value: v, fieldNumber: 10)
+    } }()
     try { if let v = self._canManageMembers {
       try visitor.visitSingularBoolField(value: v, fieldNumber: 14)
+    } }()
+    try { if let v = self._canTriggerTypingIndicator {
+      try visitor.visitSingularBoolField(value: v, fieldNumber: 15)
+    } }()
+    try { if let v = self._canUpdateManagerRoles {
+      try visitor.visitSingularBoolField(value: v, fieldNumber: 60)
     } }()
     try unknownFields.traverse(visitor: &visitor)
   }
 
   static func ==(lhs: Dynamite_GroupScopedCapabilities, rhs: Dynamite_GroupScopedCapabilities) -> Bool {
+    if lhs._canUpdateMemberRoles != rhs._canUpdateMemberRoles {return false}
+    if lhs._canDeleteGroup != rhs._canDeleteGroup {return false}
+    if lhs._canEditGuidelines != rhs._canEditGuidelines {return false}
     if lhs._canEditDescription != rhs._canEditDescription {return false}
+    if lhs._canReportMessages != rhs._canReportMessages {return false}
     if lhs._canEditSpaceProfile != rhs._canEditSpaceProfile {return false}
     if lhs._canManageMembers != rhs._canManageMembers {return false}
+    if lhs._canTriggerTypingIndicator != rhs._canTriggerTypingIndicator {return false}
+    if lhs._canToggleHistory != rhs._canToggleHistory {return false}
+    if lhs._canUpdateManagerRoles != rhs._canUpdateManagerRoles {return false}
     if lhs.unknownFields != rhs.unknownFields {return false}
     return true
   }

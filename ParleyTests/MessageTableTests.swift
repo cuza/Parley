@@ -16,15 +16,18 @@ import Testing
         let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 800, height: 600), styleMask: [.titled, .resizable], backing: .buffered, defer: false)
         var atBottom: [Bool] = []
         var nearTop = 0   // requests for older history
+        var nearBottom = 0   // a detached window's requests for newer history
         var actions = MessageRowActions()
         var table: NSTableView { scroll.documentView as! NSTableView }
         init() {
             scroll = MessageTable.makeScrollView(coordinator, identifier: "t")
             window.contentView = scroll
         }
-        func show(_ messages: [Message], seen: [MessageID: [String]] = [:], scrollRequest: Int = 0, bottomInset: CGFloat = 0) {
-            coordinator.update(MessageTable(rows: TimelineRow.rows(messages, seen: seen), meID: "me", kind: .space, actions: actions,
-                                            nearTop: { [weak self] in self?.nearTop += 1 }, atBottomChanged: { [weak self] in self?.atBottom.append($0) }, scrollRequest: scrollRequest,
+        func show(_ messages: [Message], seen: [MessageID: [String]] = [:], scrollRequest: Int = 0, bottomInset: CGFloat = 0,
+                  highlighted: MessageID? = nil, detached: Bool = false) {
+            coordinator.update(MessageTable(rows: TimelineRow.rows(messages, seen: seen), meID: "me", kind: .space, highlighted: highlighted, actions: actions,
+                                            nearTop: { [weak self] in self?.nearTop += 1 }, nearBottom: { [weak self] in self?.nearBottom += 1 },
+                                            detached: detached, atBottomChanged: { [weak self] in self?.atBottom.append($0) }, scrollRequest: scrollRequest,
                                             bottomInset: bottomInset))
             settle()
         }
@@ -34,6 +37,46 @@ import Testing
         var clip: NSRect { scroll.contentView.bounds }
         /// How far above the composer the newest message ends (0 when it rests just above it).
         var gapAboveComposer: CGFloat { clip.maxY - scroll.contentInsets.bottom - table.bounds.height }
+    }
+
+    /// Only a message I just sent (still pending) takes a reader who scrolled up to the bottom; a page that happens to end
+    /// with an older message of mine (a window meeting the newest messages) leaves them where they are.
+    @Test func onlyAJustSentMessagePullsAScrolledReaderDown() throws {
+        let h = Harness()
+        h.show(messages(0..<100))
+        h.scroll(to: 400)
+        var page = messages(0..<120)
+        page[119] = Message(id: page[119].id, conversationID: "c", sender: me, text: "mine, sent earlier", createdAt: page[119].createdAt)
+        h.show(page)
+        #expect(abs(h.visibleTop - 400) < 1, "a page ending with my old message: top \(h.visibleTop)")
+        let sending = Message(id: "local-1", conversationID: "c", sender: me, text: "just now", createdAt: page[119].createdAt + 60, delivery: .pending)
+        h.show(page + [sending])
+        #expect(h.clip.maxY >= h.table.bounds.height - 1, "my send shows at the bottom")
+    }
+
+    /// A window opened at an old message (a search result, a link): it shows the message, not the window's end;
+    /// scrolling near its bottom asks for newer history, and a newer page landing below doesn't pull the reader down.
+    @Test func aDetachedWindowPagesDownWithoutFollowingTheBottom() throws {
+        let h = Harness()
+        h.show(messages(0..<200), highlighted: "m0100", detached: true)
+        let row = h.table.rect(ofRow: 100)
+        #expect(h.scroll.documentVisibleRect.intersects(row), "the opened message is on screen")
+        #expect(h.nearBottom == 0, "far from the window's end")
+        h.scroll(to: h.table.bounds.height - h.clip.height)   // the reader scrolls to the window's end
+        #expect(h.nearBottom == 1)
+        let top = h.visibleTop, height = h.table.bounds.height
+        h.show(messages(0..<230), highlighted: "m0100", detached: true)   // the newer page lands below
+        #expect(abs(h.visibleTop - top) < 1, "stays where the reader was: top \(top) → \(h.visibleTop), height \(height) → \(h.table.bounds.height)")
+        let small = Harness()
+        small.show(messages(0..<40), highlighted: "m0020", detached: true)
+        small.scroll(to: small.table.bounds.height - small.clip.height)
+        let smallTop = small.visibleTop, smallHeight = small.table.bounds.height
+        small.show(messages(0..<70), highlighted: "m0020", detached: true)
+        #expect(abs(small.visibleTop - smallTop) < 1, "small: top \(smallTop) → \(small.visibleTop), height \(smallHeight) → \(small.table.bounds.height), clip \(small.clip.height)")
+        let joined = Harness()
+        joined.show(messages(0..<40))
+        joined.scroll(to: joined.table.bounds.height - joined.clip.height)
+        #expect(joined.nearBottom == 0, "a timeline at the newest messages has nothing newer to ask for")
     }
 
     /// Hosted by SwiftUI as in the app: a side pane opening beside the timeline narrows it, its rows grow, and the
@@ -481,7 +524,7 @@ import Testing
     }
     /// A page's pictures are fetched and decoded into the cache as it lands, before their rows scroll into view.
     @Test func aLandedPageWarmsItsThumbnails() async throws {
-        ImageCache.shared.removeAllObjects()   // NSCache may drop any entry once full, and other tests fill the shared one
+        // The pictures' URLs are new, so the shared cache has none of them. Clearing it would also wipe other tests' entries.
         let h = Harness(), fake = FakeBackend()
         var fetched = 0
         h.actions.loadAttachment = { attachment, thumbnail in fetched += 1; return try await fake.attachmentData(attachment, thumbnail: thumbnail) }
@@ -490,9 +533,10 @@ import Testing
         for i in older.indices { older[i].attachments = [pictures[i]] }
         h.show(messages(6..<40))
         h.show(older + messages(6..<40))
-        for _ in 0..<100 where pictures.contains(where: { ImageCache.cached($0) == nil }) { try await Task.sleep(for: .milliseconds(20)) }
+        for _ in 0..<250 where pictures.contains(where: { ImageCache.cached($0) == nil }) { try await Task.sleep(for: .milliseconds(20)) }
+        let cached = pictures.filter { ImageCache.cached($0) != nil }.count
         for picture in pictures {
-            let image = try #require(ImageCache.cached(picture))
+            let image = try #require(ImageCache.cached(picture), "\(fetched) fetched, \(cached) cached")
             #expect(max(image.size.width, image.size.height) <= CGFloat(picture.displayPixels), "decoded at display size")
         }
         #expect(fetched == pictures.count, "rows on screen and the prefetch share one fetch per picture")
@@ -515,7 +559,6 @@ import Testing
         #expect(rep.value(forProperty: .frameCount) as? Int == 3)
     }
     @Test func aCachedPictureShowsOnTheFirstFrame() throws {
-        ImageCache.shared.removeAllObjects()   // NSCache may drop any entry once full, and other tests fill the shared one
         let picture = Attachment(name: "seen.png", kind: .image, url: URL(string: "https://example.com/seen-\(UUID())"), width: 320, height: 240)
         let seeded = NSImage(size: NSSize(width: 32, height: 24))
         ImageCache.shared.setObject(seeded, forKey: ImageCache.key(picture) as NSString)

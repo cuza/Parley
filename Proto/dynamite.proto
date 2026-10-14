@@ -266,6 +266,9 @@ message RoomUpdatedMetadata {                         // purple's name(2) is gon
 }
 message QuotedMessageMetadata {
   optional MessageId message_id = 1;
+  enum MessageState { MESSAGE_STATE_UNSPECIFIED = 0; ACTIVE = 1; DELETED = 2; OTR_EDITED = 3; }
+  optional MessageState message_state = 3;               // the quoted original's state now
+  optional RetentionSettings retention_settings = 11;    // the quoted original's history setting
   optional int64 last_update_time_when_quoted = 2;       // µs: what a QuotedMessageRef's last_update_time sends back
   optional User creator = 5;
   optional string text_body = 6;
@@ -319,7 +322,12 @@ message MessageLabelRequest {                         // apply_message_label and
 }
 message ApplyMessageLabelResponse {}                  // the revision (1) and the labels now on the message (2) are not used
 message RemoveMessageLabelResponse {}
-message ReplySummary { optional int64 total_reply_count = 1; }
+message ReplySummary {
+  optional int64 total_reply_count = 1;
+  optional int64 unread_reply_count = 2;
+  enum UnreadAttribute { UNREAD_ATTRIBUTE_UNSPECIFIED = 0; USER_MENTIONED = 1; ALL_MENTIONED = 2; }
+  repeated UnreadAttribute unread_attributes = 3 [packed = true];   // what the unread replies mention
+}
 message TopicReadState {               // only sent with fetch option TOPIC_METADATA (and on Home's thread items)
   optional int64 last_read_time = 2;   // µs; a message created later is unread
   optional int32 message_count = 10;
@@ -341,6 +349,7 @@ message Topic {
 
 message GroupReadState {
   optional int64 last_read_time = 2;                 // µs
+  repeated GroupAttribute labels = 31;               // my labels on the conversation: {4, key} puts it in that custom section
   optional int64 unread_message_count = 4;           // (purple) absent today; kept for older servers
   optional bool starred = 5;
   optional int64 unread_subscribed_topic_count = 7;
@@ -372,6 +381,7 @@ message WorldItemLite {
   optional string room_name = 5;
   optional DmMembers dm_members = 6;
   message GroupLite {
+    optional RetentionSettings retention = 4;   // history on or off
     optional GroupDetails space_details = 8;   // a space's description and guidelines
   }
   optional GroupLite group_lite = 7;
@@ -381,10 +391,50 @@ message WorldItemLite {
   optional NameUsers name_users = 20;
   repeated GroupAttribute attributes = 36;   // "SPACE" or "GROUP_DM" (a group DM, named or not); absent on 1:1 DMs
 }
-message GroupAttribute {
-  optional int32 type = 1;    // 6 = what kind of conversation the value names
+message GroupAttribute {       // a group label: type 4 with a section's key puts the conversation in that custom section
+  optional int32 type = 1;    // 6 = what kind of conversation the value names; 4 = a custom sidebar section
   optional string value = 2;
 }
+// The user's sidebar sections, shared with the web. Custom ones (type 3) hold the conversations labelled {4, key}.
+message RosterSectionId {
+  optional int32 type = 1;                    // 1 DMs, 2 spaces, 3 custom, 4 apps, 5 shortcuts
+  optional GroupAttribute label = 2;          // {4, key} for a custom section
+  optional string secondary_key = 3;          // the same key
+}
+message RosterSection {
+  optional RosterSectionId id = 1;
+  optional int64 sort_order = 2;              // its position among the sections
+  optional string name = 3;
+  optional bool filtered_to_unread = 4;
+  optional bool collapsed = 5;
+  optional int32 rows_shown = 6;
+  message ContentSort { optional int32 order = 1; }   // 1 most recent first, 2 alphabetical
+  optional ContentSort content_sort = 10;
+  optional int32 rows_shown_in_recency = 11;
+}
+message FieldNumberMask { repeated int32 fields = 2 [packed = true]; }   // the RosterSection fields an update changes
+message CreateRosterSectionRequest {
+  optional RosterSection section = 1;         // the key "1" as a placeholder; Google answers with the real one
+  optional RequestHeader request_header = 100;
+}
+message CreateRosterSectionResponse { optional RosterSection section = 1; }
+message UpdateRosterSectionRequest {
+  optional RosterSection section = 1;
+  optional FieldNumberMask mask = 3;
+  optional RequestHeader request_header = 100;
+}
+message UpdateRosterSectionResponse { optional RosterSection section = 1; }
+message DeleteRosterSectionRequest {
+  optional RosterSectionId id = 2;
+  optional RequestHeader request_header = 100;
+}
+message DeleteRosterSectionResponse {}
+message GroupLabelRequest {                   // apply_group_label and remove_group_label
+  optional GroupAttribute label = 1;
+  optional GroupId group_id = 2;
+  optional RequestHeader request_header = 100;
+}
+message GroupLabelResponse {}
 // Which conversations a section holds. Only the fields Parley sends; Google Chat also filters on
 // starred(1), visibility(2), member type(5), read(7), blocked(8), named(9), mute(12) and labels(15/16).
 message WorldFilter {
@@ -428,6 +478,7 @@ message WorldSectionRequest {
   optional WorldSortKey sort_key = 11;
   optional WorldView view = 15;
   optional WorldConstraints constraints = 16;   // Home's followed-thread section: label "100G" (see homeSections)
+  optional bool fetch_roster_sections = 13;     // also answer with the user's sidebar sections
 }
 // A small expression language: a binary operation on two values, or a string.
 message WorldExpression {
@@ -445,6 +496,12 @@ message WorldSectionResponse {
   optional WorldFilter world_filter = 4;   // echoes the request's filter: how a section's token finds its section
   optional bool more_items = 5;
   optional string pagination_token = 6;
+  message RosterSectionPage {
+    optional string pagination_token = 1;
+    optional RosterSection section = 2;
+    optional bool has_more = 4;
+  }
+  repeated RosterSectionPage roster_sections = 9;   // asked for with fetch_roster_sections
 }
 message PaginatedWorldRequest {
   optional RequestHeader request_header = 1;   // field 1, not 100 (live-verified)
@@ -522,11 +579,17 @@ message ListMembersRequest {          // enum names unknown, raw values
   optional RequestHeader request_header = 100;
 }
 message ListMembersResponse {
+  repeated Membership memberships = 1;   // each member's state and role
   repeated Member members = 2;
   optional string next_page_token = 3;
 }
 
-message ListTopicsFilter { optional int64 older_than = 1; }   // oneof: PAGINATION_BACKWARDS anchor, µs sort time
+message ListTopicsFilter {                    // a oneof, as Google Chat sends it
+  optional int64 older_than = 1;              // PAGINATION_BACKWARDS anchor, µs sort time
+  optional int64 newer_than = 2;              // PAGINATION_FORWARDS anchor, µs sort time
+  optional TopicId around_topic = 4;          // the page around a topic, as web Chat opens an old search result
+  optional bool thread_summary = 7;           // a space's threads list (not part of the oneof)
+}
 message ListTopicsRequest {
   optional int32 page_size_for_topics = 2;
   optional ListTopicsFilter filter = 4;
@@ -541,6 +604,7 @@ message ListTopicsRequest {
 message ListTopicsResponse {
   repeated Topic topics = 1;
   optional bool contains_first_topic = 4;     // true: nothing older
+  optional bool contains_last_topic = 5;      // true: nothing newer
   optional ReadReceiptSet read_receipt_set = 6;   // asked for with fetch option READ_RECEIPTS
 }
 
@@ -588,9 +652,31 @@ message CreateMessageResponse { optional Message message = 1; }
 message MarkGroupReadstateRequest {    // (purple)
   optional GroupId id = 1;
   optional int64 last_read_time = 2;   // µs
+  optional int64 thread_summary_read_time = 3;   // µs: the threads list seen up to its newest thread, as Google Chat marks it
   optional RequestHeader request_header = 100;
 }
 message MarkGroupReadstateResponse {}
+// A thread read up to a time, as Google Chat marks it when the thread is open.
+message MarkTopicReadstateRequest {
+  optional TopicId topic_id = 1;
+  optional int64 last_read_time = 2;   // µs: the newest reply read
+  optional RequestHeader request_header = 100;
+}
+message MarkTopicReadstateResponse {}
+// Following a thread: muted = not followed. The server answers with TOPIC_LABEL_APPLIED or _REMOVED (THREAD_FOLLOWED).
+message MarkTopicMuteStateRequest {   // path spelled mark_Topic_mute_state
+  optional TopicId topic_id = 1;
+  optional bool muted = 2;
+  optional RequestHeader request_header = 100;
+}
+message MarkTopicMuteStateResponse {}
+// "Mark as unread" from a reply inside a thread; 0 clears it.
+message SetTopicUnreadTimestampRequest {
+  optional TopicId topic_id = 1;
+  optional int64 unread_timestamp = 2;   // µs: the message's create time − 1
+  optional RequestHeader request_header = 100;
+}
+message SetTopicUnreadTimestampResponse {}
 
 // Sidebar actions: pin (star), mute, mark as unread, leave.
 message StarGroupRequest {
@@ -633,10 +719,17 @@ message GroupUpdatedEvent {
   optional Group group = 1;
   optional GroupUpdateType group_update_type = 4;
 }
+// A space's history: on keeps messages, off deletes new ones after a day.
+message RetentionSettings {
+  enum State { RETENTION_STATE_UNKNOWN = 0; PERMANENT = 1; EPHEMERAL_ONE_DAY = 2; }
+  optional State state = 1;
+}
+enum MemberRole { MEMBER_ROLE_UNKNOWN = 0; MEMBER_ROLE_MEMBER = 3; MEMBER_ROLE_OWNER = 4; MEMBER_ROLE_MANAGER = 6; }
 message Membership {
   enum State { MEMBER_UNKNOWN = 0; MEMBER_INVITED = 1; MEMBER_JOINED = 2; MEMBER_NOT_A_MEMBER = 3; MEMBER_FAILED = 4; MEMBER_INTEROP = 5; MEMBER_PENDING_TRUST_CHECK = 6; }
   optional MembershipId id = 1;
   optional State membership_state = 3;
+  optional MemberRole role = 5;
 }
 message MembershipChangedEvent { optional Membership new_membership = 1; }
 message GroupDeletedEvent { repeated GroupId group_ids = 1; }
@@ -734,6 +827,11 @@ message EventBody {
     UNSENT_MESSAGE_UPDATED = 89;
     ACTIVITY_INDICATOR_CHANGED = 96;                  // an agent (Ask Gemini) working on an answer
     GROUP_HIDE_CHANGED = 16;                          // hidden from my sidebar, or shown again
+    GROUP_LABEL_APPLIED = 70;                         // a conversation moved into a sidebar section (here or elsewhere)
+    GROUP_LABEL_REMOVED = 71;
+    ROSTER_SECTION_CREATED = 72;                      // a sidebar section made, deleted or changed
+    ROSTER_SECTION_DELETED = 73;
+    ROSTER_SECTION_UPDATED = 74;
   }
   optional GroupUpdatedEvent group_updated = 5;
   optional MessageEvent message_posted = 6;          // also carries MESSAGE_UPDATED
@@ -838,13 +936,27 @@ message ListReactorsRequest {                       // who reacted with one emoj
   optional RequestHeader request_header = 100;
 }
 message ListReactorsResponse { repeated UserId reactors = 1; }   // revision(3), a Revision{timestampMicros}, not used
-message SearchFilter {}
+message SearchFilter {
+  optional SearchScope scope = 8;                  // needs a sort: without one Google answers 400
+}
+message SearchScope {
+  repeated SearchConversation conversations = 4;   // "said in": the conversations to search
+}
+message SearchConversation {
+  optional GroupId group_id = 1;
+  optional int32 kind = 2;                         // Google Chat always sends 1
+}
 message SearchMessagesV2Request {
   optional int32 size = 1;
   optional string cursor = 2;
   optional SearchFilter filter = 3;    // always sent, empty when unfiltered
   optional string query = 4;
+  optional SearchSort sort = 7;
   optional RequestHeader request_header = 100;
+}
+message SearchSort {
+  enum Operator { SORT_OPERATOR_UNSPECIFIED = 0; RELEVANCE = 1; CHRONOLOGICAL = 2; }
+  optional Operator operator = 1;
 }
 message SearchResult { optional Message message = 1; }
 message SearchResults { repeated SearchResult items = 1; }
@@ -867,7 +979,6 @@ message ListMessagesResponse {
 }
 
 // --- New conversations: DMs, the space directory, joining ---
-message RetentionSettings { optional int32 state = 1; }   // 1 PERMANENT, 2 EPHEMERAL_ONE_DAY
 message CreateDmRequest {                     // purple's members(1) / invitees(7) layout is gone
   repeated InviteeInfo members = 3;           // the other people: user_id, or email with invitation_mode
   optional RetentionSettings retention_settings = 5;
@@ -900,6 +1011,12 @@ message CreateGroupRequest {
   optional RequestHeader request_header = 100;
 }
 message CreateGroupResponse { optional Group group = 1; }
+message DeleteGroupRequest {
+  optional GroupId group_id = 1;
+  optional bool keep_roster = 2;              // true for a space without a linked Google Group: delete the space only
+  optional RequestHeader request_header = 100;
+}
+message DeleteGroupResponse {}
 message SearchSpaceDirectoryRequest {
   optional int32 page_size = 1;
   optional string continuation_token = 2;
@@ -945,10 +1062,65 @@ message UpdateGroupRequest {
   optional string name = 2;
   repeated Field update_masks = 4;
   optional AvatarInfo avatar_info = 6;        // the emoji
+  optional GroupDetails group_details = 7;    // description and guidelines, sent together
   optional GroupId group_id = 11;
   optional RequestHeader request_header = 100;
 }
 message UpdateGroupResponse {}                // the updated Group(1) and its system message(3) not used
+message UpdateMembershipRoleRequest {
+  message Change {
+    optional MemberRole role = 2;
+    optional UserId user_id = 3;
+    optional GroupId group_id = 4;
+  }
+  repeated Change changes = 1;
+  optional RequestHeader request_header = 100;
+}
+message UpdateMembershipRoleResponse {}
+message UpdateGroupRetentionSettingsRequest {
+  optional GroupId group_id = 1;
+  optional RetentionSettings retention = 2;
+  optional string local_id = 3;               // the id of the system message announcing the change
+  optional RequestHeader request_header = 100;
+}
+message UpdateGroupRetentionSettingsResponse {}
+// Block and report, as Google Chat's Block and report dialog sends it: a person (with their DM) or a space.
+message BlockEntityRequest {
+  optional UserId user_id = 1;
+  optional GroupId group_id = 2;              // a space
+  optional bool blocked = 3;                  // false unblocks
+  optional bool report = 4;                   // also send Google the last 50 messages
+  optional GroupId dm_group_id = 5;           // the person's DM with me
+  optional RequestHeader request_header = 100;
+}
+message BlockEntityResponse {}
+message ListBlockedUsersRequest { optional RequestHeader request_header = 100; }
+message ListBlockedUsersResponse { repeated UserId user_ids = 1; }
+message ManageBlockedRoomsRequest { optional RequestHeader request_header = 100; }
+message ManageBlockedRoomsResponse {
+  message BlockedRoom {
+    optional GroupId group_id = 1;
+    optional string name = 2;
+    optional int64 blocked_time = 3;          // µs
+  }
+  repeated BlockedRoom rooms = 1;
+}
+// Reports one message to the organisation's admin, with a reason and an optional explanation.
+message ReportMessageRequest {
+  optional MessageId message_id = 1;
+  message Micros { optional int64 micros = 1; }
+  optional Micros message_update_time = 2;
+  message Reason {
+    enum Kind { VIOLATION_UNSPECIFIED = 0; HARASSMENT = 1; DISCRIMINATION = 2; EXPLICIT_CONTENT = 3; SPAM = 4;
+                CONFIDENTIAL_INFORMATION = 5; OTHER = 6; SENSITIVE_INFORMATION = 7; }
+    optional Kind kind = 1;
+  }
+  optional Reason reason = 3;
+  message Explanation { optional string text = 1; }
+  optional Explanation explanation = 4;       // always sent, its text only when there is one
+  optional RequestHeader request_header = 100;
+}
+message ReportMessageResponse {}
 message HideGroupRequest {
   optional GroupId group_id = 1;
   optional bool hidden = 2;                   // false: show it again
@@ -957,9 +1129,16 @@ message HideGroupRequest {
 message HideGroupResponse {}
 // What the server lets me do in one conversation; only the flags Parley offers are listed.
 message GroupScopedCapabilities {
+  optional bool can_update_member_roles = 2;
+  optional bool can_delete_group = 3;
+  optional bool can_edit_guidelines = 4;
   optional bool can_edit_description = 7;
+  optional bool can_report_messages = 8;
   optional bool can_edit_space_profile = 9;   // name and emoji
   optional bool can_manage_members = 14;      // add and remove people
+  optional bool can_trigger_typing_indicator = 15;   // Google answers set_typing_state with 403 where this is false
+  optional bool can_toggle_history = 10;
+  optional bool can_update_manager_roles = 60;
 }
 message GetGroupScopedCapabilitiesRequest {
   repeated MembershipId membership_ids = 1;   // mine in the group

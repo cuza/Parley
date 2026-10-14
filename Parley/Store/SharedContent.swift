@@ -41,7 +41,7 @@ extension ChatStore {
     /// ⌘I or the title: opens the info panel in place of a thread, or closes it.
     func toggleInfo() {
         info.toggle()
-        if info { threadID = nil }
+        if info { threadID = nil; threadsShown = false }
     }
     /// Everyone in the conversation, me included: the full list once `loadMembers` has it, else the members it came with.
     func roster(_ conversation: Conversation) -> [Person] {

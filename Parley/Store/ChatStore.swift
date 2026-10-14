@@ -35,6 +35,9 @@ final class ChatStore {
     private(set) var reconnects = 0
     var threadID: ThreadID? { didSet { if threadID != oldValue { saveDrafts() } } }
     var info = false   // the conversation info panel, which shares the inspector with the thread
+    /// A space's Threads list in the side pane; an open thread shows over it, and closing the thread goes back to it.
+    var threadsShown = false
+    private(set) var threadSummaries: [ConversationID: [ThreadSummary]] = [:]
     var editing: [String: MessageID] = [:]   // per draft key: the sent message that composer is editing
     var quoting: [String: QuotedMessage] = [:]   // per draft key: the message the next send quotes (not cached across launches)
     var searchResults: [Message] = []
@@ -96,12 +99,13 @@ final class ChatStore {
     private(set) var ownStatus = OwnStatus()
     private(set) var readReceipts: [ConversationID: [String: Date]] = [:]   // reader → read up to
     @ObservationIgnored private var receiptsOff: Set<ConversationID> = []
-    // ponytail: only threads seen this session (loaded, pushed, or labelled while connected); a thread followed earlier in a
-    // conversation not loaded since counts as unfollowed. Seed it from the server's followed-threads view if replies go missing.
-    @ObservationIgnored private var followed: Set<ThreadID> = []
+    // Threads seen this session (loaded, pushed, or labelled while connected) plus Home's, which are the server's followed ones;
+    // a reply in any other thread re-reads Home's (checkFollowed).
+    private var followed: Set<ThreadID> = []   // observed: the thread pane's bell shows it
     @ObservationIgnored private var presenceFetched: [String: Date] = [:]
     @ObservationIgnored private var notifiedReactions: Set<String> = []   // message#person#emoji already announced
     @ObservationIgnored private var typingSent: [String: Date] = [:]
+    @ObservationIgnored private var typingRefused: Set<String> = []   // composers where Google answered 403; not retried this session
     @ObservationIgnored private var watching: Set<ConversationID>?
     @ObservationIgnored private var sweepTask: Task<Void, Never>?
     /// The clock typing, presence and throttles run on; tests replace it.
@@ -171,12 +175,25 @@ final class ChatStore {
     /// The conversation whose timeline is on screen: none while a shortcut is (Home keeps `selectedID` for its thread pane).
     private var openConversation: ConversationID? { shortcut == nil ? selectedID : nil }
     var unreadCount: Int { conversations.filter { !$0.muted }.reduce(0) { $0 + $1.unread } }
+    /// The Dock menu's conversations: the unread ones the badge counts (not muted), most recent first, at most 10.
+    var dockConversations: [Conversation] {
+        Array(conversations.filter { $0.unread > 0 && !$0.muted }.sorted { ($0.activity ?? .distantPast) > ($1.activity ?? .distantPast) }.prefix(10))
+    }
+    /// The Dock menu's Mark All as Read: every unread conversation, muted ones included.
+    func markAllRead() async {
+        let unread = conversations.filter { $0.unread > 0 }.map(\.id)
+        for i in conversations.indices where conversations[i].unread > 0 { conversations[i].unread = 0 }
+        persist()
+        for id in unread { await markRead(id) }
+    }
     func key(_ conversation: String, _ thread: String?) -> String { "\(conversation)/\(thread ?? "timeline")" }
     func timeline(_ conversation: String, thread: String? = nil) -> [Message] {
         let all = messages   // read on every call, so a view showing it still updates when messages change
+        let end = thread == nil ? windowEnds[conversation] : nil
         let scope = key(conversation, thread)
         if let cached = timelines[scope] { return cached }
-        let sorted = all.filter { $0.conversationID == conversation && $0.threadID == thread }.sorted {
+        // A detached window ends at its newest loaded page: messages arriving live wait below it until paging down reaches them.
+        let sorted = all.filter { $0.conversationID == conversation && $0.threadID == thread && (end == nil || $0.createdAt <= end!) }.sorted {
             $0.createdAt == $1.createdAt ? $0.id < $1.id : $0.createdAt < $1.createdAt
         }
         timelines[scope] = sorted
@@ -195,7 +212,7 @@ final class ChatStore {
                     try? await Task.sleep(for: .seconds(3))
                     guard let self else { return }
                     sweepTyping()
-                    if isAppActive() { await refreshPresence() }
+                    if isAppActive() { await refreshPresence(); await refreshInvitations() }
                 }
             }
         }
@@ -217,6 +234,10 @@ final class ChatStore {
         let listed = try await backend.conversations()
         let threads = await backend.homeThreads()
         conversations = listed.filter { $0.hidden == nil }; hidden = listed.filter { $0.hidden != nil }; homeThreads = threads
+        sections = await backend.sidebarSections()
+        followed.formUnion(threads.map(\.id))   // Home's threads are the server's followed ones
+        await refreshInvitations(force: true)
+        await loadBlocked()
         let vanished = !conversations.contains(where: { $0.id == selectedID })
         if vanished { selectedID = conversations.first?.id }
         if let selectedID {
@@ -234,11 +255,17 @@ final class ChatStore {
         }
         _ = await listDrafts()
         persist()
+        if !listedOnce {
+            listedOnce = true
+            let links = waitingLinks; waitingLinks = []
+            for url in links { await open(url: url) }
+        }
     }
     func select(_ id: String, recording: Bool = true) async {
         if recording { visit(.conversation(id)) }
         endMainWindowEdits()
         selectedID = id; threadID = nil; shortcut = nil
+        heldUnread.removeAll()   // opening a conversation reads it, one marked unread from a message included
         loaded.remove(key(id, nil))   // no realtime yet: reselecting is how new messages arrive
         await load(id)
         await markRead(id)
@@ -258,12 +285,68 @@ final class ChatStore {
         await task.value
     }
     @ObservationIgnored private var pageLoads: [String: Task<Void, Never>] = [:]
+    /// Conversations showing a window of their history away from the newest messages (`open(_:at:)`), until paging down meets them.
+    private(set) var detached: Set<ConversationID> = []
+    /// A detached window's newest message.
+    private var windowEnds: [ConversationID: Date] = [:] { didSet { timelines = [:] } }
+    @ObservationIgnored private var newerLoads: Set<ConversationID> = []
+    /// Opens a conversation at an old message, as web Chat opens a search result: the page around it instead of the newest.
+    func open(_ id: ConversationID, at message: MessageID) async {
+        visit(.conversation(id))
+        endMainWindowEdits()
+        selectedID = id; threadID = nil; shortcut = nil
+        heldUnread.removeAll()
+        await loadAround(message, in: id)
+        await markRead(id)
+        persist()
+        await watchOpen()
+        await refreshPresence()
+    }
+    /// The page around `message` replaces the conversation's timeline; a page already loading lands first.
+    private func loadAround(_ message: MessageID, in id: ConversationID) async {
+        let scope = key(id, nil)
+        if let running = pageLoads[scope] { await running.value }
+        loading.insert(scope); defer { loading.remove(scope) }
+        do {
+            let page = try await backend.messages(around: message, in: id)
+            messages.removeAll { $0.conversationID == id && $0.threadID == nil && $0.delivery == .sent }
+            page.messages.forEach(upsert)
+            loaded.insert(scope)
+            if page.hasMore { hasMore.insert(scope) } else { hasMore.remove(scope) }
+            extendWindow(id, page)
+        } catch { report(error) }
+    }
+    /// The timeline neared the bottom of a detached window: the next newer page, until the window meets the newest messages.
+    func loadNewerIfNeeded(_ id: ConversationID) async {
+        guard detached.contains(id), !newerLoads.contains(id) else { return }
+        newerLoads.insert(id); defer { newerLoads.remove(id) }
+        do {
+            let page = try await backend.newerMessages(in: id)
+            page.messages.forEach(upsert)
+            extendWindow(id, page)
+        } catch { report(error) }
+    }
+    private func extendWindow(_ id: ConversationID, _ page: MessagePage) {
+        if page.hasNewer {
+            detached.insert(id)
+            if let newest = page.messages.map(\.createdAt).max() { windowEnds[id] = max(windowEnds[id] ?? newest, newest) }
+        } else {
+            detached.remove(id); windowEnds[id] = nil
+        }
+    }
+    /// The scroll-down button, or a send, from a detached window: the newest messages again.
+    func returnToNewest(_ id: ConversationID) async {
+        detached.remove(id); windowEnds[id] = nil
+        loaded.remove(key(id, nil))
+        await load(id)
+    }
     private func fetchPage(_ id: String, thread: String?, older: Bool, quietly: Bool = false) async {
         let scope = key(id, thread)
         do {
             let page = try await backend.messages(in: id, thread: thread, before: older ? timeline(id, thread: thread).first?.createdAt : nil)
             if !older {
                 messages.removeAll { $0.conversationID == id && $0.threadID == thread && $0.delivery == .sent }
+                if thread == nil { detached.remove(id); windowEnds[id] = nil }
             }
             page.messages.forEach(upsert)
             loaded.insert(scope)
@@ -282,17 +365,12 @@ final class ChatStore {
         guard hasMore.contains(scope), !loading.contains(scope) else { return }
         await load(id, thread: thread, older: true)
     }
-    /// A click on a quote: highlights the quoted message, paging back through history (at most 10 pages) to reach it.
-    func showQuoted(_ id: MessageID, in conversation: ConversationID, pages: Int = 10) async {
-        for _ in 0..<pages {
-            if let quoted = messages.first(where: { $0.id == id }) {
-                if let thread = quoted.threadID, thread != threadID { await openThread(quoted) }
-                highlightedID = id
-                return
-            }
-            guard hasMore.contains(key(conversation, nil)) else { return }
-            await load(conversation, older: true)
-        }
+    /// A click on a quote: highlights the quoted message. One not loaded brings the page around it, as web Chat does.
+    func showQuoted(_ id: MessageID, in conversation: ConversationID) async {
+        if !messages.contains(where: { $0.id == id }) { await loadAround(id, in: conversation) }
+        guard let quoted = messages.first(where: { $0.id == id }) else { return }
+        if let thread = quoted.threadID, thread != threadID { await openThread(quoted) }
+        highlightedID = id
     }
     /// "Show in Chat" on a shared item: its message highlighted, in its thread when it is a reply.
     func showShared(_ item: SharedContent.Item, in conversation: ConversationID) async {
@@ -301,10 +379,24 @@ final class ChatStore {
     }
     /// A Google Chat link in a message: opens its conversation, and its message when it names one.
     /// Returns false when Parley doesn't know the conversation, for the caller to open the link elsewhere.
+    @ObservationIgnored private var waitingLinks: [URL] = []
+    @ObservationIgnored private var listedOnce = false
+    /// A link sent to Parley (`open -a Parley <url>`, a link router): its conversation opens once the first conversation
+    /// list is in. One this account can't open says so rather than going back to the browser, which could send it straight back.
+    func open(url: URL) async {
+        guard listedOnce else { waitingLinks.append(url); return }
+        guard let link = ChatLink(url) else { log.notice("not a Google Chat link: ignored"); return }
+        if !(await open(link)) { error = "This account isn't in the conversation that link goes to." }
+    }
     func open(_ link: ChatLink) async -> Bool {
         guard let conversation = link.conversations.first(where: { id in conversations.contains { $0.id == id } }) else { return false }
-        await select(conversation)
-        if let topic = link.topic { await show("\(conversation)/\(topic)/\(link.message ?? topic)", in: conversation) }
+        guard let topic = link.topic else { await select(conversation); return true }
+        let id = "\(conversation)/\(topic)/\(link.message ?? topic)"
+        // Straight to the page around it, as web Chat opens a message link, instead of the newest page first.
+        if selectedID != conversation || shortcut != nil || !messages.contains(where: { $0.id == id || $0.id == "\(conversation)/\(topic)/\(topic)" }) {
+            await open(conversation, at: id)
+        }
+        await show(id, in: conversation)
         return true
     }
     /// A message highlighted where it is: in its thread when it is a reply, else in the timeline, paging back to it.
@@ -316,7 +408,24 @@ final class ChatStore {
             highlightedID = id
             return
         }
-        await showQuoted(id, in: conversation, pages: 50)
+        await showQuoted(id, in: conversation)
+        // A thread's first message with replies opens the thread, as web Chat opens a link to one.
+        if let head = messages.first(where: { $0.id == id }), head.threadID == nil, head.replyCount > 0 { await openThread(head) }
+    }
+    /// The Threads button: shows the list when it isn't on screen (hidden, under an open thread, or replaced by the info
+    /// panel), and closes it when it is.
+    func toggleThreads() async {
+        let onScreen = threadsShown && threadID == nil && !info
+        await showThreads(!onScreen)
+    }
+    func showThreads(_ shown: Bool) async {
+        threadsShown = shown
+        guard shown, let id = selectedID else { return }
+        info = false; threadID = nil
+        await loadThreads(id)
+    }
+    func loadThreads(_ id: ConversationID) async {
+        do { threadSummaries[id] = try await backend.threads(in: id) } catch { report(error) }
     }
     func openThread(_ message: Message) async {
         await openThread(message.threadID ?? message.id, in: message.conversationID)
@@ -325,6 +434,27 @@ final class ChatStore {
         threadID = thread; info = false
         loaded.remove(key(conversation, thread))
         await load(conversation, thread: thread)
+        await readThread(thread)
+    }
+    /// An open thread is read up to its newest reply, on the server too, so it reads as read on the web and phone.
+    private func readThread(_ thread: ThreadID) async {
+        guard let newest = messages.filter({ $0.threadID == thread || $0.id == thread }).map(\.createdAt).max() else { return }
+        if let i = homeThreads.firstIndex(where: { $0.id == thread }) { homeThreads[i].unread = false }
+        do { try await backend.markThreadRead(thread, upTo: newest) }
+        catch { log.error("mark thread read failed: \(String(describing: error), privacy: .public)") }
+    }
+    func isFollowing(_ thread: ThreadID) -> Bool { followed.contains(thread) }
+    /// Shown at once; Google's label event confirms it, and a refusal puts it back and says why.
+    func setFollowing(_ following: Bool, thread: ThreadID) async {
+        let was = followed.contains(thread)
+        if following { followed.insert(thread) } else { followed.remove(thread) }
+        do {
+            try await backend.setFollowing(following, thread: thread)
+            if !following { homeThreads.removeAll { $0.id == thread } }   // Home lists followed threads only
+        } catch {
+            if was { followed.insert(thread) } else { followed.remove(thread) }
+            report(error)
+        }
     }
     /// Posts a new Google Meet meeting in the conversation; its link, to open, or nil when refused (the error shows).
     func sendMeetLink(in id: ConversationID) async -> URL? {
@@ -401,27 +531,26 @@ final class ChatStore {
             let isNew = !messages.contains { $0.id == message.id }
             upsert(message)
             // A newer reply in a thread Home lists moves its row up.
-            // ponytail: only threads already listed; a reply in another followed thread shows on the next refresh.
+            // Threads already listed; a reply in another one re-reads Home's threads (checkFollowed, below).
             if let thread = message.threadID, let i = homeThreads.firstIndex(where: { $0.id == thread }), message.createdAt > homeThreads[i].latest.createdAt {
                 homeThreads[i].latest = message
                 homeThreads[i].time = max(homeThreads[i].time, message.createdAt)
                 if message.sender.id != me.id, !(shortcut == .home && threadID == thread) { homeThreads[i].unread = true }
             }
+            // A new reply in the thread open on screen is read as it arrives.
+            if isNew, let thread = message.threadID, thread == threadID, message.conversationID == selectedID, isAppActive() {
+                Task { await readThread(thread) }
+            }
             if isNew, message.sender.id != me.id {   // a message ends its sender's typing, and they're evidently here
                 for scope in typing.keys where scope.hasPrefix(message.conversationID + "/") { typing[scope]?[message.sender.id] = nil }
                 if now().timeIntervalSince(message.createdAt) < Self.presenceTTL { markActive(message.sender.id) }
             }
-            if isNew, message.sender.id != me.id {
-                let room = conversations.first { $0.id == message.conversationID }
-                // A call notifies even with its DM on screen, as a phone call would.
-                let call = NotificationPolicy.isIncomingCall(message, in: room, me: me.id, now: now())
-                let notification = NotificationPolicy.notification(
-                    for: message, in: room, me: me.id, openConversation: selectedID,
-                    openThread: threadID, appActive: !call && isAppActive(), settings: notificationSettings(),
-                    threadFollowed: message.threadID.map(followed.contains) ?? false)
-                    .map { call ? $0.incomingCall(join: message.attachments.first { $0.kind == .call }?.url) : $0 }
-                log.notice("message pushed: \(notification == nil ? "no banner (policy)" : self.notifier == nil ? "no notifier" : "banner", privacy: .public)")
-                if let notification { notifier?.post(notification) }
+            if isNew, message.sender.id != me.id, !announce(message), let thread = message.threadID, !followed.contains(thread),
+               let level = conversations.first(where: { $0.id == message.conversationID })?.notificationLevel,
+               level.notifies(head: false, followed: true, mentioned: false), !level.notifies(head: false, followed: false, mentioned: false) {
+                checkFollowed(message)
+            } else if isNew, message.sender.id != me.id, let thread = message.threadID, !homeThreads.contains(where: { $0.id == thread }) {
+                checkFollowed(nil)   // Home may list it now
             }
             // Only a fresh message is unread: a reaction or edit pushes an old message the user has long since read.
             if isNew, !message.isSystem, message.threadID == nil, message.sender.id != me.id, message.conversationID != openConversation,
@@ -430,17 +559,21 @@ final class ChatStore {
                 conversations[i].unread += 1
             }
             // ponytail: one read receipt per pushed message; debounce if busy rooms make this chatty.
-            if isNew, message.sender.id != me.id, message.conversationID == openConversation, isAppActive() {
+            if isNew, message.sender.id != me.id, message.conversationID == openConversation, isAppActive(), !heldUnread.contains(message.conversationID) {
                 Task { await markRead(message.conversationID) }
             }
-        case .messageDeleted(let id): messages.removeAll { $0.id == id }
+        case .messageDeleted(let id):
+            // A thread's first message takes the thread with it, as Google Chat deletes it; Google sends only this one.
+            messages.removeAll { $0.id == id || $0.threadID == id }
+            homeThreads.removeAll { $0.id == id }
+            if threadID == id { threadID = nil }
         case .conversationUpserted(let room) where room.hidden != nil:   // hidden here or elsewhere: off the sidebar, into Settings' list
             apply(.conversationRemoved(room.id))
             hidden.insert(room, at: 0)
         case .conversationUpserted(var room):   // changed elsewhere; a new one is the most recent
             hidden.removeAll { $0.id == room.id }
             // The open conversation stays read: its server read state can trail what is on screen (my own send, a membership change).
-            if room.id == selectedID, room.unread > 0, isAppActive() {
+            if room.id == selectedID, room.unread > 0, isAppActive(), !heldUnread.contains(room.id) {
                 room.unread = 0
                 Task { await markRead(room.id) }
             }
@@ -550,14 +683,63 @@ final class ChatStore {
         default: return "Several people are typing…"
         }
     }
+    /// Posts a pushed message's banner when the notification policy allows it; false when it doesn't.
+    @discardableResult
+    private func announce(_ message: Message) -> Bool {
+        let room = conversations.first { $0.id == message.conversationID }
+        // A call notifies even with its DM on screen, as a phone call would.
+        let call = NotificationPolicy.isIncomingCall(message, in: room, me: me.id, now: now())
+        let notification = NotificationPolicy.notification(
+            for: message, in: room, me: me.id, openConversation: selectedID,
+            openThread: threadID, appActive: !call && isAppActive(), settings: notificationSettings(),
+            threadFollowed: message.threadID.map(followed.contains) ?? false)
+            .map { call ? $0.incomingCall(join: message.attachments.first { $0.kind == .call }?.url) : $0 }
+        if notification == nil {
+            // Why not, for "notifications don't show" reports: nothing here names the conversation or the sender.
+            let level = room?.notificationLevel.map { "\($0)" } ?? "unknown", followed = message.threadID.map(followed.contains)
+            log.notice("message pushed: no banner (level \(level, privacy: .public), \(message.threadID == nil ? "new thread" : followed == true ? "followed reply" : "unfollowed reply", privacy: .public), muted \(room?.muted ?? false, privacy: .public), app active \(self.isAppActive(), privacy: .public), open here \(message.conversationID == self.selectedID, privacy: .public))")
+        } else {
+            log.notice("message pushed: \(self.notifier == nil ? "no notifier" : "banner", privacy: .public)")
+        }
+        if let notification { notifier?.post(notification) }
+        return notification != nil
+    }
+    @ObservationIgnored private var followCheck: Task<Void, Never>?
+    @ObservationIgnored private var awaitingFollow: [Message] = []
+    @ObservationIgnored private var lastFollowCheck: Date?
+    /// A reply in a thread Home doesn't list: re-read the server's followed threads (Home's) so Home shows it, and post the
+    /// banner of a `message` whose notification depends on following. One re-read covers a burst; without a banner waiting,
+    /// at most one every 15 s.
+    private func checkFollowed(_ message: Message?) {
+        if let message { awaitingFollow.append(message) }
+        else if let last = lastFollowCheck, now().timeIntervalSince(last) < 15 { return }
+        guard followCheck == nil else { return }
+        lastFollowCheck = now()
+        followCheck = Task {
+            defer { followCheck = nil }
+            guard let listed = try? await backend.conversations() else { awaitingFollow = []; return }
+            let threads = await backend.homeThreads()
+            conversations = listed.filter { $0.hidden == nil }; hidden = listed.filter { $0.hidden != nil }; homeThreads = threads
+            sections = await backend.sidebarSections()
+            followed.formUnion(threads.map(\.id))
+            let pending = awaitingFollow; awaitingFollow = []
+            for message in pending where message.threadID.map(followed.contains) == true { announce(message) }
+        }
+    }
     /// The composer's text changed: tell the others at most every 5 s per composer, never for blank text or while
     /// editing a sent message. There is no "stopped"; receivers time it out.
     func typed(_ text: String, conversation: ConversationID, thread: ThreadID?) async {
         let scope = key(conversation, thread)
         guard editing[scope] == nil, !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+        guard !typingRefused.contains(scope) else { return }
         if let last = typingSent[scope], now().timeIntervalSince(last) < Self.typingInterval { return }
-        typingSent[scope] = now()
-        try? await backend.sendTyping(conversation: conversation, thread: thread)
+        typingSent[scope] = now()   // before any wait, so keystrokes meanwhile don't ask again
+        // Whether Google lets me send typing here (a space's capability); asked once per space.
+        if permissions[conversation] == nil { await loadPermissions(conversation) }
+        guard permissions[conversation]?.typing != false else { log.notice("typing not sent: not allowed in this space"); return }
+        do { try await backend.sendTyping(conversation: conversation, thread: thread) }
+        catch AuthFailure.http(403) { typingRefused.insert(scope) }
+        catch {}
     }
     // ponytail: only the main window's conversation is watched; add the extra windows' ones if typing is wanted there too.
     private func watchOpen() async {
@@ -926,7 +1108,10 @@ final class ChatStore {
     private func reloadMembers(_ conversation: ConversationID) async {
         guard !memberLoads.contains(conversation) else { return }
         memberLoads.insert(conversation); defer { memberLoads.remove(conversation) }
-        if let people = try? await backend.members(of: conversation), !people.isEmpty { members[conversation] = people }
+        if let people = try? await backend.members(of: conversation), !people.isEmpty {
+            members[conversation] = people
+            roles[conversation] = await backend.roles(in: conversation)
+        }
     }
     /// Unknown (nothing offered) when the server doesn't answer.
     func loadPermissions(_ conversation: ConversationID) async {
@@ -997,6 +1182,7 @@ final class ChatStore {
     }
     private func sendNew(_ text: String, formatting: [TextStyleRange] = [], attachments: [Attachment] = [], quote: QuotedMessage? = nil,
                          serverDraft: String? = nil, conversation: String, thread: String?) async {
+        if thread == nil, detached.contains(conversation) { await returnToNewest(conversation) }   // a send lands at the bottom, as on the web
         let pending = Message(id: "local-\(UUID())", conversationID: conversation, threadID: thread, sender: me, text: text,
                               delivery: .pending, attachments: attachments, formatting: formatting, quote: quote)
         upsert(pending)
@@ -1016,6 +1202,8 @@ final class ChatStore {
     // ponytail: a retry no longer names the draft; if the send never reached Google, its draft comes back at the next launch.
     private func deliver(_ pending: Message, serverDraft: String? = nil) async {
         var pending = pending
+        // Google refuses a quote of a deleted message (HTTP 404) however often it's sent: the message goes without it.
+        if let quoted = pending.quote?.id, messages.contains(where: { $0.id == quoted && $0.tombstone }) { pending.quote = nil }
         do {
             for (index, file) in pending.attachments.enumerated() where file.isLocalFile && file.uploadToken == nil {
                 pending.attachments[index] = try await backend.upload(file, to: pending.conversationID, thread: pending.threadID)
@@ -1032,6 +1220,7 @@ final class ChatStore {
                 await openDialog(DialogContext(message: sent.id, app: command.appID), app: command.appName, in: sent.conversationID, action: nil, inputs: [])
             }
         } catch {
+            log.error("send failed: \(ConnectionDiagnostics.redact(String(describing: error)), privacy: .public)")
             var failed = pending; failed.delivery = .failed; upsert(failed)
             _ = endedSession(error)
         }
@@ -1061,7 +1250,7 @@ final class ChatStore {
     /// Quote-replies to `message` from its own composer (the conversation's, or its thread's); ends an edit there.
     /// Without a server update time it names the create time.
     func quote(_ message: Message) {
-        guard message.delivery == .sent, !message.isSystem else { return }
+        guard message.delivery == .sent, !message.isSystem, !message.tombstone else { return }
         if editing.removeValue(forKey: key(message.conversationID, message.threadID)) != nil { setDraft("", conversation: message.conversationID, thread: message.threadID) }
         quoting[key(message.conversationID, message.threadID)] = QuotedMessage(
             sender: message.sender.name, text: QuotedMessage.summary(text: TextStyleRange.plain(message.text, message.formatting), attachments: message.attachments), id: message.id,
@@ -1110,6 +1299,20 @@ final class ChatStore {
     func setNotificationLevel(_ level: NotificationLevel, _ id: ConversationID) async {
         guard let room = conversations.first(where: { $0.id == id }) else { return }
         await change(id, \.notificationLevel, to: level) { try await self.backend.setNotificationLevel(level, muted: room.muted, conversation: id) }
+    }
+    /// Conversations marked unread from a message while open: not read again until left and returned to.
+    @ObservationIgnored private var heldUnread: Set<ConversationID> = []
+    /// "Mark as unread" on a message: unread from it on, the conversation's, or for a reply its thread's on Home.
+    func markUnread(from message: Message) async {
+        if let thread = message.threadID {
+            if let i = homeThreads.firstIndex(where: { $0.id == thread }) { homeThreads[i].unread = true }
+            do { try await backend.markUnread(from: message) } catch { report(error) }
+            return
+        }
+        let count = max(1, messages.filter { $0.conversationID == message.conversationID && $0.threadID == nil
+            && $0.createdAt >= message.createdAt && $0.sender.id != me.id }.count)
+        heldUnread.insert(message.conversationID)
+        await change(message.conversationID, \.unread, to: count) { try await self.backend.markUnread(from: message) }
     }
     func markUnread(_ id: ConversationID) async {
         guard let room = conversations.first(where: { $0.id == id }) else { return }
@@ -1160,6 +1363,121 @@ final class ChatStore {
         let name = name.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !name.isEmpty, let room = conversations.first(where: { $0.id == id }), room.name != name else { return }
         await change(id, \.name, to: name) { try await self.backend.updateProfile(id, name: name, emoji: nil) }
+    }
+    /// Description and guidelines go together, as Google Chat saves them; empty clears one.
+    func updateDetails(_ id: ConversationID, description: String, guidelines: String) async {
+        let trim = { (text: String) in text.trimmingCharacters(in: .whitespacesAndNewlines) }
+        let details = (trim(description).isEmpty ? nil : trim(description), trim(guidelines).isEmpty ? nil : trim(guidelines))
+        guard let i = conversations.firstIndex(where: { $0.id == id }), (conversations[i].description, conversations[i].guidelines) != details else { return }
+        let before = (conversations[i].description, conversations[i].guidelines)
+        conversations[i].description = details.0; conversations[i].guidelines = details.1; persist()
+        do { try await backend.updateDetails(id, description: details.0 ?? "", guidelines: details.1 ?? "") } catch {
+            if let i = conversations.firstIndex(where: { $0.id == id }) { (conversations[i].description, conversations[i].guidelines) = before }
+            report(error); persist()
+        }
+    }
+    func setHistory(_ on: Bool, in id: ConversationID) async {
+        await change(id, \.historyOff, to: !on) { try await self.backend.setHistory(on, in: id) }
+    }
+    /// My sidebar sections, shared with the web, in my order; empty until Google sends them.
+    private(set) var sections: [SidebarSection] = []
+    /// A new section after my others, with `conversation` moved into it, as web Chat's Move to a new section.
+    func createSection(_ name: String, moving conversation: ConversationID?) async {
+        let name = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !name.isEmpty else { return }
+        let last = sections.filter { $0.kind == .custom || $0.kind == .spaces }.map(\.position).max() ?? 2
+        do {
+            let made = try await backend.createSection(named: name, at: last + 1)
+            // Google moves the sections from that place down by one.
+            sections = sections.map { var section = $0; if section.position >= made.position { section.position += 1 }; return section } + [made]
+            if let conversation { await moveConversation(conversation, to: made.key) }
+        } catch { report(error) }
+    }
+    func renameSection(_ section: SidebarSection, to name: String) async {
+        let name = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !name.isEmpty, let i = sections.firstIndex(where: { $0.id == section.id }) else { return }
+        sections[i].name = name
+        do { try await backend.renameSection(section, to: name) } catch { sections[i].name = section.name; report(error) }
+    }
+    /// One place up or down among the sections below Shortcuts; Google renumbers the rest, as here.
+    func moveSection(_ section: SidebarSection, up: Bool) async {
+        let ordered = sections.sorted { $0.position < $1.position }
+        guard let i = ordered.firstIndex(where: { $0.id == section.id }), case let j = up ? i - 1 : i + 1,
+              ordered.indices.contains(j), ordered[j].kind != .shortcuts else { return }
+        let before = sections, target = ordered[j].position
+        sections = sections.map { var other = $0
+            if other.id == section.id { other.position = target } else if other.id == ordered[j].id { other.position = section.position }
+            return other }
+        do { try await backend.moveSection(section, to: target) } catch { sections = before; report(error) }
+    }
+    /// Its conversations go back to their default sections, as Google Chat does.
+    func deleteSection(_ section: SidebarSection) async {
+        let before = (sections, conversations)
+        sections.removeAll { $0.id == section.id }
+        for i in conversations.indices where conversations[i].section == section.key { conversations[i].section = nil }
+        do { try await backend.deleteSection(section) } catch { (sections, conversations) = before; report(error) }
+        persist()
+    }
+    /// Into one of my sections (its key), or back to its default one (nil).
+    func moveConversation(_ id: ConversationID, to section: String?) async {
+        let previous = conversations.first { $0.id == id }?.section
+        guard previous != section else { return }
+        await change(id, \.section, to: section) { try await self.backend.moveConversation(id, to: section, from: previous) }
+    }
+    /// People I blocked: their messages show as blocked, their DM leaves the sidebar.
+    private(set) var blockedPeople: Set<PersonID> = []
+    func loadBlocked() async { if let people = try? await backend.blockedPeople() { blockedPeople = Set(people) } }
+    /// The 1:1 DM with someone, if the sidebar has one.
+    func dm(with person: PersonID) -> Conversation? {
+        conversations.first { $0.kind == .direct && $0.app == nil && partner(in: $0) == person }
+    }
+    /// Blocks a person, as Google Chat's Block and report: their DM leaves the sidebar at once; a refusal puts it back.
+    func block(person: PersonID, report toGoogle: Bool) async {
+        let dm = dm(with: person)
+        blockedPeople.insert(person)
+        if let dm { apply(.conversationRemoved(dm.id)) }
+        do { try await backend.setBlocked(true, person: person, dm: dm?.id, report: toGoogle) } catch {
+            blockedPeople.remove(person)
+            if let dm, !conversations.contains(where: { $0.id == dm.id }) { conversations.append(dm) }
+            report(error)
+        }
+        persist()
+    }
+    func unblock(person: PersonID) async {
+        blockedPeople.remove(person)
+        do { try await backend.setBlocked(false, person: person, dm: dm(with: person)?.id, report: false) } catch { blockedPeople.insert(person); report(error) }
+        await loadBlocked()
+    }
+    func blockSpace(_ id: ConversationID, report toGoogle: Bool) async {
+        await removeFromSidebar(id) { try await self.backend.setBlocked(true, space: id, report: toGoogle) }
+    }
+    func blockedSpaces() async throws -> [BlockedSpace] { try await backend.blockedSpaces() }
+    /// A person's name from anything loaded: conversations, member lists, messages.
+    func anyName(of person: PersonID) -> String {
+        let known = conversations.flatMap(\.members) + members.values.flatMap { $0 } + messages.map(\.sender)
+        return known.first { $0.id == person && $0.name != "Unknown" }?.name ?? "Someone"
+    }
+    func unblockSpace(_ id: ConversationID) async {
+        do { try await backend.setBlocked(false, space: id, report: false) } catch { report(error) }
+    }
+    /// A blocked person's message as the timeline shows it: what they sent stays hidden, as Google Chat hides it.
+    static func blockedView(_ message: Message) -> Message {
+        var shown = message
+        shown.text = "Message from a blocked person"
+        shown.formatting = [TextStyleRange(style: .italic, start: 0, length: (shown.text as NSString).length)]
+        shown.attachments = []; shown.quote = nil
+        return shown
+    }
+    /// Errors stay with the caller's sheet.
+    func report(_ message: Message, reason: ReportReason, explanation: String) async throws {
+        try await backend.report(message, reason: reason, explanation: explanation)
+    }
+    /// Each member's role in a space, read with its members.
+    private(set) var roles: [ConversationID: [PersonID: MemberRole]] = [:]
+    func setRole(_ role: MemberRole, of person: PersonID, in id: ConversationID) async {
+        let before = roles[id]?[person]
+        roles[id, default: [:]][person] = role
+        do { try await backend.setRole(role, of: person, in: id) } catch { roles[id]?[person] = before; report(error) }
     }
     func setEmoji(_ emoji: String, _ id: ConversationID) async {
         await change(id, \.emoji, to: emoji) { try await self.backend.updateProfile(id, name: nil, emoji: emoji) }
@@ -1264,17 +1582,34 @@ final class ChatStore {
         do { try await backend.setStarred(starred, on: message.id) } catch { mark(!starred); report(error) }
         persist()
     }
-    func search(_ query: String) async {
+    /// Search results for `query`, everywhere or in one conversation (⌘F).
+    func search(_ query: String, in conversation: ConversationID? = nil) async {
         searchGeneration += 1
         let generation = searchGeneration
         guard !query.trimmingCharacters(in: .whitespaces).isEmpty else { searchResults = []; return }
         do {
-            let page = try await backend.searchMessages(query, cursor: nil)
+            let page = try await backend.searchMessages(query, in: conversation, cursor: nil)
             if generation == searchGeneration { searchResults = page.messages }
         } catch { if generation == searchGeneration { report(error) } }
     }
     /// File › New Chat asks the main window to open its palette.
     var newChatRequests = 0
+    /// File › New Space asks the main window for its New Space sheet.
+    var newSpaceRequests = 0
+    /// Spaces someone invited me to, from the space directory; joining one accepts it.
+    private(set) var invitations: [SpaceListing] = []
+    @ObservationIgnored private var invitationsFetched: Date?
+    /// Nothing announces a new invitation, so the directory is read again this often while Parley is in front.
+    static let invitationsTTL: TimeInterval = 300
+    /// Reads invitations from the space directory, at most once per `invitationsTTL` unless forced. A failed read keeps the last list.
+    func refreshInvitations(force: Bool = false) async {
+        guard force || invitationsFetched.map({ now().timeIntervalSince($0) >= Self.invitationsTTL }) ?? true else { return }
+        invitationsFetched = now()
+        // ponytail: the directory's first page only; page through it if invitations past it go missing.
+        guard let listed = try? await backend.browseSpaces("") else { return }
+        let inSidebar = Set(conversations.map(\.id))
+        invitations = listed.filter { $0.invited && !inSidebar.contains($0.id) }
+    }
     var forwarding: Message?   // Forward…: the message whose destination is being picked
     // New conversations. Errors stay with the caller, which shows them where the search or action happened.
     func searchPeople(_ query: String) async throws -> [Person] { try await backend.searchPeople(query) }
@@ -1293,7 +1628,20 @@ final class ChatStore {
     func join(_ space: SpaceListing) async throws {
         if conversations.contains(where: { $0.id == space.id }) { await select(space.id); return }
         await open(try await backend.join(space))
+        invitations.removeAll { $0.id == space.id }
     }
+    /// A new space with me in it, opened at once; Google Chat asks for a name only. Errors stay with the caller's sheet.
+    func createSpace(name: String, emoji: String?) async throws {
+        let name = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !name.isEmpty else { throw NewSpaceError.noName }
+        await open(try await backend.createSpace(name: name, emoji: emoji))
+    }
+    enum NewSpaceError: LocalizedError {
+        case noName
+        var errorDescription: String? { "A space needs a name." }
+    }
+    /// Off the sidebar at once; a refusal puts it back.
+    func deleteSpace(_ id: ConversationID) async { await removeFromSidebar(id) { try await self.backend.deleteSpace(id) } }
     private func open(_ room: Conversation) async {
         apply(.conversationUpserted(room))
         await select(room.id)
@@ -1303,9 +1651,16 @@ final class ChatStore {
             // A search hit from a conversation the sidebar doesn't list yet.
             conversations.append(Conversation(id: message.conversationID, name: "Conversation", kind: .group, members: []))
         }
-        await select(message.conversationID)
-        if message.threadID != nil { await openThread(message) }
-        upsert(message); highlightedID = message.id
+        if message.threadID != nil {
+            await select(message.conversationID)
+            await openThread(message)
+        } else if selectedID != message.conversationID || shortcut != nil || !messages.contains(where: { $0.id == message.id }) {
+            // The page around it, as web Chat opens a search result: among its neighbours, flashing once it's there.
+            await open(message.conversationID, at: message.id)
+        }
+        // Still missing (a reply its thread didn't load, or a refused page): the search copy stands in.
+        if !messages.contains(where: { $0.id == message.id }) { upsert(message) }
+        highlightedID = message.id
     }
     /// Saves at most once every two seconds, with whatever is current by then: a busy room never starves the save.
     private func persist() {

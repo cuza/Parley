@@ -133,6 +133,39 @@ actor FakeBackend: ChatBackend {
         let filtered = history.filter { $0.conversationID == conversation && $0.threadID == thread && (before == nil || $0.createdAt < before!) }.sorted { $0.createdAt < $1.createdAt }
         return MessagePage(messages: Array(filtered.suffix(50)), hasMore: filtered.count > 50)
     }
+    private var newestShown: [ConversationID: Date] = [:]
+    private func mainTimeline(_ conversation: ConversationID) -> [Message] {
+        history.filter { $0.conversationID == conversation && $0.threadID == nil }.sorted { $0.createdAt < $1.createdAt }
+    }
+    /// 15 messages each side of `message`, as a window around it.
+    func messages(around message: MessageID, in conversation: ConversationID) -> MessagePage {
+        historyRequests += 1
+        let all = mainTimeline(conversation)
+        guard let at = all.firstIndex(where: { $0.id == message }) else { return MessagePage(messages: Array(all.suffix(50)), hasMore: all.count > 50) }
+        let low = max(0, at - 15), high = min(all.count, at + 16)
+        newestShown[conversation] = all[high - 1].createdAt
+        return MessagePage(messages: Array(all[low..<high]), hasMore: low > 0, hasNewer: high < all.count)
+    }
+    func newerMessages(in conversation: ConversationID) -> MessagePage {
+        historyRequests += 1
+        guard let after = newestShown[conversation] else { return MessagePage(messages: [], hasMore: true) }
+        let newer = mainTimeline(conversation).filter { $0.createdAt > after }
+        let page = Array(newer.prefix(50))
+        newestShown[conversation] = page.last?.createdAt ?? after
+        return MessagePage(messages: page, hasMore: true, hasNewer: newer.count > 50)
+    }
+    func threads(in conversation: ConversationID) -> [ThreadSummary] {
+        mainTimeline(conversation).filter { $0.replyCount > 0 }.map { head in
+            let replies = history.filter { $0.threadID == head.id }
+            return ThreadSummary(head: head, replyCount: head.replyCount, unreadCount: 0, mentionsMe: false, following: head.following,
+                                 lastReply: replies.map(\.createdAt).max() ?? head.createdAt)
+        }.sorted { $0.lastReply > $1.lastReply }
+    }
+    /// Someone else's message, pushed as Google Chat pushes one.
+    func simulateIncoming(_ message: Message) {
+        history.append(message)
+        continuation.yield(.messageUpserted(message))
+    }
     func send(_ draft: MessageDraft, to conversation: ConversationID, thread: ThreadID?) throws -> Message {
         sentDrafts.append(draft)
         if failNextSend { failNextSend = false; throw CocoaError(.fileWriteUnknown) }
@@ -222,21 +255,89 @@ actor FakeBackend: ChatBackend {
         if failNextChange { failNextChange = false; throw URLError(.networkConnectionLost) }
         if let i = rooms.firstIndex(where: { $0.id == id }) { edit(&rooms[i]) }
     }
+    private(set) var threadsRead: [ThreadID] = []
+    func markThreadRead(_ thread: ThreadID, upTo time: Date) { threadsRead.append(thread) }
+    /// As the server does it: the THREAD_FOLLOWED label event follows the change.
+    func setFollowing(_ following: Bool, thread: ThreadID) async throws {
+        changes.append("\(following ? "follow" : "unfollow") \(thread)")
+        if latency > .zero { try? await Task.sleep(for: latency) }
+        if failNextChange { failNextChange = false; throw URLError(.networkConnectionLost) }
+        continuation.yield(.threadFollowChanged(thread, following: following))
+    }
     func setPinned(_ pinned: Bool, conversation: ConversationID) async throws { try await change(pinned ? "pin" : "unpin", conversation) { $0.pinned = pinned } }
     func setMuted(_ muted: Bool, conversation: ConversationID) async throws { try await change(muted ? "mute" : "unmute", conversation) { $0.muted = muted } }
     func setNotificationLevel(_ level: NotificationLevel, muted: Bool, conversation: ConversationID) async throws {
         try await change("level \(level.rawValue)\(muted ? " muted" : "")", conversation) { $0.notificationLevel = level }
     }
     func markUnread(_ conversation: ConversationID) async throws { try await change("unread", conversation) { $0.unread = max($0.unread, 1) } }
+    func markUnread(from message: Message) async throws { try await change("unread from \(message.id)", message.conversationID) { $0.unread = max($0.unread, 1) } }
     func leave(_ conversation: ConversationID) async throws {
         try await change("leave", conversation) { _ in }
         rooms.removeAll { $0.id == conversation }
     }
     /// I manage every space and group but General, where I am a plain member.
+    private var typingDisallowed: Set<ConversationID> = []
+    func disallowTyping(in conversation: ConversationID) { typingDisallowed.insert(conversation) }
     func permissions(in conversation: ConversationID) -> ConversationPermissions {
-        guard let room = rooms.first(where: { $0.id == conversation }), room.kind != .direct, room.id != "general" else { return .init() }
-        return ConversationPermissions(editProfile: true, manageMembers: true)
+        let typing = !typingDisallowed.contains(conversation)
+        guard let room = rooms.first(where: { $0.id == conversation }), room.kind != .direct, room.id != "general" else { return .init(typing: typing) }
+        return ConversationPermissions(editProfile: true, manageMembers: true, typing: typing, editDetails: true, deleteSpace: true,
+                                       changeRoles: true, changeManagers: true, toggleHistory: true)
     }
+    private var memberRoles: [ConversationID: [PersonID: MemberRole]] = [:]
+    private var sections: [SidebarSection] = []
+    func sidebarSections() -> [SidebarSection] { sections }
+    func createSection(named name: String, at position: Int) async throws -> SidebarSection {
+        let made = SidebarSection(kind: .custom, key: "k\(sections.count + 1)", name: name, position: position)
+        sections.append(made)
+        changes.append("section \(name)")
+        return made
+    }
+    func renameSection(_ section: SidebarSection, to name: String) async throws {
+        if let i = sections.firstIndex(of: section) { sections[i].name = name }
+    }
+    func moveSection(_ section: SidebarSection, to position: Int) async throws {
+        if let i = sections.firstIndex(of: section) { sections[i].position = position }
+    }
+    func deleteSection(_ section: SidebarSection) async throws {
+        sections.removeAll { $0.key == section.key }
+        for i in rooms.indices where rooms[i].section == section.key { rooms[i].section = nil }
+    }
+    func moveConversation(_ conversation: ConversationID, to section: String?, from previous: String?) async throws {
+        try await change("move to \(section ?? "default")", conversation) { $0.section = section }
+    }
+    private var blocked: Set<PersonID> = []
+    func setBlocked(_ blocked: Bool, person: PersonID, dm: ConversationID?, report: Bool) async throws {
+        changes.append("\(blocked ? "block" : "unblock") \(person)")
+        if blocked { self.blocked.insert(person) } else { self.blocked.remove(person) }
+    }
+    func setBlocked(_ blocked: Bool, space: ConversationID, report: Bool) async throws {
+        try await change(blocked ? "block" : "unblock", space) { _ in }
+    }
+    func blockedPeople() -> [PersonID] { blocked.sorted() }
+    func blockedSpaces() -> [BlockedSpace] { [] }
+    private(set) var reports: [(MessageID, ReportReason)] = []
+    func report(_ message: Message, reason: ReportReason, explanation: String) async throws { reports.append((message.id, reason)) }
+    func createSpace(name: String, emoji: String?) async throws -> Conversation {
+        let room = Conversation(id: "space/" + UUID().uuidString, name: name, kind: .space, members: [Self.me], emoji: emoji)
+        rooms.insert(room, at: 0)
+        return room
+    }
+    func deleteSpace(_ conversation: ConversationID) async throws {
+        try await change("delete", conversation) { _ in }
+        rooms.removeAll { $0.id == conversation }
+    }
+    func updateDetails(_ conversation: ConversationID, description: String, guidelines: String) async throws {
+        try await change("details", conversation) { $0.description = description; $0.guidelines = guidelines }
+    }
+    func setRole(_ role: MemberRole, of person: PersonID, in conversation: ConversationID) async throws {
+        try await change("role \(role.rawValue) \(person)", conversation) { _ in }
+        memberRoles[conversation, default: [:]][person] = role
+    }
+    func setHistory(_ on: Bool, in conversation: ConversationID) async throws {
+        try await change(on ? "history on" : "history off", conversation) { $0.historyOff = !on }
+    }
+    func roles(in conversation: ConversationID) -> [PersonID: MemberRole] { memberRoles[conversation] ?? [:] }
     func updateProfile(_ conversation: ConversationID, name: String?, emoji: String?) async throws {
         if let name { try await change("rename \(name)", conversation) { $0.name = name } }
         if let emoji { try await change("emoji \(emoji)", conversation) { $0.emoji = emoji } }
@@ -253,18 +354,29 @@ actor FakeBackend: ChatBackend {
     func setHidden(_ hidden: Bool, conversation: ConversationID) async throws {
         try await change(hidden ? "hide" : "unhide", conversation) { $0.hidden = hidden ? .now : nil }
     }
-    func searchMessages(_ query: String, cursor: String?) -> SearchPage {
-        SearchPage(messages: history.filter { $0.text.localizedCaseInsensitiveContains(query) })
+    func searchMessages(_ query: String, in conversation: ConversationID?, cursor: String?) -> SearchPage {
+        SearchPage(messages: history.filter { $0.text.localizedCaseInsensitiveContains(query) && (conversation == nil || $0.conversationID == conversation) })
     }
     private(set) var typingSent: [String] = []   // "<conversation>/<thread or timeline>"
     private(set) var watched: [Set<ConversationID>] = []
     private(set) var presenceRequests: [[String]] = []
-    func sendTyping(conversation: ConversationID, thread: ThreadID?) { typingSent.append("\(conversation)/\(thread ?? "timeline")") }
+    private var typingRefused: Set<String> = []
+    func refuseTyping(in scope: String) { typingRefused.insert(scope) }
+    func sendTyping(conversation: ConversationID, thread: ThreadID?) throws {
+        let scope = "\(conversation)/\(thread ?? "timeline")"
+        typingSent.append(scope)
+        if typingRefused.contains(scope) { throw AuthFailure.http(403) }
+    }
     func watch(_ conversations: Set<ConversationID>) { watched.append(conversations) }
+    /// Everyone a presence lookup answered with a state, so a test can wait until the store has applied them all.
+    private(set) var presenceAnswered: Set<String> = []
     func fetchPresence(_ people: [String]) {
         presenceRequests.append(people)
         let everyone = Dictionary(rooms.flatMap(\.members).map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
-        for id in people { if let person = everyone[id] { continuation.yield(.presenceChanged(id, person.presence, status: nil)) } }
+        for id in people { if let person = everyone[id] {
+            if person.presence != nil { presenceAnswered.insert(id) }
+            continuation.yield(.presenceChanged(id, person.presence, status: nil))
+        } }
     }
     /// Mine, kept as the server would: automatic, away and DND exclude each other.
     private(set) var ownStatus = OwnStatus()
@@ -299,6 +411,7 @@ actor FakeBackend: ChatBackend {
         rooms.insert(room, at: 0)
         return room
     }
+    func invite(_ listing: SpaceListing) { listings.insert(listing, at: 0) }
     func browseSpaces(_ query: String) throws -> [SpaceListing] {
         if failDirectory { failDirectory = false; throw URLError(.notConnectedToInternet) }
         return listings.filter { query.isEmpty || $0.name.localizedCaseInsensitiveContains(query) }
@@ -324,9 +437,13 @@ actor FakeBackend: ChatBackend {
         history[i].starred = starred
         continuation.yield(.messageUpserted(history[i]))
     }
+    /// The server's followed threads as tests set them; nil derives them from the history.
+    private var serverHome: [HomeThread]?
+    func setHomeThreads(_ threads: [HomeThread]) { serverHome = threads }
     /// Home's thread rows: every thread with a reply, the General one unread.
     func homeThreads() -> [HomeThread] {
-        history.filter { $0.replyCount > 0 && $0.threadID == nil }.compactMap { head in
+        if let serverHome { return serverHome }
+        return history.filter { $0.replyCount > 0 && $0.threadID == nil }.compactMap { head in
             guard let latest = history.filter({ $0.threadID == head.id }).max(by: { $0.createdAt < $1.createdAt }) else { return nil }
             return HomeThread(id: head.id, conversationID: head.conversationID, head: head, latest: latest, unread: head.id == "g1", time: latest.createdAt)
         }.sorted { $0.time > $1.time }

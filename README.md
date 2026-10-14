@@ -4,9 +4,9 @@ A native macOS client for Google Chat, written in Swift with SwiftUI and AppKit.
 
 Parley is an unofficial, independent project. It is not affiliated with or endorsed by Google. It uses the same private web API as Google Chat's web app, signed in with your own session. It stops working if Google changes that API. Use it with your own account.
 
-An LLM wrote most of the code. It was vibe-coded and tested in daily use, not designed and reviewed line by line. Expect rough edges, and read the code before relying on it.
+An LLM wrote most of the code. The author tested it in daily use but didn't design or review it line by line. Expect rough edges, and read the code before relying on it.
 
-![Home in Parley: recent conversations and followed threads](Screenshots/home.png)
+![Home in Parley, with recent conversations and followed threads](Screenshots/home.png)
 
 | A conversation | Threads in a side pane, in dark mode |
 |---|---|
@@ -19,9 +19,9 @@ An LLM wrote most of the code. It was vibe-coded and tested in daily use, not de
 - **Home and shortcuts.** Home lists recent conversations and followed threads, filtered by unread or threads. Mentions, Starred and Drafts each have their own list, and drafts sync with Google Chat.
 - **Conversations.** The sidebar groups DMs, group DMs, spaces and app DMs under Pinned, Direct messages, Spaces and Apps. Pin, mute, mark as unread and leave sync with Google Chat.
 - **Timeline.** Messages show as bubbles or a plain list, with formatting, reactions, read receipts, images, GIFs, files and link previews. Threads open in a side pane. A trackpad swipe on a message quotes it, and a longer swipe opens its thread. System events show as service lines.
-- **Cards.** Google Drive files show a preview of their first page. Any Chat app's cards show under its messages: link previews from apps, with "By <app>" under them; Drive comment cards, whose Reply and Resolve act in the card; and "Only visible to you" app suggestions and setup prompts. Meet calls show as call chips.
-- **Composer.** It has @-mentions, emoji and GIF search (GIPHY). Attach files from a picker, by pasting or by dragging them in.
-- **Formatting.** Bold, italic, underline, strikethrough, text colour, code, code blocks, quotes, lists and links, from the Aa bar, the right-click Format menu or shortcuts: ⌘B, ⌘I, ⌘U, ⇧⌘X strikethrough, ⇧⌘C code, ⌥⇧⌘C code block, ⇧⌘I quote, ⇧⌘8 list, and ⌘K for a link.
+- **Cards.** Google Drive files show a preview of their first page. Cards from any Chat app show under its messages, with forms, buttons and polls that work. Link previews from apps say "By <app>" under them, and Reply and Resolve act inside Drive comment cards. App suggestions and setup prompts show as "Only visible to you". Meet calls show as call chips.
+- **Composer.** It has @-mentions, emoji and GIF search (GIPHY), and slash commands for the conversation's apps. Attach files from a picker, by pasting or by dragging them in.
+- **Formatting.** The composer formats bold, italic, underline, strikethrough, text colour, code, code blocks, quotes, lists and links. Use the Aa bar, the right-click Format menu or these shortcuts. ⌘B, ⌘I and ⌘U, ⇧⌘X for strikethrough, ⇧⌘C for code, ⌥⇧⌘C for a code block, ⇧⌘I for a quote, ⇧⌘8 for a list, and ⌘K for a link.
 - **Space chips.** Paste a link to a space and press Tab to turn it into a chip.
 - **Calls.** Send a Meet link from the camera button or File ▸ Send a Meet Link (⇧⌘M). Incoming calls notify with Join and Decline.
 - **Translations.** With Google Chat's Automatic Translation on, translated messages show the translation, and View original shows what was written.
@@ -34,16 +34,16 @@ An LLM wrote most of the code. It was vibe-coded and tested in daily use, not de
 ## Native to the Mac
 
 - **Notifications.** macOS groups the banners by conversation, and each has a Reply field. Focus and Do Not Disturb apply as they do to any Mac app.
-- **Dock badge.** The app icon shows the unread count.
+- **Dock.** The app icon shows the unread count. It can also bounce once for each notification, if you turn that on in Settings ▸ Notifications.
 - **Windows.** Any conversation or thread can open in a window of its own. Opening a side pane widens the window only by the pane's width. The sidebar hides when the window is too narrow for it, and View ▸ Show Sidebar (⌃⌘S) brings it back.
 - **Looks.** Light, dark or Auto. Wallpapers with optional doodles, and your bubble colour, set for each appearance. Messages show as bubbles or a plain list.
-- **Notification sounds.** Default follows macOS; you can pick any Mac sound, or None.
-- **Updates.** Parley updates itself; Parley ▸ Check for Updates… checks now.
+- **Notification sounds.** Default follows macOS. You can also pick any sound on your Mac, or None.
+- **Updates.** Parley updates itself, and Parley ▸ Check for Updates… checks right away.
 - **Text.** The composer is a native macOS text view, with spell checking and autocorrection.
 - **Files.** Press Space for Quick Look on an attachment, or drag it out to Finder. Drag or paste files and images into the composer.
 - **Voice messages.** Record and play them in the app.
 - **Keyboard.** The shortcuts are:
-  - ⌘K jumps to a conversation, person or space; in the composer it adds a link.
+  - ⌘K jumps to a conversation, person or space. In the composer it adds a link.
   - ⌘E edits your last message.
   - ⌘N starts a new chat.
   - ⌘1…9 and ⌥↑/⌥↓ move between conversations, and ⌘[ and ⌘] go back and forward, as do a mouse's side buttons.
@@ -73,9 +73,9 @@ Swift Package Manager resolves the dependencies, [SwiftProtobuf](https://github.
 
 ### Signing in
 
-On first launch Parley shows a welcome screen. **Sign in with Google** opens an in-app Google sign-in window with its own website data, separate from your browsers. Once Google has signed you in to Google Chat, Parley checks the session, keeps it in your Keychain and closes the window. Passkeys aren't available in the window; choose **Try another way** at that step.
+On first launch Parley shows a welcome screen. Sign in with Google opens a Google sign-in window inside Parley, with its own website data, separate from your browsers. Once Google has signed you in to Google Chat, Parley checks the session, keeps it in your Keychain and closes the window. Passkeys don't work in that window, so choose Try another way at that step.
 
-Parley keeps your session only in the macOS Keychain. Signing out from Settings › Account also clears the sign-in window's data.
+Parley keeps your session only in the macOS Keychain. Signing out from Settings ▸ Account also clears the sign-in window's data.
 
 ### Optional
 
@@ -96,7 +96,7 @@ Unit tests use Swift Testing and run against a fake backend with stubbed network
 |---|---|
 | `Parley/App` | App entry point and scenes |
 | `Parley/Domain` | Models and the `ChatBackend` protocol |
-| `Parley/Dynamite` | The Google Chat API client: requests, realtime channel, mapping, sign-in |
+| `Parley/Dynamite` | The Google Chat API client, with requests, the realtime channel, mapping and sign-in |
 | `Parley/Store` | `ChatStore`, notifications, sign-in flow, diagnostics |
 | `Parley/UI` | SwiftUI views and the AppKit timeline |
 | `Parley/Preview` | `FakeBackend`, used by previews and tests |
@@ -114,4 +114,4 @@ Unit tests use Swift Testing and run against a fake backend with stubbed network
 
 ## License
 
-Parley is released under the MIT License; see [LICENSE](LICENSE).
+Parley uses the MIT License. See [LICENSE](LICENSE).

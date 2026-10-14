@@ -258,6 +258,7 @@ extension AuthTests {
     }
     /// While the realtime channel is down, polling catch_up_user brings the events in as if pushed, from the
     /// revision already seen; one at that revision (a replay) is skipped so a reaction toggle never applies twice.
+    /// Polling doesn't count as connected: catch_up_user leaves out new messages, so the status stays Reconnecting.
     @Test func pollingBringsNewEventsInOnce() async throws {
         func posted(_ id: String, at revision: Int64) -> Dynamite_Event {
             .with { $0.userRevision.timestamp = revision; $0.groupID.dmID.dmID = "a"
@@ -269,7 +270,7 @@ extension AuthTests {
         #expect(await backend.poll())
         let events = await Self.drain(backend)
         #expect(Self.upserts(events).map(\.id) == ["dm/a/m2/m2"])
-        #expect(events.contains(.connectionChanged(.connected)) && !events.contains(.resync))
+        #expect(!events.contains(.connectionChanged(.connected)) && !events.contains(.resync))
         let sent = try Dynamite_CatchUpUserRequest(serializedBytes: Self.body(try #require(exchange.requests.last { $0.url?.path == "/api/catch_up_user" })))
         #expect(sent.range.fromRevisionTimestamp == 100)
         #expect(!(await backend.poll()))   // a failed round changes nothing and asks for no resync
@@ -466,6 +467,16 @@ extension AuthTests {
         #expect(page.messages.map(\.id) == ["dm/zz/t1/m1"] && page.messages[0].conversationID == "dm/zz")
         #expect(page.cursor == "next")
         #expect(exchange.requests.last?.url?.path == "/api/search_messages_v2")
+        let sent = try Dynamite_SearchMessagesV2Request(serializedBytes: Self.body(try #require(exchange.requests.last)))
+        #expect(!sent.filter.hasScope && !sent.hasSort)   // everywhere: an empty filter, no sort
+    }
+    /// Search in one conversation: the filter's scope names its group, with the relevance sort Google requires alongside it.
+    @Test func searchInAConversationScopesTheFilterAndSorts() async throws {
+        let (backend, exchange) = try await Self.connected([try Self.proto(Dynamite_SearchMessagesV2Response())])
+        _ = try await backend.searchMessages("hello", in: "space/s9", cursor: nil)
+        let sent = try Dynamite_SearchMessagesV2Request(serializedBytes: Self.body(try #require(exchange.requests.last)))
+        #expect(sent.filter.scope.conversations.map(\.groupID.spaceID.spaceID) == ["s9"] && sent.filter.scope.conversations[0].kind == 1)
+        #expect(sent.sort.operator == .relevance && sent.query == "hello")
     }
 }
 

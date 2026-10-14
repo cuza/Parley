@@ -70,9 +70,15 @@ extension AuthTests {
         }
         let (backend, exchange) = try await Self.connected([try Self.proto(caps)])
         let permissions = try await backend.permissions(in: "space/s1")
-        #expect(permissions == ConversationPermissions(editProfile: false, manageMembers: true))
+        #expect(permissions == ConversationPermissions(editProfile: false, manageMembers: true))   // typing: not stated, so allowed
         let body = try #require(Self.sent(exchange, "get_group_scoped_capabilities").first)
         #expect(body.starts(with: Data([0x0A, 0x10, 0x0A, 0x06, 0x0A, 0x04, 0x0A, 0x02, 0x6D, 0x65, 0x1A, 0x06]) + Self.groupS1))
+    }
+    /// Flag 15 says whether I may send typing there; where it is false Google refuses set_typing_state with 403.
+    @Test func typingPermissionComesFromMyCapabilities() async throws {
+        let caps = Dynamite_GetGroupScopedCapabilitiesResponse.with { $0.entries = [.with { $0.capabilities.canTriggerTypingIndicator = false }] }
+        let (backend, _) = try await Self.connected([try Self.proto(caps)])
+        #expect(try await backend.permissions(in: "space/s1").typing == false)
     }
     /// The sidebar read still lists a hidden conversation, its read state carrying the hide time (field 9, µs):
     /// it comes back marked hidden, for Settings to list and the sidebar to leave out, as Google Chat does.
@@ -198,7 +204,8 @@ struct ManageGroupsStoreTests {
         let (store, _) = await started()
         await store.loadPermissions("design")
         await store.loadPermissions("general")
-        #expect(store.permissions["design"] == ConversationPermissions(editProfile: true, manageMembers: true))
+        #expect(store.permissions["design"] == ConversationPermissions(editProfile: true, manageMembers: true, editDetails: true, deleteSpace: true,
+                                                                       changeRoles: true, changeManagers: true, toggleHistory: true))
         #expect(store.permissions["general"] == ConversationPermissions())
     }
     /// A membership change pushed from elsewhere re-reads a member list already on screen.

@@ -29,6 +29,8 @@ struct InfoPanel: View {
     @State private var newName = ""
     @State private var pickingEmoji = false
     @State private var addingPeople = false
+    @State private var editingDetails = false
+    @State private var deleting = false
 
     private var roster: [Person] { store.roster(room) }
     private var partner: Person? { room.kind == .direct ? roster.first { $0.id != store.me.id } : nil }
@@ -43,8 +45,12 @@ struct InfoPanel: View {
     private var form: some View {
         Form {
             Section { header }
-            Section { actions; NotificationLevelPicker(store: store, room: room) }
+            Section { actions; NotificationLevelPicker(store: store, room: room); history }
+            if room.kind == .space, room.guidelines != nil || allowed.editDetails { Section("Guidelines") { guidelines } }
             if room.kind != .direct { Section("\(roster.count) members") { ForEach(roster) { member($0) } } }
+            if room.kind == .space, allowed.deleteSpace {
+                Section { Button("Delete Space…", role: .destructive) { deleting = true } }
+            }
             Section { shared } header: {
                 Picker("Shared", selection: $tab) { ForEach(SharedCategory.allCases, id: \.self) { Text($0.rawValue) } }
                     .pickerStyle(.segmented).labelsHidden()
@@ -59,6 +65,12 @@ struct InfoPanel: View {
             Button("Cancel", role: .cancel) {}
         }
         .sheet(isPresented: $addingPeople) { AddPeopleSheet(store: store, room: room, roster: roster) }
+        .sheet(isPresented: $editingDetails) { SpaceDetailsSheet(store: store, room: room) }
+        // Google Chat's wording: deleting removes every message for all members.
+        .alert("Delete “\(room.name)”?", isPresented: $deleting) {
+            Button("Delete", role: .destructive) { store.info = false; Task { await store.deleteSpace(room.id) } }
+            Button("Cancel", role: .cancel) {}
+        } message: { Text("The space and all its messages and tasks are deleted for every member.") }
         .task(id: room.id) {
             files.load = { [store] attachment, thumbnail in try await store.attachmentData(attachment, thumbnail: thumbnail) }
             files.messages = { [store, id = room.id] in   // Quick Look's ←/→ order: oldest first
@@ -115,7 +127,8 @@ struct InfoPanel: View {
         HStack {
             action(room.muted ? "Unmute" : "Mute", icon: room.muted ? "bell" : "bell.slash") { Task { await store.setMuted(!room.muted, room.id) } }
             action(room.pinned ? "Unpin" : "Pin", icon: room.pinned ? "pin.slash" : "pin") { Task { await store.setPinned(!room.pinned, room.id) } }
-            if let search { action("Search", icon: "magnifyingglass", help: "Search messages (⇧⌘F)", search) }
+            if let search { action("Search", icon: "magnifyingglass", help: "Search this conversation (⌘F)", search) }
+            action("Copy link", icon: "link", help: "Copy a link to this conversation") { ChatLink.copy(ChatLink.url(room.id)) }
             if allowed.editProfile { action("Rename", icon: "pencil") { newName = room.name; renaming = true } }
             if allowed.manageMembers { action("Add people", icon: "person.badge.plus") { addingPeople = true } }
         }
@@ -127,9 +140,27 @@ struct InfoPanel: View {
         }.buttonStyle(.borderless).help(help ?? title)
     }
 
+    /// History on keeps messages; off has Google delete new ones after 24 hours, as Google Chat's menu describes it.
+    @ViewBuilder private var history: some View {
+        if room.kind != .direct, let off = room.historyOff {
+            Toggle(isOn: Binding(get: { !off }, set: { on in Task { await store.setHistory(on, in: room.id) } })) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("History")
+                    Text(off ? "New messages are deleted after 24 hours" : "Messages are kept").font(.caption).foregroundStyle(.secondary)
+                }
+            }.disabled(!allowed.toggleHistory)
+        }
+    }
+    @ViewBuilder private var guidelines: some View {
+        if let guidelines = room.guidelines { Text(guidelines).textSelection(.enabled) }
+        else { Text("No guidelines").foregroundStyle(.secondary) }
+        if allowed.editDetails { Button("Edit Description and Guidelines…") { editingDetails = true } }
+    }
+
     // MARK: Members
     private func member(_ person: Person) -> some View {
         let isMe = person.id == store.me.id
+        let role = store.roles[room.id]?[person.id]
         return Button { card = person.id } label: {
             HStack(spacing: 10) {
                 Avatar(name: person.name, size: 28, url: person.avatarURL)
@@ -139,10 +170,16 @@ struct InfoPanel: View {
                     if let email = person.email { Text(email).font(.caption).foregroundStyle(.secondary).lineLimit(1) }
                 }
                 Spacer(minLength: 0)
+                if room.kind == .space, let role, role != .member { Text(role == .owner ? "Owner" : "Manager").font(.caption).foregroundStyle(.secondary) }
             }.contentShape(Rectangle())
         }
         .buttonStyle(.plain).disabled(isMe)
         .contextMenu {
+            // Google Chat's wording; an owner's role isn't changed here.
+            if room.kind == .space, !isMe, role != .owner {
+                if role == .manager { if allowed.changeManagers { Button("Change to Member") { Task { await store.setRole(.member, of: person.id, in: room.id) } } } }
+                else if allowed.changeRoles { Button("Change to Manager") { Task { await store.setRole(.manager, of: person.id, in: room.id) } } }
+            }
             if allowed.manageMembers, !isMe {
                 Button("Remove from \(room.kind == .space ? "space" : "group")", role: .destructive) {
                     Task { await store.removeMember(person.id, from: room.id) }
@@ -297,5 +334,33 @@ private struct QuickLookAnchor: NSViewRepresentable {
         override func acceptsPreviewPanelControl(_ panel: QLPreviewPanel!) -> Bool { MainActor.assumeIsolated { files?.previewItems.isEmpty == false } }
         override func beginPreviewPanelControl(_ panel: QLPreviewPanel!) { MainActor.assumeIsolated { files?.beginControl(panel) } }
         override func endPreviewPanelControl(_ panel: QLPreviewPanel!) { MainActor.assumeIsolated { files?.endControl(panel) } }
+    }
+}
+
+/// A space's description and guidelines, edited together and saved as one change, as Google Chat's details screen does.
+struct SpaceDetailsSheet: View {
+    let store: ChatStore
+    let room: Conversation
+    @State private var description = ""
+    @State private var guidelines = ""
+    @Environment(\.dismiss) private var dismiss
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("“\(room.name)” details").font(.headline)
+            Text("Description").font(.subheadline)
+            TextField("What this space is for", text: $description, axis: .vertical).lineLimit(2...4)
+            Text("Guidelines").font(.subheadline)
+            TextField("How members should use this space", text: $guidelines, axis: .vertical).lineLimit(4...10)
+            HStack {
+                Spacer()
+                Button("Cancel") { dismiss() }.keyboardShortcut(.cancelAction)
+                Button("Save") {
+                    dismiss()
+                    Task { await store.updateDetails(room.id, description: description, guidelines: guidelines) }
+                }.keyboardShortcut(.defaultAction)
+            }
+        }
+        .textFieldStyle(.roundedBorder).padding(18).frame(width: 420)
+        .onAppear { description = room.description ?? ""; guidelines = room.guidelines ?? "" }
     }
 }

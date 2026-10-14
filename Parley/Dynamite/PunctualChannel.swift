@@ -2,7 +2,7 @@ import Foundation
 import os
 import SwiftProtobuf
 
-enum PunctualError: Error { case unregistered, malformed, watchFailed(Int), renew }
+enum PunctualError: Error { case unregistered, malformed, watchFailed(Int), streamEnded, renew }
 
 /// Google Chat's realtime channel ("Punctual"): a multi-watch WebChannel on the user's event stream plus one typing
 /// watch per open conversation, reconnecting until cancelled. Each reconnect resumes the stream from its last watermark.
@@ -19,10 +19,13 @@ actor PunctualChannel {
     private let config: Config
     private let onEvent: @Sendable (Dynamite_Event) async -> Void
     private let onState: @Sendable (ConnectionState) async -> Void
+    private let onGap: @Sendable () async -> Void
     private let log = Logger(subsystem: "dev.cuza.Parley", category: "punctual")
     // Outlive sessions.
     private var registration: PunctualWire.Registration?
     private var userStart: Int64?            // last watermark of the user stream
+    private var gap = false                  // the stream restarts from now, so what came in between is missing
+    private var recent: [Data] = []          // the last changes applied: Google sends each one twice
     private var typing: [String: Int] = [:]  // group id → watch id
     private var nextID = 2                   // 1 is the user stream
     private var sessions = 0
@@ -34,8 +37,9 @@ actor PunctualChannel {
 
     init(authorizer: WebSessionAuthorizer, config: Config = Config(),
          onEvent: @escaping @Sendable (Dynamite_Event) async -> Void,
-         onState: @escaping @Sendable (ConnectionState) async -> Void) {
-        self.authorizer = authorizer; self.config = config; self.onEvent = onEvent; self.onState = onState
+         onState: @escaping @Sendable (ConnectionState) async -> Void,
+         onGap: @escaping @Sendable () async -> Void = {}) {
+        self.authorizer = authorizer; self.config = config; self.onEvent = onEvent; self.onState = onState; self.onGap = onGap
     }
 
     /// Backoff: 1 s doubling to 60 s, ±20 % jitter.
@@ -178,18 +182,28 @@ actor PunctualChannel {
             await onState(.connected)
             // Google Chat catches up after every reconnect; the backend does that on SESSION_READY.
             await onEvent(.with { $0.bodies = [.with { $0.eventType = .sessionReady }] })
+            // A resumed stream replays what it missed; a restarted one doesn't, and catch_up_user leaves out messages.
+            if gap { gap = false; await onGap() }
         case .started: break
         case .watermark(watch: 1, let time): userStart = max(userStart ?? 0, time)
         case .watermark: break
         case .change(_, let payload):
+            guard !recent.contains(payload) else { return }
+            recent = recent.suffix(31) + [payload]
             guard let event = try? Dynamite_Event(serializedBytes: payload) else { log.error("Skipped undecodable Punctual change"); return }
             await onEvent(event)
         case .failed(watch: 1, let code):
-            userStart = nil   // a resume point the server no longer keeps; catch-up covers the gap
+            userStart = nil; gap = true   // a resume point the server no longer keeps
             throw PunctualError.watchFailed(code)
         case .failed(let watch, let code):
             log.error("Punctual watch \(watch, privacy: .public) failed: \(code, privacy: .public)")
             if let group = typing.first(where: { $0.value == watch })?.key { typing[group] = nil }
+        case .ended(watch: 1):
+            // Google ends a stream asked to resume from further back than it keeps (somewhere between 20 and 30 minutes,
+            // so after a long sleep). Reopen from now, and reload once it starts.
+            userStart = nil; gap = true
+            throw PunctualError.streamEnded
+        case .ended: break
         case .close: throw WebChannelError.stopped
         }
     }

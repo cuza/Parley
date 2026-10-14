@@ -85,7 +85,15 @@ struct ParleyApp: App {
                 // Leaving the composer, as Google Chat's web client saves its draft when you click away.
                 .onReceive(NotificationCenter.default.publisher(for: NSApplication.didResignActiveNotification)) { _ in store.saveDrafts() }
                 .onReceive(NotificationCenter.default.publisher(for: NSWindow.didResignKeyNotification)) { _ in store.saveDrafts() }
-                .onAppear { appDelegate.beforeQuit = { store.saveDrafts() } }
+                .onAppear {
+                    appDelegate.beforeQuit = { store.saveDrafts() }
+                    appDelegate.openURL = { url in Task { await store.open(url: url) } }
+                    appDelegate.dockMenu = {
+                        DockMenu.make(store.dockConversations,
+                                      open: { id in NSApp.activate(); Task { await store.select(id) } },
+                                      markAllRead: { Task { await store.markAllRead() } })
+                    }
+                }
         }
             .defaultSize(width: 1000, height: 650)
             .commands {
@@ -93,6 +101,7 @@ struct ParleyApp: App {
                 CommandGroup(after: .appInfo) { CheckForUpdatesItem(updates: updates) }
                 CommandGroup(replacing: .newItem) {
                     Button("New Chat") { store.newChatRequests += 1 }.keyboardShortcut("n")
+                    Button("New Space…") { store.newSpaceRequests += 1 }.keyboardShortcut("n", modifiers: [.command, .shift])
                     MeetLinkMenuItem(store: store)
                 }
                 CommandGroup(replacing: .help) { DiagnosticsMenuItem() }
@@ -130,6 +139,15 @@ private struct DiagnosticsMenuItem: View {
 /// Quitting waits (up to 3 s) for the drafts to reach Google; unsaved ones are also kept for the next launch.
 @MainActor final class AppDelegate: NSObject, NSApplicationDelegate {
     var beforeQuit: (() -> Task<Void, Never>)?
+    var dockMenu: (() -> NSMenu)?
+    func applicationDockMenu(_ sender: NSApplication) -> NSMenu? { dockMenu?() }
+    /// Links sent to Parley; ones that arrive before the window (the link launched Parley) wait for it.
+    var openURL: ((URL) -> Void)? { didSet { if let openURL { waitingURLs.forEach(openURL); waitingURLs = [] } } }
+    private var waitingURLs: [URL] = []
+    func application(_ application: NSApplication, open urls: [URL]) {
+        NSApp.activate()
+        if let openURL { urls.forEach(openURL) } else { waitingURLs += urls }
+    }
     private var replied = false
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
         guard let save = beforeQuit?() else { return .terminateNow }
@@ -142,5 +160,20 @@ private struct DiagnosticsMenuItem: View {
         guard !replied else { return }
         replied = true
         app.reply(toApplicationShouldTerminate: true)
+    }
+}
+
+/// The Dock icon's menu: unread conversations with their counts, then Mark All as Read.
+@MainActor enum DockMenu {
+    static func make(_ conversations: [Conversation], open: @escaping (ConversationID) -> Void, markAllRead: @escaping () -> Void) -> NSMenu {
+        let menu = NSMenu()
+        for room in conversations {
+            let item = ClosureMenuItem(room.name) { open(room.id) }
+            item.badge = NSMenuItemBadge(count: room.unread)
+            menu.addItem(item)
+        }
+        if !conversations.isEmpty { menu.addItem(.separator()) }
+        menu.addItem(ClosureMenuItem("Mark All as Read") { markAllRead() })
+        return menu
     }
 }

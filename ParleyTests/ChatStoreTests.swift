@@ -277,7 +277,7 @@ struct ChatStoreTests {
         await store.select("engineering")
         #expect(!store.messages.contains { $0.id == "e0" })
         async let timeline: Void = store.loadOlderIfNeeded("engineering")   // the timeline near its top, already loading
-        async let search: Void = store.showQuoted("e0", in: "engineering", pages: 50)
+        async let search: Void = store.showQuoted("e0", in: "engineering")
         _ = await (timeline, search)
         let loaded = store.timeline("engineering")
         #expect(store.highlightedID == "e0", "oldest \(loaded.first?.id ?? "-"), \(loaded.count) loaded, more: \(store.hasMore.contains(store.key("engineering", nil)))")

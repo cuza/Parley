@@ -24,11 +24,16 @@ final class StubExchange: @unchecked Sendable {
     }
     var requests: [URLRequest] { lock.withLock { recorded } }
 }
+/// Each stub session's exchange, by the id its requests carry (`X-Stub-Exchange`).
 final class StubRegistry: @unchecked Sendable {
     private let lock = NSLock()
-    private var exchange: StubExchange?
-    func set(_ value: StubExchange) { lock.withLock { exchange = value } }
-    func get() -> StubExchange? { lock.withLock { exchange } }
+    private var exchanges: [String: StubExchange] = [:]
+    func add(_ value: StubExchange) -> String {
+        let id = UUID().uuidString
+        lock.withLock { exchanges[id] = value }
+        return id
+    }
+    func get(_ id: String?) -> StubExchange? { lock.withLock { id.flatMap { exchanges[$0] } } }
 }
 final class AuthStubProtocol: URLProtocol, @unchecked Sendable {
     static let registry = StubRegistry()
@@ -36,7 +41,7 @@ final class AuthStubProtocol: URLProtocol, @unchecked Sendable {
     override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
     override func startLoading() {
         do {
-            guard let exchange = Self.registry.get() else { throw URLError(.badServerResponse) }
+            guard let exchange = Self.registry.get(request.value(forHTTPHeaderField: "X-Stub-Exchange")) else { throw URLError(.badServerResponse) }
             let reply = try exchange.next(request)
             if let failure = reply.failure { throw URLError(failure) }
             let response = HTTPURLResponse(url: request.url!, statusCode: reply.status, httpVersion: "HTTP/1.1", headerFields: reply.headers)!
@@ -47,11 +52,24 @@ final class AuthStubProtocol: URLProtocol, @unchecked Sendable {
     }
     override func stopLoading() {}
     static func session(_ exchange: StubExchange) -> URLSession {
-        registry.set(exchange)
         let config = URLSessionConfiguration.ephemeral
+        config.httpAdditionalHeaders = ["X-Stub-Exchange": registry.add(exchange)]
         config.protocolClasses = [Self.self]
         config.httpCookieStorage = nil
         return URLSession(configuration: config, delegate: NoAuthRedirects(), delegateQueue: nil)
+    }
+}
+
+/// The stub harness itself: a request goes to the exchange of the test that made its session, so a task an earlier
+/// test left running can't take the replies meant for the next one.
+struct StubRoutingTests {
+    @Test func aRequestReachesTheExchangeItsSessionWasMadeFor() async throws {
+        let first = StubExchange([.init(data: Data("first".utf8))]), second = StubExchange([.init(data: Data("second".utf8))])
+        let earlier = AuthStubProtocol.session(first)
+        _ = AuthStubProtocol.session(second)   // the next test's session
+        let (data, _) = try await earlier.data(from: URL(string: "https://chat.google.com/late")!)
+        #expect(String(decoding: data, as: UTF8.self) == "first")
+        #expect(second.requests.isEmpty)
     }
 }
 

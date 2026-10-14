@@ -39,6 +39,9 @@ enum MessageCoverage {
         "11.11.4.*", "11.11.6.*", "11.14.10.*",
         // Meet: a meeting link, a call; Calendar and Tasks chips.
         "11.12.1.1", "11.12.1.2", "11.12.1.3", "11.16.1", "11.16.6.1.1.2", "11.16.6.1.1.3", "11.16.6.2", "11.16.3.*", "11.16.4.*",
+        // Not drawn on purpose: a meeting link's dial-in number, PIN and tel.meet links (1.5, 1.8, 1.10), its settings and
+        // flags (1.11, 1.15, 1.19, 2, 3). Google Chat's chip says only "Join video meeting" too.
+        "11.12.1.5", "11.12.1.8", "11.12.1.10", "11.12.1.11", "11.12.1.15", "11.12.1.19", "11.12.2", "11.12.3",
         // Custom emoji, space chips, Gemini's sources and "Show thinking".
         "11.26.*", "11.33.*", "11.37.1", "11.37.2.2", "11.37.2.3", "11.37.2.4.1", "11.37.2.5.1", "11.37.2.6", "11.37.2.7", "11.43.1.1.*",
         // A slash command's message: its text as typed, as Google Chat draws it (the command's app, name and id: nothing to draw).
@@ -62,10 +65,14 @@ enum MessageCoverage {
         // Bot responses (which ones are drawn: `flags`), reactions, quotes and forwards.
         "19.*", "21.1.*", "21.2", "21.3",
         "37.1.*", "37.5.*", "37.6", "37.7.*", "37.15", "37.17.1.*", "37.17.5",
+        // The quoted original's state: active is the quote as shown; a deleted or edited original still reports.
+        "37.3=1",
         // Not drawn on purpose: when a reaction was added (21.4), when a label was set (43.3, 43.5); a quote's times,
-        // updater and legacy kind (37.2, 10, 12, 13; 4 and 16 Google Chat's own), a forward's group extras (37.17.3, 6, 8, 9:
-        // its kind and a direct message's other side; "a direct message" names it).
-        "21.4", "43.3", "43.5.*", "37.2", "37.4.*", "37.10", "37.12.*", "37.13", "37.16.*", "37.17.3", "37.17.6", "37.17.8.*", "37.17.9.*",
+        // updater and legacy kind (37.2, 10, 12, 13; 4 and 16 Google Chat's own), its last edit time (14) and the quoted
+        // message's own quote type (18), the quoted original's history setting (11), a forward's group extras (37.17.3, 6, 8, 9: its kind and a direct message's other
+        // side; "a direct message" names it).
+        "21.4", "43.3", "43.5.*", "37.2", "37.4.*", "37.10", "37.12.*", "37.13", "37.14", "37.16.*", "37.18", "37.11.*",
+        "37.17.3", "37.17.6", "37.17.8.*", "37.17.9.*",
         // A copy's original in a shortcut, tombstones, private messages (whose: `flags`), translations.
         "42.*", "31.*", "32.*", "35.*", "47.*",
     ]
@@ -115,7 +122,7 @@ enum MessageCoverage {
             + button("\(path).6") + button("\(path).21")
     }
     /// Paths whose varint value is part of the path ("20=2"): kinds that decide how a message is drawn.
-    static let valued: Set<String> = ["20"]
+    static let valued: Set<String> = ["20", "37.3"]
 
     /// What Parley doesn't draw on `proto`, in path order, each once.
     static func gaps(_ proto: Dynamite_Message, selfID: String) -> [String] {

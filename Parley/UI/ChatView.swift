@@ -59,13 +59,18 @@ struct ChatView: View {
     static func initialColumns(fixedConversation: String?) -> NavigationSplitViewVisibility { fixedConversation == nil ? .all : .detailOnly }
     @State private var switcher = false
     @State private var composing = false   // the palette as New Chat
-    @State private var searching = false
+    @State private var finding: FinderPanel.Request?
+    @State private var creatingSpace = false
     @State private var columns: NavigationSplitViewVisibility
     @State private var sidebarAutoHidden = false   // hidden by us for a narrow window: it comes back when there is room
     @State private var width = WidthRef()   // read only by actions, so kept out of state: it changes every frame of a resize
     @State private var sidebarWidth: CGFloat = 230   // as last measured while shown
     @State private var hostWindow = WindowRef()   // this view's own window
     @State private var leaving: Conversation?   // asks before leaving
+    @State private var blocking: BlockSheet.Target?
+    @State private var naming: SectionNaming?   // New Section (with the conversation that goes in it) or Rename
+    @State private var sectionName = ""
+    struct SectionNaming: Identifiable { var id: String { section?.id ?? "new-\(moving ?? "")" }; var section: SidebarSection?; var moving: ConversationID? }
     @AppStorage("collapsedSidebarSections") private var collapsedSections = ""   // titles, one per line
     @AppStorage(SidebarLimit.enabledKey) private var limitSections = false
     @AppStorage(SidebarLimit.countKey) private var sectionLimit = 10
@@ -86,9 +91,15 @@ struct ChatView: View {
     private func sendMeetLink(_ id: ConversationID) { Task { if let url = await store.sendMeetLink(in: id) { openURL(url) } } }
     @Environment(SignInFlow.self) private var signIn: SignInFlow?
     private var room: Conversation? { store.conversations.first { $0.id == (fixedConversation ?? store.selectedID) } }
+    private var handoff: URL? { Self.handoffURL(room, shortcut: fixedConversation == nil ? store.shortcut : nil) }
+    /// What Handoff offers: the conversation on screen; Home and the other shortcuts have no web page of their own.
+    static func handoffURL(_ room: Conversation?, shortcut: Shortcut?) -> URL? {
+        guard shortcut == nil, let room else { return nil }
+        return ChatLink.url(room.id)
+    }
     /// `paneWidth` is the side pane's narrowest (and first) width; dragging its divider widens it up to `paneMaxWidth`.
     /// The sidebar's bounds take effect only as the column's outermost modifier: under another, the split view ignores them.
-    static let paneWidth: CGFloat = 320, paneMaxWidth: CGFloat = 560, timelineMinWidth: CGFloat = 380, sidebarMinWidth: CGFloat = 180, sidebarMaxWidth: CGFloat = 300
+    static let paneWidth: CGFloat = 340, paneMaxWidth: CGFloat = 560, timelineMinWidth: CGFloat = 380, sidebarMinWidth: CGFloat = 180, sidebarMaxWidth: CGFloat = 300
     /// What the shown areas need: the sidebar at its width (0 when hidden), the timeline's minimum and, while open, the
     /// side pane. The split view keeps the sidebar's width as the window narrows and would clip the rest.
     static func minWidth(paneOpen: Bool, sidebar: CGFloat) -> CGFloat {
@@ -138,7 +149,7 @@ struct ChatView: View {
                     else if store.conversations.contains(where: { $0.id == id }) { Task { await store.select(id) } }   // not a "Show all" row
                 })) {
                     ForEach(Conversation.sidebarSections(store.conversations, limit: sectionLimitArgs.limit, expanded: sectionLimitArgs.expanded,
-                                                         selected: fixedConversation ?? store.selectedID), id: \.title) {
+                                                         selected: fixedConversation ?? store.selectedID, custom: store.sections), id: \.title) {
                         section($0.title, rooms: $0.rooms, hidden: $0.hidden)
                     }
                 }.listStyle(.sidebar).accessibilityIdentifier("sidebar")
@@ -158,15 +169,17 @@ struct ChatView: View {
                 // Scroll state belongs to one conversation; the toolbar stays outside so it is not duplicated on switch.
                 // The thread and info panel is our own pane: SwiftUI's .inspector inside a NavigationSplitView
                 // re-measures its columns without settling on macOS 27 and AppKit aborts the app.
-                SidePaneSplit(open: store.info || store.threadID != nil) {
+                SidePaneSplit(open: store.info || store.threadID != nil || (store.threadsShown && Self.offersThreads(room))) {
                     VStack(spacing: 0) { TimelineView(store: store, conversation: room).id(room.id) }
                         .safeAreaInset(edge: .top, spacing: 0) { expiredBanner }
                 } pane: {
                     Group {
                         if store.info {
-                            InfoPanel(store: store, room: room, search: fixedConversation == nil ? { searching = true } : nil)
+                            InfoPanel(store: store, room: room, search: fixedConversation == nil ? { finding = .init(scope: room) } : nil)
                         } else if let thread = store.threadID {
                             ThreadPane(store: store, room: room, thread: thread)
+                        } else if store.threadsShown, Self.offersThreads(room) {
+                            ThreadsPane(store: store, room: room)
                         }
                     }
                     // Esc closes the info panel wherever focus is; the composer's own Esc also closes it.
@@ -195,8 +208,14 @@ struct ChatView: View {
                             Menu { Button("Send a Meet Link") { sendMeetLink(room.id) } } label: { Image(systemName: "video") }
                                 .menuIndicator(.visible).help("Video call")
                         }
+                        if Self.offersThreads(room) {   // the conversation's threads, as Google Chat's Active threads
+                            ToolbarItem(placement: .primaryAction) {
+                                Button { Task { await store.toggleThreads() } } label: { Image(systemName: "bubble.left.and.text.bubble.right") }
+                                    .help("Threads")
+                            }
+                        }
                         if fixedConversation == nil {   // results open in the main window, so search lives only there
-                            ToolbarItem(placement: .primaryAction) { Button { searching = true } label: { Image(systemName: "magnifyingglass") }.help("Search messages (⇧⌘F)") }
+                            ToolbarItem(placement: .primaryAction) { Button { finding = .init(scope: nil) } label: { Image(systemName: "magnifyingglass") }.help("Search messages (⇧⌘F)") }
                         }
                     }
                     .focusedSceneValue(\.meetLinkConversation, room.id)
@@ -230,8 +249,27 @@ struct ChatView: View {
         .sheet(item: $store.forwarding) { message in
             ConversationPalette(store: store, then: { store.forward(message, to: $0) })
         }
-        .sheet(isPresented: $searching) { FinderPanel(store: store) }
+        .sheet(item: $finding) { FinderPanel(store: store, scope: $0.scope) }
+        // Handoff: the open conversation as a web page, as a browser offers it; Google Chat's iPhone and iPad app opens its links.
+        .userActivity(NSUserActivityTypeBrowsingWeb, isActive: handoff != nil) { activity in
+            activity.webpageURL = handoff
+            activity.title = room?.name
+        }
         .onChange(of: store.newChatRequests) { if fixedConversation == nil { composing = true } }
+        .onChange(of: store.newSpaceRequests) { if fixedConversation == nil { composing = false; creatingSpace = true } }
+        .sheet(isPresented: $creatingSpace) { NewSpaceSheet(store: store) }
+        .sheet(item: $blocking) { BlockSheet(store: store, target: $0) }
+        .alert(naming?.section == nil ? "New Section" : "Rename Section", isPresented: Binding(get: { naming != nil }, set: { if !$0 { naming = nil } })) {
+            TextField("Section name", text: $sectionName)
+            Button(naming?.section == nil ? "Create" : "Rename") {
+                let request = naming, name = sectionName
+                Task {
+                    if let section = request?.section { await store.renameSection(section, to: name) }
+                    else { await store.createSection(name, moving: request?.moving) }
+                }
+            }
+            Button("Cancel", role: .cancel) {}
+        }
         .background {
             Group {
                 Button("") { switcher = true }.keyboardShortcut("k")
@@ -239,10 +277,12 @@ struct ChatView: View {
                     if let composer = NSApp.keyWindow?.firstResponder as? ComposerTextView, !composer.string.isEmpty { composer.formatItalic(nil) }
                     else if room != nil { store.toggleInfo() }
                 }.keyboardShortcut("i")
-                Button("") { searching = true }.keyboardShortcut("f", modifiers: [.command, .shift]).disabled(fixedConversation != nil)
+                Button("") { finding = .init(scope: nil) }.keyboardShortcut("f", modifiers: [.command, .shift]).disabled(fixedConversation != nil)
+                // ⌘F finds in what's open: the conversation, or everywhere from Home and the other shortcuts.
+                Button("") { finding = .init(scope: store.shortcut == nil ? room : nil) }.keyboardShortcut("f").disabled(fixedConversation != nil)
                 ForEach(1...9, id: \.self) { number in
                     Button("") { if let room = Conversation.atShortcut(number, in: store.conversations, limit: sectionLimitArgs.limit,
-                                                                       expanded: sectionLimitArgs.expanded, selected: store.selectedID) { Task { await store.select(room.id) } } }
+                                                                       expanded: sectionLimitArgs.expanded, selected: store.selectedID, custom: store.sections) { Task { await store.select(room.id) } } }
                         .keyboardShortcut(KeyEquivalent(Character(String(number))), modifiers: .command)
                 }
                 Button("") { if let room = Conversation.nextUnread(after: store.selectedID, in: store.conversations, forward: true) { Task { await store.select(room.id) } } }
@@ -309,8 +349,24 @@ struct ChatView: View {
     private static func tag(_ shortcut: Shortcut) -> String { "shortcut:" + shortcut.rawValue }
     /// A collapsible section; which ones are collapsed is remembered across launches. Shortcuts lead with Mentions and Starred.
     /// Collapsed, its header counts its unread messages, as web Chat. `hidden`: rows Limit sidebar sections leaves out.
+    /// Move to: one of my sections, a new one, or back to its default section, as Google Chat's Move conversation.
+    @ViewBuilder private func moveMenu(_ room: Conversation) -> some View {
+        if room.app != .gemini {
+            Menu("Move to") {
+                if room.section != nil { Button(room.kind == .space ? "Spaces" : room.app != nil ? "Apps" : "Direct messages") { Task { await store.moveConversation(room.id, to: nil) } } }
+                ForEach(store.sections.filter { $0.kind == .custom && $0.key != room.section }) { section in
+                    Button(section.name) { Task { await store.moveConversation(room.id, to: section.key) } }
+                }
+                Divider()
+                Button("New Section…") { sectionName = ""; naming = SectionNaming(moving: room.id) }
+            }
+        }
+    }
+    /// One of my own sections, by its title.
+    private func customSection(_ title: String) -> SidebarSection? { store.sections.first { $0.kind == .custom && $0.name == title } }
     @ViewBuilder private func section(_ title: String, rooms: [Conversation], hidden: [Conversation]) -> some View {
-        if !rooms.isEmpty || (title == "Shortcuts" && fixedConversation == nil) {
+        // My own sections show even when empty, as Google Chat's do, with how to fill them.
+        if !rooms.isEmpty || (title == "Shortcuts" && fixedConversation == nil) || (customSection(title) != nil && fixedConversation == nil) {
             let collapsed = collapsedSections.split(separator: "\n").contains { $0 == title }
             Section(isExpanded: Binding(get: { !collapsed }, set: { collapsedSections = Self.lines(collapsedSections, title, contains: !$0) })) {
                 if title == "Shortcuts" && fixedConversation == nil {
@@ -342,13 +398,23 @@ struct ChatView: View {
                             Button(room.muted ? "Unmute" : "Mute") { Task { await store.setMuted(!room.muted, room.id) } }
                             NotificationLevelPicker(store: store, room: room)
                             Button("Open in new window") { openWindow(value: room.id) }
+                            Button("Copy Link") { ChatLink.copy(ChatLink.url(room.id)) }
                             Button("Hide") { Task { await store.hide(room.id) } }
+                            moveMenu(room)
                             if room.kind != .direct {
                                 Divider()
                                 Button("Leave…", role: .destructive) { leaving = room }
                             }
+                            if room.kind == .space { Button("Block…", role: .destructive) { blocking = .space(room.id, name: room.name) } }
+                            else if room.kind == .direct, room.app == nil, let partner = store.partner(in: room) {
+                                Divider()
+                                Button("Block…", role: .destructive) { blocking = .person(partner, name: room.name) }
+                            }
                         }
                         .accessibilityElement(children: .ignore).accessibilityLabel("\(room.name), \(room.unread) unread")
+                }
+                if rooms.isEmpty, customSection(title) != nil {
+                    Text("Add a conversation with its Move to menu.").font(.caption).foregroundStyle(.secondary).selectionDisabled()
                 }
                 if !hidden.isEmpty {
                     let open = sectionLimitArgs.expanded.contains(title)
@@ -359,9 +425,27 @@ struct ChatView: View {
                         }
                     }.buttonStyle(.plain).selectionDisabled()   // a click on the row toggles it, never selects it
                 }
+                if title == "Spaces", case let count = store.invitations.count, count > 0 {
+                    // Google Chat keeps invitations in its space browser; this row is the way to notice one. It opens Browse spaces.
+                    Button { store.newChatRequests += 1 } label: {
+                        HStack(spacing: 8) {
+                            Image(systemName: "envelope.badge").foregroundStyle(Color.accentColor).frame(width: 20, height: 20)
+                            Text(Self.invitationsTitle(count)).font(.system(size: 13))
+                        }
+                    }.buttonStyle(.plain).selectionDisabled()
+                }
             } header: {
                 HStack {
                     Text(title)
+                        .contextMenu {
+                            if let mine = customSection(title) {
+                                Button("Rename Section…") { sectionName = mine.name; naming = SectionNaming(section: mine) }
+                                Button("Move Section Up") { Task { await store.moveSection(mine, up: true) } }
+                                Button("Move Section Down") { Task { await store.moveSection(mine, up: false) } }
+                                Divider()
+                                Button("Delete Section", role: .destructive) { Task { await store.deleteSection(mine) } }
+                            }
+                        }
                     if collapsed, case let unread = rooms.filter { !$0.muted }.reduce(0, { $0 + $1.unread }), unread > 0 {
                         Spacer(minLength: 0)
                         Text("\(unread)").font(.system(size: 11, weight: .semibold, design: .rounded)).foregroundStyle(.secondary)
@@ -409,6 +493,7 @@ struct TimelineView: View {
     var detached = false   // a thread in its own window
     @State private var atBottom = true
     @State private var arrivedAway = 0   // new messages while scrolled up: the scroll-to-bottom badge
+    @State private var reporting: Message?
     @State private var scrollRequest = 0
     @AppStorage("timelineStyle") private var style = TimelineStyle.bubbles
     @AppStorage(Wallpaper.key(dark: false)) private var wallpaper = Wallpaper.none
@@ -417,7 +502,11 @@ struct TimelineView: View {
     @AppStorage(BubblePalette.colorKey(dark: true)) private var darkBubbleColor = ""
     @AppStorage(Wallpaper.doodlesKey) private var doodles = true
     @State private var composerHeight: CGFloat = 0   // the floating composer's height: the timeline's bottom inset
-    private var items: [Message] { store.timeline(conversation.id, thread: thread) }
+    /// A blocked person's messages stay hidden, as Google Chat hides them.
+    private var items: [Message] {
+        let all = store.timeline(conversation.id, thread: thread), blocked = store.blockedPeople
+        return blocked.isEmpty ? all : all.map { blocked.contains($0.sender.id) ? ChatStore.blockedView($0) : $0 }
+    }
     private var actions: MessageRowActions {
         MessageRowActions(react: { emoji, message in Task { await store.react(emoji, to: message) } },
                           toggleTranscript: { store.toggleTranscript($0.id) },
@@ -441,12 +530,16 @@ struct TimelineView: View {
                           edit: { store.edit($0) },
                           delete: { message in Task { await store.delete(message) } },
                           star: { starred, message in Task { await store.setStarred(starred, message) } },
+                          markUnread: { message in Task { await store.markUnread(from: message) } },
+                          report: store.permissions[conversation.id]?.reportMessages == true ? { reporting = $0 } : nil,
                           readers: { [conversation] message in
                               conversation.kind == .space ? [] : store.readers(of: message).map { store.name(of: $0, in: conversation.id) }
                           },
                           loadAttachment: { attachment, thumbnail in try await store.attachmentData(attachment, thumbnail: thumbnail) },
                           emojiUsage: EmojiUsage())
     }
+    /// The main timeline shows a window opened at an old message, away from the newest ones.
+    private var isWindow: Bool { thread == nil && store.detached.contains(conversation.id) }
     /// Receipts show in the conversation's own timeline, not in a thread.
     private var rows: [TimelineRow] {
         let seen = thread == nil ? store.seen(in: conversation).mapValues { $0.map { store.name(of: $0, in: conversation.id) } } : [:]
@@ -462,19 +555,22 @@ struct TimelineView: View {
                 MessageTable(rows: rows, meID: store.me.id, kind: conversation.kind, style: style, look: [wallpaper.rawValue, darkWallpaper.rawValue, bubbleColor, darkBubbleColor].joined(separator: "/"), highlighted: store.highlightedID,
                              identifier: thread == nil ? "timeline" : "thread", actions: actions,
                              nearTop: { Task { await store.loadOlderIfNeeded(conversation.id, thread: thread) } },
+                             nearBottom: { Task { await store.loadNewerIfNeeded(conversation.id) } }, detached: isWindow,
                              atBottomChanged: { atBottom = $0; if $0 { arrivedAway = 0 } }, scrollRequest: scrollRequest,
                              bottomInset: composerHeight)
             }
         }
         .background { WallpaperView(doodles: doodles) }
+        .sheet(item: $reporting) { ReportSheet(store: store, message: $0) }
         .overlay(alignment: .top) {
             if store.loading.contains(store.key(conversation.id, thread)) && !items.isEmpty {
                 ProgressView().controlSize(.small).padding(8)
             }
         }
         .overlay(alignment: .bottomTrailing) {
-            if !atBottom && !items.isEmpty {
-                Button { scrollRequest += 1 } label: {
+            if (!atBottom || isWindow) && !items.isEmpty {
+                // From a window opened at an old message, the newest messages are a reload away, not a scroll.
+                Button { if isWindow { Task { await store.returnToNewest(conversation.id); scrollRequest += 1 } } else { scrollRequest += 1 } } label: {
                     Image(systemName: "chevron.down").font(.system(size: 15, weight: .semibold)).frame(width: 38, height: 38)
                         .floatingGlass(Circle(), interactive: true)
                         .overlay(alignment: .top) {
@@ -493,8 +589,8 @@ struct TimelineView: View {
                 .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { composerHeight = $0 }
         }
         .onChange(of: items.last?.id) { _, _ in if !atBottom { arrivedAway += 1 } }
-        .dropDestination(for: URL.self) { urls, _ in   // files dropped anywhere on the conversation join the draft
-            let files = urls.filter(\.isFileURL)
+        .dropDestination(for: DroppedFile.self) { dropped, _ in   // files dropped anywhere on the conversation join the draft
+            let files = dropped.map(\.url).filter(\.isFileURL)
             store.attach(files, conversation: conversation.id, thread: thread)
             return !files.isEmpty
         }
@@ -519,8 +615,14 @@ struct ComposerBar: View {
         store.activityLine(conversation.id, thread: thread)
             ?? ChatStore.typingLine(store.typists(conversation.id, thread: thread).map { store.name(of: $0, in: conversation.id) })
     }
+    private var blockedPartner: PersonID? {
+        guard thread == nil, conversation.kind == .direct, let partner = store.partner(in: conversation), store.blockedPeople.contains(partner) else { return nil }
+        return partner
+    }
     var body: some View {
-        composer
+        Group {
+            if let blockedPartner { BlockedCover(store: store, person: blockedPartner, name: conversation.name) } else { composer }
+        }
             .onChange(of: conversation.id) { recorder.cancel() }   // a recording belongs to the conversation it started in
             .onDisappear { recorder.cancel() }
             .onAppear { composerHandle.askForLink = { linking = LinkForm.Draft(text: composerHandle.selectedText) } }
@@ -723,7 +825,7 @@ struct ComposerBar: View {
             .frame(minWidth: 60).frame(height: min(130, max(Self.control, fieldHeight)))
             .overlay(alignment: .topLeading) {
                 if draft.isEmpty {   // aligned with the text view's inset and line padding
-                    Text("Message").foregroundStyle(.tertiary).padding(.leading, 13).padding(.top, 11).allowsHitTesting(false).accessibilityHidden(true)
+                    Text(ChatView.composerPrompt(conversation)).foregroundStyle(.tertiary).padding(.leading, 13).padding(.top, 11).allowsHitTesting(false).accessibilityHidden(true)
                 }
             }
             Button { formatBar.toggle() } label: { Text("Aa").font(.system(size: 14, weight: .semibold)).fixedSize().foregroundStyle(formatBar ? Color.accentColor : .secondary) }
@@ -742,6 +844,22 @@ struct ComposerBar: View {
         .padding(.trailing, 14)
     }}
 
+/// Follow or unfollow a thread, as Google Chat's thread header offers it: a filled bell while followed.
+struct ThreadFollowButton: View {
+    let store: ChatStore
+    let thread: ThreadID
+    /// What a click does.
+    var label: String { store.isFollowing(thread) ? "Unfollow thread" : "Follow thread" }
+    func toggle() async { await store.setFollowing(!store.isFollowing(thread), thread: thread) }
+    var body: some View {
+        let following = store.isFollowing(thread)
+        Button { Task { await toggle() } } label: { Image(systemName: following ? "bell.fill" : "bell.slash") }
+            .buttonStyle(.plain)
+            .help(following ? "Unfollow thread: its replies stop notifying you" : "Follow thread: its replies notify you")
+            .accessibilityLabel(label)
+    }
+}
+
 /// On macOS 26 the floating pieces are Liquid Glass and blend when close; earlier, material shapes.
 /// The thread pane: the thread's first message over its replies and composer, beside a conversation or Home.
 struct ThreadPane: View {
@@ -757,6 +875,7 @@ struct ThreadPane: View {
             if !detached {
                 HStack(spacing: 12) {
                     Text("Thread").font(.headline); Spacer()
+                    ThreadFollowButton(store: store, thread: thread)
                     Button { if let ref = store.detachThread(in: room.id) { openWindow(value: ref) } } label: { Image(systemName: "macwindow.badge.plus") }
                         .buttonStyle(.plain).help("Open in new window")
                     Button { store.threadID = nil } label: { Image(systemName: "xmark") }.buttonStyle(.plain).help("Close")
@@ -965,14 +1084,18 @@ extension View {
     }
 }
 /// ⇧⌘F: message search.
+/// Message search: everywhere (⇧⌘F), or in one conversation (⌘F).
 struct FinderPanel: View {
+    /// What to search, carried by the sheet's item so the panel never opens with a stale scope.
+    struct Request: Identifiable { let id = UUID(); let scope: Conversation? }
     @Bindable var store: ChatStore
+    var scope: Conversation? = nil
     @State private var query = ""
     @State private var selected: String?
     @Environment(\.dismiss) private var dismiss
     var body: some View {
         VStack(spacing: 0) {
-            TextField("Search messages", text: $query).textFieldStyle(.plain).font(.title3).padding(18).onSubmit { choose() }
+            TextField(Self.prompt(in: scope), text: $query).textFieldStyle(.plain).font(.title3).padding(18).onSubmit { choose() }
             Divider()
             List(selection: $selected) {
                 ForEach(store.searchResults) { message in
@@ -982,14 +1105,15 @@ struct FinderPanel: View {
                     }.padding(.vertical, 5).tag(message.id).onTapGesture { selected = message.id; choose() }
                 }
             }.frame(height: 280)
-            HStack { Text("Searches Google Chat").font(.caption).foregroundStyle(.secondary); Spacer(); Button("Close") { dismiss() }.keyboardShortcut(.cancelAction); Button("Open") { choose() }.keyboardShortcut(.defaultAction) }.padding(12)
+            HStack { Text(scope == nil ? "Searches Google Chat" : "Searches this conversation in Google Chat").font(.caption).foregroundStyle(.secondary); Spacer(); Button("Close") { dismiss() }.keyboardShortcut(.cancelAction); Button("Open") { choose() }.keyboardShortcut(.defaultAction) }.padding(12)
         }.frame(width: 500)
             .task(id: query) {
                 try? await Task.sleep(for: .milliseconds(250))   // one request per pause in typing, not per keystroke
                 guard !Task.isCancelled else { return }
-                await store.search(query); selected = store.searchResults.first?.id
+                await store.search(query, in: scope?.id); selected = store.searchResults.first?.id
             }
     }
+    static func prompt(in scope: Conversation?) -> String { scope.map { "Search in \($0.name)" } ?? "Search messages" }
     private func choose() {
         guard let selected else { return }
         Task {
@@ -1024,6 +1148,14 @@ private struct WindowReader: NSViewRepresentable {
 
 /// The sidebar's Show all / Show less icon, as web Chat draws it: chevrons pointing apart to show more, together to show
 /// less. SF Symbols has only the first, so the second is two chevrons stacked.
+extension ChatView {
+    /// Spaces, DMs and group DMs have threads, as in Google Chat; a DM with an app doesn't.
+    static func offersThreads(_ room: Conversation) -> Bool { room.app == nil }
+    /// The empty composer's prompt; with history off it says so, as Google Chat's composer does.
+    static func composerPrompt(_ conversation: Conversation) -> String { conversation.historyOff == true ? "History is off" : "Message" }
+    static func invitationsTitle(_ count: Int) -> String { count == 1 ? "1 space invitation" : "\(count) space invitations" }
+}
+
 struct ShowAllIcon: View {
     let open: Bool
     var body: some View {
@@ -1033,5 +1165,62 @@ struct ShowAllIcon: View {
         } else {
             Image(systemName: "chevron.up.chevron.down").foregroundStyle(.secondary)
         }
+    }
+}
+
+/// A file dropped on the conversation: one from Finder, used where it is, or a promised one (Photos, a screenshot's
+/// thumbnail, the timeline's own attachments), received into a temporary copy as the composer receives it.
+struct DroppedFile: Transferable {
+    let url: URL
+    static var transferRepresentation: some TransferRepresentation {
+        ProxyRepresentation(importing: { (url: URL) in DroppedFile(url: url) })
+        FileRepresentation(importedContentType: .item) { received in
+            // SwiftUI deletes the received file once this returns: keep a copy.
+            let folder = FileManager.default.temporaryDirectory.appending(path: "Parley Uploads/\(UUID().uuidString)")
+            try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+            let copy = folder.appending(path: received.file.lastPathComponent)
+            try FileManager.default.copyItem(at: received.file, to: copy)
+            return DroppedFile(url: copy)
+        }
+    }
+}
+
+/// Google Chat's Create a space: a name and, if wanted, an emoji. The space opens once Google has made it.
+struct NewSpaceSheet: View {
+    let store: ChatStore
+    @State private var name = ""
+    @State private var emoji: String?
+    @State private var pickingEmoji = false
+    @State private var working = false
+    @State private var problem: String?
+    @Environment(\.dismiss) private var dismiss
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("New Space").font(.headline)
+            HStack(spacing: 10) {
+                Button { pickingEmoji = true } label: {
+                    Avatar(name: name.isEmpty ? "?" : name, space: true, size: 36, emoji: emoji)
+                }.buttonStyle(.plain).help("Choose an emoji")
+                    .popover(isPresented: $pickingEmoji) {
+                        EmojiPicker(frequent: EmojiUsage().top(EmojiPicker.columns), pick: { emoji = $0; pickingEmoji = false },
+                                    close: { pickingEmoji = false })
+                    }
+                TextField("Space name", text: $name).textFieldStyle(.roundedBorder)
+                    .onChange(of: name) { if name.count > 128 { name = String(name.prefix(128)) } }   // Google Chat's limit
+            }
+            if let problem { Label(problem, systemImage: "exclamationmark.triangle").font(.caption).foregroundStyle(.red) }
+            HStack {
+                Spacer()
+                if working { ProgressView().controlSize(.small) }
+                Button("Cancel") { dismiss() }.keyboardShortcut(.cancelAction)
+                Button("Create") {
+                    working = true; problem = nil
+                    Task {
+                        defer { working = false }
+                        do { try await store.createSpace(name: name, emoji: emoji); dismiss() } catch { problem = error.localizedDescription }
+                    }
+                }.keyboardShortcut(.defaultAction).disabled(working || name.trimmingCharacters(in: .whitespaces).isEmpty)
+            }
+        }.padding(18).frame(width: 380)
     }
 }

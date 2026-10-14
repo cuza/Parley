@@ -28,6 +28,12 @@ extension AuthTests {
         let body = Self.body(try #require(exchange.requests.last { $0.url?.path == "/api/paginated_world" }))
         let sections = Data([0x12, 0x03, 0x08, 0xC8, 0x01, 0x12, 0x0A, 0x08, 0x78, 0x22, 0x06, 0x18, 0x01, 0x20, 0x01, 0x30, 0x01])
         #expect(body.range(of: sections) != nil)
+        // My sidebar sections in an entry of their own: with fetch_roster_sections on the unfiltered section, Google
+        // answers with the sections and no conversations.
+        let sent = try Dynamite_PaginatedWorldRequest(serializedBytes: body)
+        #expect(!sent.worldSectionRequests[0].fetchRosterSections)
+        #expect(sent.worldSectionRequests.filter(\.fetchRosterSections).count == 1)
+        #expect(sent.worldSectionRequests.first(where: \.fetchRosterSections)?.hasWorldFilter == true, "its own filter, so paging tokens can't mix")
     }
 
     @Test func eachSectionPagesWithItsOwnFilterAndToken() async throws {
@@ -50,7 +56,7 @@ extension AuthTests {
         #expect(rooms.map(\.name) == ["Alex", "Sam", "Maria"])
         let requests = try Self.world(exchange)
         #expect(requests.count == 2)
-        #expect(requests[0].worldSectionRequests.map(\.paginationToken) == ["", "", "", "", "", "", ""])   // with Home's five
+        #expect(requests[0].worldSectionRequests.map(\.paginationToken) == ["", "", "", "", "", "", "", ""])   // with my sections' and Home's five
         let paged = requests[1].worldSectionRequests
         #expect(paged.map(\.paginationToken) == ["a1", "i1"])
         #expect(paged.map(\.hasWorldFilter) == [false, true] && paged[1].worldFilter == Self.invited)

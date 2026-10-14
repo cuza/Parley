@@ -19,8 +19,10 @@ actor DynamiteBackend: ChatBackend {
     // ponytail: replies come from the last list_topics page (≤20 per topic) plus pushes. Full threads need list_messages (schema not yet decoded).
     private var threads: [MessageID: [Message]] = [:]
     private var heads: [String: Message] = [:]   // "<conversation>/<topic>" → thread head
+    private var memberRoles: [ConversationID: [PersonID: MemberRole]] = [:]   // from the last list_members read
     private var oldestSort: [ConversationID: Int64] = [:]
     private var reachedStart: Set<ConversationID> = []
+    private var newestSort: [ConversationID: Int64] = [:]   // a window's newest topic, where newer pages continue
     private var threadStart: Set<ThreadID> = []
     private var channel: Task<Void, Never>?
     private var realtimeChannel: PunctualChannel?
@@ -31,7 +33,7 @@ actor DynamiteBackend: ChatBackend {
     // While the realtime channel is down, events are polled with catch_up_user, as a reconnect replays them.
     private var poller: Task<Void, Never>?
     private var channelState: ConnectionState = .connecting
-    private var lastPoll: ContinuousClock.Instant?
+    private var polled = false   // logs the first round only
     static let pollInterval: Duration = .seconds(10)
     private var newest: [ConversationID: Int64] = [:]   // newest server create time seen (µs), for mark-read
     private var readUpTo: [ConversationID: Int64] = [:]
@@ -43,6 +45,7 @@ actor DynamiteBackend: ChatBackend {
     // A loaded message's attachments, chips (annotations not rebuilt from its text) and quote, re-sent on edit so they survive it.
     // ponytail: kept for every loaded message with attachments or a quote, like `threads`; prune with them if memory ever matters.
     private var attached: [MessageID: (text: String, annotations: [Dynamite_Annotation], quote: Dynamite_QuotedMessageRef?)] = [:]
+    private var seen: Set<MessageID> = []   // every message loaded here, so an edit knows whether it lacks what it keeps
 
     private let vault: any SessionVault
     private let media: URLSession
@@ -72,7 +75,8 @@ actor DynamiteBackend: ChatBackend {
             channel?.cancel()
             let punctual = PunctualChannel(authorizer: authorizer,
                                            onEvent: { [weak self] in await self?.apply($0) },
-                                           onState: { [weak self] in await self?.channelChanged($0) })
+                                           onState: { [weak self] in await self?.channelChanged($0) },
+                                           onGap: { [weak self] in await self?.reload() })
             await punctual.subscribe(watched)
             self.realtimeChannel = punctual
             channel = Task { await punctual.run() }
@@ -121,9 +125,12 @@ actor DynamiteBackend: ChatBackend {
         await resolve(sorted.flatMap(DynamiteMapper.memberIDs))
         await resolve(messages: topics.flatMap(\.replies))
         home = topics.compactMap { DynamiteMapper.homeThread($0, selfID: selfID, people: people) }.sorted { $0.time > $1.time }
+        // A thread opened from Home shows this first message: known here, so reactions and edits to it reach the screen.
+        for thread in home where heads[Self.topicKey(thread.head.id)] == nil { heads[Self.topicKey(thread.head.id)] = thread.head }
         return sorted.compactMap { DynamiteMapper.conversation($0, selfID: selfID, people: people) }
     }
     private var home: [HomeThread] = []
+    private var rosterSections: [SidebarSection] = []   // from the last world read
     func homeThreads() -> [HomeThread] { home }
     /// Home's sections, as Google Chat's web client sends them; the topics they bring arrive in the response's field 7.
     /// The section replies only echo their filters (no items, no token). Checked live: the followed threads come back
@@ -167,7 +174,11 @@ actor DynamiteBackend: ChatBackend {
         // Joined conversations (unfiltered), plus DMs someone started with us that we haven't accepted yet:
         // The mobile app asks for those in their own section, the web lists them in the sidebar.
         let invited = Dynamite_WorldFilter.with { $0.membershipState = .memberInvited; $0.inviteCategory = .regularInvite; $0.groupType = .dm }
-        var sections: [Dynamite_WorldSectionRequest] = [.with { $0.pageSize = 200 }, .with { $0.pageSize = 120; $0.worldFilter = invited }] + Self.homeSections
+        // My sidebar sections come in an entry of their own: asked on the unfiltered section, Google answers with the
+        // sections and no conversations. Its own filter (spaces) keeps its paging token apart from the others'.
+        let rosterSections = Dynamite_WorldSectionRequest.with { $0.pageSize = 1; $0.fetchRosterSections = true; $0.worldFilter.groupType = .room }
+        var sections: [Dynamite_WorldSectionRequest] = [.with { $0.pageSize = 200 }, .with { $0.pageSize = 120; $0.worldFilter = invited },
+                                                        rosterSections] + Self.homeSections
         var items: [Dynamite_WorldItemLite] = [], topics: [Dynamite_Topic] = []
         var seen: Set<String> = []
         for page in 0... {
@@ -180,11 +191,14 @@ actor DynamiteBackend: ChatBackend {
             }
             let response: Dynamite_PaginatedWorldResponse = try await rpc("paginated_world", request)
             items += response.worldItems + response.worldSectionResponses.flatMap(\.worldItems)
-            if page == 0 { topics = response.shortcutItems.compactMap { if case .topic(let topic)? = $0.item { topic } else { nil } } }
+            if page == 0 {
+                topics = response.shortcutItems.compactMap { if case .topic(let topic)? = $0.item { topic } else { nil } }
+                self.rosterSections = response.worldSectionResponses.flatMap(\.rosterSections).compactMap { Self.section($0.section) }
+            }
             // A section's response echoes its filter; that is how its next token finds it. An unmatched token is dropped.
             let more = response.worldSectionResponses.filter { $0.moreItems && !$0.paginationToken.isEmpty }
             // Home's sections never page (no token), and the followed-threads one shares the unfiltered section's empty filter.
-            sections = sections.filter { !$0.hasView && !$0.hasConstraints }.compactMap { section in
+            sections = sections.filter { !$0.hasView && !$0.hasConstraints && !$0.fetchRosterSections }.compactMap { section in
                 more.first { $0.worldFilter == section.worldFilter }.map { next in
                     var section = section; section.paginationToken = next.paginationToken; return section
                 }
@@ -204,35 +218,97 @@ actor DynamiteBackend: ChatBackend {
         if let thread { return try await threadPage(thread, in: conversation, older: before != nil) }
         let older = before != nil
         if older, reachedStart.contains(conversation) || oldestSort[conversation] == nil { return MessagePage(messages: [], hasMore: false) }
-        let request = try Dynamite_ListTopicsRequest.with { r in
-            r.requestHeader = DynamiteClient.header
-            r.groupID = try DynamiteID.group(conversation)
-            r.field11 = 2   // as Google Chat sends it (see the proto)
-            r.pageSizeForTopics = 30
-            // Google Chat always asks for TOPIC_METADATA: it carries each thread's real reply count. READ_RECEIPTS fills field 6.
-            r.fetchOptions = older ? [.topicMetadata] : [.topicMetadata, .readReceipts]
-            r.pageSizeForUnreadReplies = 20
-            r.pageSizeForReadReplies = 20
-            if older, let anchor = oldestSort[conversation] { r.filter.olderThan = anchor }   // PAGINATION_BACKWARDS
-        }
-        let response: Dynamite_ListTopicsResponse = try await rpc("list_topics", request)
-        if response.hasReadReceiptSet { receipts(response.readReceiptSet, in: conversation) }
-        saw(response.topics.flatMap(\.replies), in: conversation)
-        await resolve(messages: response.topics.flatMap(\.replies))
+        var filter: Dynamite_ListTopicsFilter?
+        if older, let anchor = oldestSort[conversation] { filter = .with { $0.olderThan = anchor } }   // PAGINATION_BACKWARDS
+        let (response, heads) = try await topicsPage(in: conversation, filter: filter, withReceipts: !older)
         let oldest = response.topics.map(\.sortTime).filter { $0 > 0 }.min()
         if older, let anchor = oldestSort[conversation] {
             // Nothing older than the anchor: we're at the start, or the server ignored the anchor. Either way, stop.
             if let oldest, oldest < anchor { oldestSort[conversation] = oldest } else { reachedStart.insert(conversation) }
         } else {
             oldestSort[conversation] = oldest   // a fresh most-recent load restarts paging from its own oldest thread
+            newestSort[conversation] = nil
         }
         if response.containsFirstTopic { reachedStart.insert(conversation) } else if !older { reachedStart.remove(conversation) }
+        return MessagePage(messages: heads, hasMore: !reachedStart.contains(conversation))
+    }
+    /// `list_topics` anchored on the message's topic: the page around it, as web Chat opens an old search result.
+    func messages(around message: MessageID, in conversation: ConversationID) async throws -> MessagePage {
+        let group = try DynamiteID.group(conversation)
+        let topic = try DynamiteID.topic(of: message)
+        let (response, heads) = try await topicsPage(in: conversation, filter: .with { $0.aroundTopic = .with { $0.topicID = topic; $0.groupID = group } },
+                                                     withReceipts: true)
+        let sorts = response.topics.map(\.sortTime).filter { $0 > 0 }
+        oldestSort[conversation] = sorts.min(); newestSort[conversation] = sorts.max()
+        if response.containsFirstTopic { reachedStart.insert(conversation) } else { reachedStart.remove(conversation) }
+        return MessagePage(messages: heads, hasMore: !reachedStart.contains(conversation), hasNewer: !response.containsLastTopic)
+    }
+    /// `list_topics` newer than the window's newest topic (PAGINATION_FORWARDS).
+    func newerMessages(in conversation: ConversationID) async throws -> MessagePage {
+        guard let anchor = newestSort[conversation] else { return MessagePage(messages: [], hasMore: !reachedStart.contains(conversation)) }
+        let (response, heads) = try await topicsPage(in: conversation, filter: .with { $0.newerThan = anchor }, withReceipts: false)
+        guard let newest = response.topics.map(\.sortTime).max(), newest > anchor else {
+            return MessagePage(messages: heads, hasMore: !reachedStart.contains(conversation))   // nothing newer: the window met the present
+        }
+        newestSort[conversation] = newest
+        return MessagePage(messages: heads, hasMore: !reachedStart.contains(conversation), hasNewer: !response.containsLastTopic)
+    }
+    /// `list_topics` with the thread-summary flag, as Google Chat's Active threads asks: Google sends only threads with replies.
+    func threads(in conversation: ConversationID) async throws -> [ThreadSummary] {
+        let group = try DynamiteID.group(conversation)
+        let response: Dynamite_ListTopicsResponse = try await rpc("list_topics", Dynamite_ListTopicsRequest.with { r in
+            r.requestHeader = DynamiteClient.header
+            r.groupID = group
+            r.field11 = 1   // newest reply first
+            r.pageSizeForTopics = 40
+            r.fetchOptions = [.topicMetadata]
+            r.pageSizeForUnreadReplies = 1000
+            r.pageSizeForReadReplies = 20
+            r.filter.threadSummary = true
+        })
+        await resolve(messages: response.topics.flatMap(\.replies))
+        let summaries = response.topics.compactMap { topic -> ThreadSummary? in
+            let messages = DynamiteMapper.topic(topic, in: conversation, selfID: selfID, people: people)
+            guard let head = messages.first else { return nil }
+            threads[head.id] = Array(messages.dropFirst()); heads[Self.topicKey(head.id)] = head
+            let summary = topic.topicReadState.replySummary
+            return ThreadSummary(head: head, replyCount: Int(summary.totalReplyCount), unreadCount: Int(summary.unreadReplyCount),
+                                 mentionsMe: !summary.unreadAttributes.isEmpty,
+                                 following: topic.topicReadState.topicLabelID.contains { $0.type == .threadFollowed },
+                                 lastReply: DynamiteMapper.date(topic.sortTime))
+        }
+        // Seen up to the newest thread, as Google Chat marks the list each time it shows it; a failure only leaves the badge.
+        if let newest = response.topics.map(\.sortTime).max() {
+            let _: Dynamite_MarkGroupReadstateResponse? = try? await rpc("mark_group_readstate", Dynamite_MarkGroupReadstateRequest.with {
+                $0.requestHeader = DynamiteClient.header; $0.id = group; $0.threadSummaryReadTime = newest
+            })
+        }
+        return summaries
+    }
+    /// One `list_topics` page of a conversation's main timeline: its thread heads, each thread's loaded replies kept.
+    private func topicsPage(in conversation: ConversationID, filter: Dynamite_ListTopicsFilter?, withReceipts: Bool)
+        async throws -> (Dynamite_ListTopicsResponse, [Message]) {
+        let request = try Dynamite_ListTopicsRequest.with { r in
+            r.requestHeader = DynamiteClient.header
+            r.groupID = try DynamiteID.group(conversation)
+            r.field11 = 2   // as Google Chat sends it (see the proto)
+            r.pageSizeForTopics = 30
+            // Google Chat always asks for TOPIC_METADATA: it carries each thread's real reply count. READ_RECEIPTS fills field 6.
+            r.fetchOptions = withReceipts ? [.topicMetadata, .readReceipts] : [.topicMetadata]
+            r.pageSizeForUnreadReplies = 20
+            r.pageSizeForReadReplies = 20
+            if let filter { r.filter = filter }
+        }
+        let response: Dynamite_ListTopicsResponse = try await rpc("list_topics", request)
+        if response.hasReadReceiptSet { receipts(response.readReceiptSet, in: conversation) }
+        saw(response.topics.flatMap(\.replies), in: conversation)
+        await resolve(messages: response.topics.flatMap(\.replies))
         let topics = response.topics.map { DynamiteMapper.topic($0, in: conversation, selfID: selfID, people: people) }.filter { !$0.isEmpty }
         for topic in topics {
             threads[topic[0].id] = Array(topic.dropFirst())
             heads[Self.topicKey(topic[0].id)] = topic[0]
         }
-        return MessagePage(messages: topics.map { $0[0] }, hasMore: !reachedStart.contains(conversation))
+        return (response, topics.map { $0[0] })
     }
 
     func send(_ draft: MessageDraft, to conversation: ConversationID, thread: ThreadID?) async throws -> Message {
@@ -358,7 +434,12 @@ actor DynamiteBackend: ChatBackend {
             if let thread { r.context.topicID = try .with { $0.topicID = try DynamiteID.topic(of: thread); $0.groupID = group } }
             else { r.context.groupID = group }
         }
-        let _: Dynamite_SetTypingStateResponse = try await rpc("set_typing_state", request)
+        do { let _: Dynamite_SetTypingStateResponse = try await rpc("set_typing_state", request) }
+        catch {
+            // Which kind of conversation refused it; the id stays private.
+            log.error("typing not sent in a \(conversation.split(separator: "/").first ?? "?", privacy: .public)\(thread == nil ? "" : " thread", privacy: .public) (\(conversation, privacy: .private))")
+            throw error
+        }
     }
     func watch(_ conversations: Set<ConversationID>) async {
         watched = conversations
@@ -414,6 +495,25 @@ actor DynamiteBackend: ChatBackend {
 
     /// Others compare this time with server create times to show our read receipt,
     /// so it is the newest message's time, never the Mac's clock unless nothing is loaded, and it only moves forward.
+    func markThreadRead(_ thread: ThreadID, upTo time: Date) async throws {
+        let request = try Dynamite_MarkTopicReadstateRequest.with { r in
+            r.requestHeader = DynamiteClient.header
+            r.topicID = try .with { $0.topicID = try DynamiteID.topic(of: thread); $0.groupID = try DynamiteID.group(Self.conversation(of: thread)) }
+            r.lastReadTime = Int64((time.timeIntervalSince1970 * 1_000_000).rounded())
+        }
+        let _: Dynamite_MarkTopicReadstateResponse = try await rpc("mark_topic_readstate", request)
+    }
+    /// Google Chat's thread mute is following's opposite; the server answers with the THREAD_FOLLOWED label event.
+    func setFollowing(_ following: Bool, thread: ThreadID) async throws {
+        let request = try Dynamite_MarkTopicMuteStateRequest.with { r in
+            r.requestHeader = DynamiteClient.header
+            r.topicID = try .with { $0.topicID = try DynamiteID.topic(of: thread); $0.groupID = try DynamiteID.group(Self.conversation(of: thread)) }
+            r.muted = !following
+        }
+        let _: Dynamite_MarkTopicMuteStateResponse = try await rpc("mark_Topic_mute_state", request)
+    }
+    /// "space/x/t1/m1" → "space/x".
+    private static func conversation(of id: MessageID) -> ConversationID { id.split(separator: "/").prefix(2).joined(separator: "/") }
     func markRead(_ conversation: ConversationID) async throws {
         let time = max(newest[conversation] ?? Int64(Date.now.timeIntervalSince1970 * 1_000_000), readUpTo[conversation] ?? 0)
         readUpTo[conversation] = time
@@ -435,6 +535,21 @@ actor DynamiteBackend: ChatBackend {
         let newest = max(newest[conversation] ?? 0, latest[conversation] ?? 0)
         try await setUnreadMark((newest > 0 ? newest : Int64(Date.now.timeIntervalSince1970 * 1_000_000)) - 1, conversation)
         markedUnread.insert(conversation)
+    }
+    /// As Google Chat marks it: the message's time − 1 µs, on the conversation, or on its thread for a reply.
+    func markUnread(from message: Message) async throws {
+        let time = Int64((message.createdAt.timeIntervalSince1970 * 1_000_000).rounded()) - 1
+        guard let thread = message.threadID else {
+            try await setUnreadMark(time, message.conversationID)
+            markedUnread.insert(message.conversationID)
+            return
+        }
+        let request = try Dynamite_SetTopicUnreadTimestampRequest.with { r in
+            r.requestHeader = DynamiteClient.header
+            r.topicID = try .with { $0.topicID = try DynamiteID.topic(of: thread); $0.groupID = try DynamiteID.group(message.conversationID) }
+            r.unreadTimestamp = time
+        }
+        let _: Dynamite_SetTopicUnreadTimestampResponse = try await rpc("set_topic_unread_timestamp", request)
     }
     private func setUnreadMark(_ time: Int64, _ conversation: ConversationID) async throws {
         let _: Dynamite_SetMarkAsUnreadTimestampResponse = try await rpc("set_mark_as_unread_timestamp", try Dynamite_SetMarkAsUnreadTimestampRequest.with { r in
@@ -506,6 +621,38 @@ actor DynamiteBackend: ChatBackend {
             r.groupID = try DynamiteID.group(conversation)
         })
     }
+    func updateDetails(_ conversation: ConversationID, description: String, guidelines: String) async throws {
+        let _: Dynamite_UpdateGroupResponse = try await rpc("update_group", try Dynamite_UpdateGroupRequest.with { r in
+            r.requestHeader = DynamiteClient.header
+            r.groupDetails = .with { $0.description_p = description; $0.guidelines = guidelines }
+            r.updateMasks = [.details]
+            r.groupID = try DynamiteID.group(conversation)
+        })
+    }
+    /// `update_membership_role`, one change, as Google Chat's member list sends it.
+    func setRole(_ role: MemberRole, of person: PersonID, in conversation: ConversationID) async throws {
+        let group = try DynamiteID.group(conversation)
+        let _: Dynamite_UpdateMembershipRoleResponse = try await rpc("update_membership_role", Dynamite_UpdateMembershipRoleRequest.with { r in
+            r.requestHeader = DynamiteClient.header
+            r.changes = [.with {
+                $0.role = switch role { case .member: .member; case .manager: .manager; case .owner: .owner }
+                $0.userID.id = person
+                $0.groupID = group
+            }]
+        })
+        memberRoles[conversation, default: [:]][person] = role
+    }
+    /// `update_group_retention_settings`, with the id Google Chat gives the system message that announces it.
+    func setHistory(_ on: Bool, in conversation: ConversationID) async throws {
+        let _: Dynamite_UpdateGroupRetentionSettingsResponse = try await rpc("update_group_retention_settings",
+            try Dynamite_UpdateGroupRetentionSettingsRequest.with { r in
+                r.requestHeader = DynamiteClient.header
+                r.groupID = try DynamiteID.group(conversation)
+                r.retention.state = on ? .permanent : .ephemeralOneDay
+                r.localID = DynamiteID.messageID(for: UUID().uuidString)
+            })
+    }
+    func roles(in conversation: ConversationID) -> [PersonID: MemberRole] { memberRoles[conversation] ?? [:] }
     func setHidden(_ hidden: Bool, conversation: ConversationID) async throws {
         let _: Dynamite_HideGroupResponse = try await rpc("hide_group", try Dynamite_HideGroupRequest.with { r in
             r.requestHeader = DynamiteClient.header
@@ -522,7 +669,12 @@ actor DynamiteBackend: ChatBackend {
                 r.membershipIds = [.with { $0.memberID.userID.id = selfID; $0.groupID = group }]
             })
         let caps = response.entries.first?.capabilities
-        return ConversationPermissions(editProfile: caps?.canEditSpaceProfile == true, manageMembers: caps?.canManageMembers == true)
+        return ConversationPermissions(editProfile: caps?.canEditSpaceProfile == true, manageMembers: caps?.canManageMembers == true,
+                                       typing: caps.map { !$0.hasCanTriggerTypingIndicator || $0.canTriggerTypingIndicator } ?? true,
+                                       editDetails: caps?.canEditDescription == true || caps?.canEditGuidelines == true,
+                                       deleteSpace: caps?.canDeleteGroup == true, changeRoles: caps?.canUpdateMemberRoles == true,
+                                       changeManagers: caps?.canUpdateManagerRoles == true, toggleHistory: caps?.canToggleHistory == true,
+                                       reportMessages: caps?.canReportMessages == true)
     }
 
     func edit(_ id: MessageID, text: String, formatting: [TextStyleRange] = []) async throws {
@@ -536,7 +688,7 @@ actor DynamiteBackend: ChatBackend {
             r.messageInfo.acceptFormatAnnotations = !formats.isEmpty
             if let quote = attached[id]?.quote { r.messageInfo.quotedMessage = quote }
         }
-        if attached[id] == nil { log.notice("Editing a message not loaded here: any attachments or quote it has are not re-sent") }
+        if !seen.contains(id) { log.notice("Editing a message not loaded here: any attachments or quote it has are not re-sent") }
         let response: Dynamite_EditMessageResponse = try await rpc("edit_message", request)
         let conversation = String(id.split(separator: "/").prefix(2).joined(separator: "/"))
         saw([response.message], in: conversation)
@@ -608,12 +760,18 @@ actor DynamiteBackend: ChatBackend {
         }
         return reactions.filter { !$0.people.isEmpty }
     }
-    func searchMessages(_ query: String, cursor: String?) async throws -> SearchPage {
+    func searchMessages(_ query: String, in conversation: ConversationID?, cursor: String?) async throws -> SearchPage {
+        let group = try conversation.map(DynamiteID.group)
         let request = Dynamite_SearchMessagesV2Request.with { r in
             r.requestHeader = DynamiteClient.header
             r.size = 20
             if let cursor { r.cursor = cursor }
             r.filter = .init()   // Google Chat always sends the filter, empty when unfiltered
+            if let group {
+                // One conversation, as Google Chat's "said in" filter sends it; Google refuses the scope without a sort.
+                r.filter.scope.conversations = [.with { $0.groupID = group; $0.kind = 1 }]
+                r.sort.operator = .relevance
+            }
             r.query = query
         }
         let response: Dynamite_SearchMessagesV2Response = try await rpc("search_messages_v2", request)
@@ -989,6 +1147,8 @@ actor DynamiteBackend: ChatBackend {
                 await conversationChanged(event, body)
             case .groupHideChanged:   // hidden or shown again, here or elsewhere: read back, marked as the event says
                 await conversationChanged(event, body, hidden: body.groupHideChanged.hidden)
+            case .groupLabelApplied, .groupLabelRemoved, .rosterSectionCreated, .rosterSectionDeleted, .rosterSectionUpdated:
+                reload()   // my sidebar sections changed, here or on another device: read them back with the conversations
             case .topicLabelApplied, .topicLabelRemoved:
                 let label = body.topicLabel, topic = label.topicID
                 guard label.label.type == .threadFollowed, !topic.topicID.isEmpty,
@@ -1093,7 +1253,8 @@ actor DynamiteBackend: ChatBackend {
         continuation.yield(.messageDeleted(id))
         attached[id] = nil
         let topic = Self.topicKey(id)
-        guard var head = heads[topic], head.id != id, let index = threads[head.id]?.firstIndex(where: { $0.id == id }) else { return }
+        if heads[topic]?.id == id { heads[topic] = nil; threads[id] = nil; return }   // the thread goes with its first message
+        guard var head = heads[topic], let index = threads[head.id]?.firstIndex(where: { $0.id == id }) else { return }
         threads[head.id]?.remove(at: index)
         head.replyCount = max(0, head.replyCount - 1)
         heads[topic] = head
@@ -1126,12 +1287,9 @@ actor DynamiteBackend: ChatBackend {
         return [message, head]
     }
 
-    /// The channel's state as the app sees it: while polling keeps events coming, a channel that can't hold a session
-    /// still counts as connected; a lost session always shows.
+    /// The channel's state as the app sees it. Polling doesn't stand in for it: catch_up_user leaves out new messages.
     private func channelChanged(_ state: ConnectionState) {
         channelState = state
-        if state == .connected || state == .signedOut { continuation.yield(.connectionChanged(state)); return }
-        if let lastPoll, ContinuousClock.now - lastPoll < Self.pollInterval * 3 { return }
         continuation.yield(.connectionChanged(state))
     }
     /// One round of polling: the events since the last one, announced as if pushed (notifications included). Events at
@@ -1150,16 +1308,17 @@ actor DynamiteBackend: ChatBackend {
             for event in response.events where max(event.userRevision.timestamp, event.groupRevision.timestamp) > from {
                 await apply(event, live: true)
             }
-            let first = lastPoll == nil
-            lastPoll = .now
-            if first || channelState != .connected { continuation.yield(.connectionChanged(.connected)) }
-            if first { log.notice("Polling for events: the realtime channel is down") }
+            if !polled { log.notice("Polling for events: the realtime channel is down") }
+            polled = true
             return true
         } catch {
             log.error("Polling failed: \(PunctualChannel.reason(error), privacy: .public)")
             return false
         }
     }
+
+    /// The realtime stream restarted without its missed changes: reload the conversations and the open one.
+    private func reload() { continuation.yield(.resync) }
 
     /// Events missed while the channel was down (Google Chat: catch_up_user on every SESSION_READY); else a full resync.
     private func catchUp() async {
@@ -1196,6 +1355,7 @@ actor DynamiteBackend: ChatBackend {
         if let time = protos.map(\.createTime).max(), time > newest[conversation] ?? 0 { newest[conversation] = time }
         for proto in protos where !proto.id.messageID.isEmpty {
             let id = DynamiteID.message(conversation, topic: proto.id.parentID.topicID.topicID, message: proto.id.messageID)
+            seen.insert(id)
             let kept = proto.annotations.filter { annotation in
                 switch annotation.metadata {
                 case .formatMetadata, .userMentionMetadata, .customEmojiMetadata: false   // rebuilt from the edited text's formatting
@@ -1256,6 +1416,10 @@ actor DynamiteBackend: ChatBackend {
             }
             let response: Dynamite_ListMembersResponse = try await rpc("list_members", request)
             people += response.members.filter { !$0.user.userID.id.isEmpty }.map { DynamiteMapper.person($0.user) }
+            for membership in response.memberships where membership.hasRole {
+                let role: MemberRole? = switch membership.role { case .owner: .owner; case .manager: .manager; case .member: .member; default: nil }
+                memberRoles[conversation, default: [:]][membership.id.memberID.userID.id] = role
+            }
             guard !response.nextPageToken.isEmpty else { break }
             token = response.nextPageToken
         }
@@ -1321,7 +1485,7 @@ actor DynamiteBackend: ChatBackend {
             let response: Dynamite_CreateDmResponse = try await rpc("create_dm_extended", Dynamite_CreateDmRequest.with { r in
                 r.requestHeader = DynamiteClient.header
                 r.members = invitees
-                r.retentionSettings.state = 1   // PERMANENT: history on
+                r.retentionSettings.state = .permanent   // history on
                 r.flag8 = false
                 r.spaceOrigin = 12   // SUGGESTED_CONTACT, as web Chat sends it
             })
@@ -1349,6 +1513,118 @@ actor DynamiteBackend: ChatBackend {
         return Conversation(id: id, name: members.map(\.name).sorted().joined(separator: ", "), kind: kind,
                             members: [people[selfID] ?? Person(id: selfID, name: "Me")] + members,
                             avatarURL: kind == .direct ? members.first?.avatarURL : nil)
+    }
+    func sidebarSections() -> [SidebarSection] { rosterSections }
+    private static func section(_ proto: Dynamite_RosterSection) -> SidebarSection? {
+        guard let kind = SidebarSection.Kind(rawValue: Int(proto.id.type)) else { return nil }
+        return SidebarSection(kind: kind, key: proto.id.secondaryKey, name: proto.name, position: Int(proto.sortOrder))
+    }
+    private static func sectionID(_ section: SidebarSection) -> Dynamite_RosterSectionId {
+        .with { $0.type = Int32(section.kind.rawValue); $0.label = .with { $0.type = 4; $0.value = section.key }; $0.secondaryKey = section.key }
+    }
+    /// `create_roster_section` as web Chat sends it: a placeholder key ("1") that Google replaces with the section's own.
+    func createSection(named name: String, at position: Int) async throws -> SidebarSection {
+        let response: Dynamite_CreateRosterSectionResponse = try await rpc("create_roster_section", Dynamite_CreateRosterSectionRequest.with { r in
+            r.requestHeader = DynamiteClient.header
+            r.section = .with {
+                $0.id = Self.sectionID(SidebarSection(kind: .custom, key: "1", position: position))
+                $0.sortOrder = Int64(position); $0.name = name; $0.contentSort.order = 1
+            }
+        })
+        guard let made = Self.section(response.section), !made.key.isEmpty else { throw AuthFailure.malformedProto }
+        return made
+    }
+    /// `update_roster_section` names the fields it changes by number, as web Chat sends it: 3 the name, 2 the position.
+    private func updateSection(_ section: SidebarSection, mask: Int32, _ change: (inout Dynamite_RosterSection) -> Void) async throws {
+        let _: Dynamite_UpdateRosterSectionResponse = try await rpc("update_roster_section", Dynamite_UpdateRosterSectionRequest.with { r in
+            r.requestHeader = DynamiteClient.header
+            r.section = .with { $0.id = Self.sectionID(section); change(&$0) }
+            r.mask.fields = [mask]
+        })
+    }
+    func renameSection(_ section: SidebarSection, to name: String) async throws { try await updateSection(section, mask: 3) { $0.name = name } }
+    func moveSection(_ section: SidebarSection, to position: Int) async throws { try await updateSection(section, mask: 2) { $0.sortOrder = Int64(position) } }
+    func deleteSection(_ section: SidebarSection) async throws {
+        let _: Dynamite_DeleteRosterSectionResponse = try await rpc("delete_roster_section", Dynamite_DeleteRosterSectionRequest.with {
+            $0.requestHeader = DynamiteClient.header; $0.id = Self.sectionID(section)
+        })
+    }
+    /// `remove_group_label` from the section it was in, then `apply_group_label` for the new one, as web Chat moves it.
+    func moveConversation(_ conversation: ConversationID, to section: String?, from previous: String?) async throws {
+        let group = try DynamiteID.group(conversation)
+        func label(_ path: String, _ key: String) async throws {
+            let _: Dynamite_GroupLabelResponse = try await rpc(path, Dynamite_GroupLabelRequest.with {
+                $0.requestHeader = DynamiteClient.header; $0.label = .with { $0.type = 4; $0.value = key }; $0.groupID = group
+            })
+        }
+        if let previous, previous != section { try await label("remove_group_label", previous) }
+        if let section, section != previous { try await label("apply_group_label", section) }
+    }
+    /// `block_entity`, as Google Chat's Block and report dialog sends it for a person.
+    func setBlocked(_ blocked: Bool, person: PersonID, dm: ConversationID?, report: Bool) async throws {
+        let dmGroup = try dm.map(DynamiteID.group)
+        let _: Dynamite_BlockEntityResponse = try await rpc("block_entity", Dynamite_BlockEntityRequest.with { r in
+            r.requestHeader = DynamiteClient.header
+            r.userID.id = person
+            r.blocked = blocked; r.report = blocked && report
+            if let dmGroup { r.dmGroupID = dmGroup }
+        })
+    }
+    func setBlocked(_ blocked: Bool, space: ConversationID, report: Bool) async throws {
+        let group = try DynamiteID.group(space)
+        let _: Dynamite_BlockEntityResponse = try await rpc("block_entity", Dynamite_BlockEntityRequest.with { r in
+            r.requestHeader = DynamiteClient.header
+            r.groupID = group
+            r.blocked = blocked; r.report = blocked && report
+        })
+    }
+    func blockedPeople() async throws -> [PersonID] {
+        let response: Dynamite_ListBlockedUsersResponse = try await rpc("list_blocked_users", Dynamite_ListBlockedUsersRequest.with { $0.requestHeader = DynamiteClient.header })
+        return response.userIds.map(\.id).filter { !$0.isEmpty }
+    }
+    func blockedSpaces() async throws -> [BlockedSpace] {
+        let response: Dynamite_ManageBlockedRoomsResponse = try await rpc("manage_blocked_rooms", Dynamite_ManageBlockedRoomsRequest.with { $0.requestHeader = DynamiteClient.header })
+        return response.rooms.compactMap { room in
+            DynamiteID.conversation(room.groupID).map { BlockedSpace(id: $0, name: room.name, blocked: DynamiteMapper.date(room.blockedTime)) }
+        }
+    }
+    /// `report_message`: the message, its last update time, the reason and the (optional) explanation.
+    func report(_ message: Message, reason: ReportReason, explanation: String) async throws {
+        let id = try DynamiteID.protoMessageID(message.id)
+        let _: Dynamite_ReportMessageResponse = try await rpc("report_message", Dynamite_ReportMessageRequest.with { r in
+            r.requestHeader = DynamiteClient.header
+            r.messageID = id
+            r.messageUpdateTime.micros = message.lastUpdateMicros ?? Int64(message.createdAt.timeIntervalSince1970 * 1_000_000)
+            r.reason.kind = Dynamite_ReportMessageRequest.Reason.Kind(rawValue: reason.rawValue) ?? .other
+            r.explanation = .init()
+            let text = explanation.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !text.isEmpty { r.explanation.text = text }
+        })
+    }
+    /// `create_group` as web Chat's Create a space sends it: a name, an optional emoji, no members.
+    func createSpace(name: String, emoji: String?) async throws -> Conversation {
+        let response: Dynamite_CreateGroupResponse = try await rpc("create_group", Dynamite_CreateGroupRequest.with { r in
+            r.requestHeader = DynamiteClient.header
+            r.space.name = name
+            r.space.options.values = [1]
+            r.space.avatarInfo = emoji.map { emoji in .with { $0.emoji.unicode = emoji } } ?? .init()
+            r.space.groupType = 4
+            r.space.field15 = false; r.space.field17 = false
+            r.localID = DynamiteID.messageID(for: UUID().uuidString)
+            r.shouldFindExistingSpace = false
+            r.spaceOrigin = 9   // HUMAN, as web Chat sends it
+        })
+        guard response.hasGroup, let id = DynamiteID.conversation(response.group.groupID) else { throw AuthFailure.malformedProto }
+        // The sidebar item arrives with the server's pushed change; until then, what we know.
+        return Conversation(id: id, name: name, kind: .space, members: [people[selfID] ?? Person(id: selfID, name: "Me")], emoji: emoji)
+    }
+    /// `delete_group_v2`; a space without a linked Google Group deletes the space only, as Google Chat's Delete does.
+    func deleteSpace(_ conversation: ConversationID) async throws {
+        let _: Dynamite_DeleteGroupResponse = try await rpc("delete_group_v2", try Dynamite_DeleteGroupRequest.with { r in
+            r.requestHeader = DynamiteClient.header
+            r.groupID = try DynamiteID.group(conversation)
+            r.keepRoster = true
+        })
     }
     /// `search_space_directory` as Google Chat's space browser sends it: one page of 20.
     func browseSpaces(_ query: String) async throws -> [SpaceListing] {

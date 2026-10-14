@@ -192,8 +192,8 @@ struct WindowMinimumTests {
     }
     /// Opening a pane grows the window only by what it lacks, never past what the shown areas need.
     @Test func openingAPaneGrowsTheWindowOnlyToWhatItNeeds() {
-        #expect(ChatView.widthForPane(window: 380, sidebar: 0) == 701)
-        #expect(ChatView.widthForPane(window: 760, sidebar: 230) == 931)
+        #expect(ChatView.widthForPane(window: 380, sidebar: 0) == 721)
+        #expect(ChatView.widthForPane(window: 760, sidebar: 230) == 951)
         #expect(ChatView.widthForPane(window: 1400, sidebar: 230) == 1400)   // room already: unchanged
     }
     @Test func theSidebarHidesWhenTheWindowNarrowsAndReturnsWhenItWidens() {

@@ -117,6 +117,7 @@ enum PunctualWire {
         case watermark(watch: Int, at: Int64)
         case change(watch: Int, payload: Data)
         case failed(watch: Int, code: Int)
+        case ended(watch: Int)               // the stream completed: Google won't resume it from the given start
         case close                           // the server asks for a new channel
     }
 
@@ -137,6 +138,7 @@ enum PunctualWire {
                     }
                 }
                 if change.count > 2, let mark = int((change[2] as? [Any])?.first) { result.append(.watermark(watch: watch, at: mark)) }
+                if change.count > 4, change[4] is [Any] { result.append(.ended(watch: watch)) }
             }
             if response.count > 2, let status = (response[2] as? [Any])?.first as? [Any], let code = int(status.first), code != 0 {
                 result.append(.failed(watch: watch, code: Int(code)))

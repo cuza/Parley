@@ -7,12 +7,22 @@ extension Conversation {
     /// With a `limit` (Settings ▸ Limit sidebar sections), Direct messages, Spaces and Apps show their first `limit` rows,
     /// plus any unread or `selected` one past them in its place; `hidden` is what the cap leaves out, still reported for a
     /// section the user `expanded` ("Show all") so it can offer "Show less".
-    static func sidebarSections(_ rooms: [Conversation], limit: Int? = nil, expanded: Set<String> = [], selected: ConversationID? = nil)
+    /// `custom`: the sidebar's sections from the server; my own ones take their conversations out of the default ones, and
+    /// all of them follow my order, after Shortcuts and Pinned.
+    static func sidebarSections(_ rooms: [Conversation], limit: Int? = nil, expanded: Set<String> = [], selected: ConversationID? = nil,
+                                custom: [SidebarSection] = [])
         -> [(title: String, rooms: [Conversation], hidden: [Conversation])] {
+        let mine = custom.filter { $0.kind == .custom }, keys = Set(mine.map(\.key))
         let rest = rooms.filter { $0.app != .gemini }
-        let sections = [("Shortcuts", rooms.filter { $0.app == .gemini }), ("Pinned", rest.filter(\.pinned)),
-                        ("Direct messages", rest.filter { !$0.pinned && $0.kind != .space && $0.app == nil }),
-                        ("Spaces", rest.filter { !$0.pinned && $0.kind == .space }), ("Apps", rest.filter { !$0.pinned && $0.app != nil })]
+        let unsorted = rest.filter { !$0.pinned && !($0.section.map(keys.contains) ?? false) }
+        func position(_ kind: SidebarSection.Kind, _ fallback: Int) -> Int { custom.first { $0.kind == kind }?.position ?? fallback }
+        let ordered: [(position: Int, title: String, rooms: [Conversation])] = ([
+            (position(.directMessages, 1), "Direct messages", unsorted.filter { $0.kind != .space && $0.app == nil }),
+            (position(.spaces, 2), "Spaces", unsorted.filter { $0.kind == .space }),
+            (position(.apps, 4), "Apps", unsorted.filter { $0.app != nil }),
+        ] + mine.map { section in (section.position, section.name, rest.filter { !$0.pinned && $0.section == section.key }) })
+            .sorted { $0.position < $1.position }
+        let sections = [("Shortcuts", rooms.filter { $0.app == .gemini }), ("Pinned", rest.filter(\.pinned))] + ordered.map { ($0.title, $0.rooms) }
         return sections.map { title, list in
             guard let limit, SidebarLimit.sections.contains(title), list.count > limit else { return (title, list, []) }
             var shown: [Conversation] = [], hidden: [Conversation] = []
@@ -23,12 +33,14 @@ extension Conversation {
         }
     }
     /// The sidebar's order, top to bottom: the rows it shows.
-    static func sidebarOrder(_ rooms: [Conversation], limit: Int? = nil, expanded: Set<String> = [], selected: ConversationID? = nil) -> [Conversation] {
-        sidebarSections(rooms, limit: limit, expanded: expanded, selected: selected).flatMap(\.rooms)
+    static func sidebarOrder(_ rooms: [Conversation], limit: Int? = nil, expanded: Set<String> = [], selected: ConversationID? = nil,
+                             custom: [SidebarSection] = []) -> [Conversation] {
+        sidebarSections(rooms, limit: limit, expanded: expanded, selected: selected, custom: custom).flatMap(\.rooms)
     }
     /// ⌘`number` (1-based) opens the conversation at that sidebar position.
-    static func atShortcut(_ number: Int, in rooms: [Conversation], limit: Int? = nil, expanded: Set<String> = [], selected: ConversationID? = nil) -> Conversation? {
-        let order = sidebarOrder(rooms, limit: limit, expanded: expanded, selected: selected)
+    static func atShortcut(_ number: Int, in rooms: [Conversation], limit: Int? = nil, expanded: Set<String> = [], selected: ConversationID? = nil,
+                           custom: [SidebarSection] = []) -> Conversation? {
+        let order = sidebarOrder(rooms, limit: limit, expanded: expanded, selected: selected, custom: custom)
         return order.indices.contains(number - 1) ? order[number - 1] : nil
     }
     /// The next (or previous) conversation with unread messages after `current`, wrapping around the sidebar. Limit sidebar

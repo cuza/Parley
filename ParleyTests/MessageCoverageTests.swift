@@ -23,6 +23,16 @@ struct MessageCoverageTests {
         message(text: text) { $0.appAttachments = [.with { $0.card.sections = [.with { $0.widgets = widgets }] }] }
     }
 
+    /// A quote carries the quoted message's state (3) and history setting (11): an active original and its history are
+    /// quiet; a deleted or edited original still reports, with its value, until quotes show it.
+    @Test func aQuotesOriginalStateReportsOnlyWhenItIsNotActive() throws {
+        func quoting(state: Dynamite_QuotedMessageMetadata.MessageState) -> Dynamite_Message {
+            message { $0.quotedMessageMetadata = .with { q in q.messageID.messageID = "q"; q.messageState = state; q.retentionSettings.state = .ephemeralOneDay } }
+        }
+        #expect(gaps(quoting(state: .active)).isEmpty)
+        #expect(gaps(quoting(state: .deleted)) == ["37.3=2"])
+        #expect(gaps(quoting(state: .otrEdited)) == ["37.3=3"])
+    }
     @Test func handledShapesStayQuiet() throws {
         #expect(gaps(message()).isEmpty)
         #expect(gaps(message { $0.botResponses = [.with { $0.type = 6; $0.bot.name = "App" }] }).isEmpty)   // an app suggestion
@@ -73,10 +83,9 @@ struct MessageCoverageTests {
     /// Every gap the real messages below have, so that a new one fails the test. Remove an entry once Parley draws it.
     static let knownUnsupported: Set<String> = [
         // Annotations: Drive and link extras, Meet details, Gemini's agent fields (not decoded yet)
-        "11.4.?5", "11.4.?13", "11.4.?14", "11.4.?15", "11.4.?17", "11.10.?23", "11.12.1.?5", "11.12.1.?8", "11.12.1.?10",
-        "11.12.1.?11", "11.12.1.?15", "11.12.1.?19", "11.12.?2", "11.12.?3", "11.16.6.1.1.?4", "11.16.6.?3", "11.?17",
+        "11.4.?5", "11.4.?13", "11.4.?14", "11.4.?15", "11.4.?17", "11.10.?23", "11.16.6.1.1.?4", "11.16.6.?3", "11.?17",
         // Quotes (not decoded yet)
-        "37.?3", "37.?8", "37.?11", "37.?14", "37.?18", "37.?21", "37.17.?2",
+        "37.?8", "37.?21", "37.17.?2",
     ]
     @Test func realMessagesAreHandledOrKnown() throws {
         var found = Set<String>()

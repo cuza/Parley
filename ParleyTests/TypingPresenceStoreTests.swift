@@ -59,6 +59,26 @@ import Testing
         clock.now = at(20); await store.typed("y", conversation: "maria", thread: nil)
         #expect(await fake.typingSent == ["maria/timeline", "maria/m1", "maria/timeline"])
     }
+    /// Google refuses typing in some threads (HTTP 403); Parley stops sending it there instead of every 5 s.
+    @Test func typingStopsInAComposerWhereItWasRefused() async throws {
+        let fake = FakeBackend()
+        await fake.refuseTyping(in: "maria/m1")
+        let (store, clock) = await store(fake)
+        await store.typed("h", conversation: "maria", thread: "m1")
+        clock.now = at(10); await store.typed("hi", conversation: "maria", thread: "m1")
+        await store.typed("hi", conversation: "maria", thread: nil)       // the main composer still sends
+        #expect(await fake.typingSent == ["maria/m1", "maria/timeline"])
+    }
+    /// Where Google doesn't let me send typing (capability 15), Parley doesn't try; it asks once per space.
+    @Test func typingIsNotSentWhereTheSpaceDoesNotAllowIt() async throws {
+        let fake = FakeBackend()
+        await fake.disallowTyping(in: "design")
+        let (store, _) = await store(fake)
+        await store.typed("hi", conversation: "design", thread: nil)
+        await store.typed("hi", conversation: "design", thread: "d1")
+        await store.typed("hi", conversation: "launch", thread: nil)
+        #expect(await fake.typingSent == ["launch/timeline"])
+    }
     @Test func theOpenConversationIsWatchedOnceEachTimeItChanges() async {
         let fake = FakeBackend()
         let (store, _) = await store(fake)
@@ -97,7 +117,9 @@ import Testing
         await store.refreshPresence()
         let asked = try #require(await fake.presenceRequests.first)
         #expect(Set(asked).isSuperset(of: ["maria", "alex"]) && !asked.contains("me"))
-        try await until { store.presence["maria"] != nil && store.presence["alex"] != nil }
+        // Every answer applied before the clock moves: one applied later would be stamped with the later time.
+        let answered = await fake.presenceAnswered
+        try await until { answered.allSatisfy { store.presence[$0] != nil } }
         #expect(store.presence["maria"] == .available && store.presence["alex"] == .away)
         clock.now = at(30); await store.refreshPresence()
         #expect(await fake.presenceRequests.count == 1)

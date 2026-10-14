@@ -92,6 +92,8 @@ enum NotificationSoundPolicy {
 
 struct NotificationSettings: Equatable, Sendable {
     static let enabledKey = "notificationsEnabled"
+    /// Bounce the Dock icon once per notification, as Slack offers it; off unless turned on.
+    static let bounceKey = "bounceDockIcon"
     // ponytail: one switch covers messages and reactions to mine; add a per-kind toggle if reaction banners prove noisy.
     var enabled = true
     static var current: NotificationSettings {
@@ -305,6 +307,8 @@ enum NotificationPolicy {
         return await center.notificationSettings().authorizationStatus
     }
     func post(_ notification: ChatNotification) {
+        // macOS bounces only while Parley is in the background, and stops when it comes to the front.
+        if UserDefaults.standard.bool(forKey: NotificationSettings.bounceKey) { NSApp.requestUserAttention(.informationalRequest) }
         let content = UNMutableNotificationContent()
         content.title = notification.title
         content.subtitle = notification.subtitle

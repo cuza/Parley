@@ -21,11 +21,12 @@ import Testing
         let saved = ImageCache.directory
         ImageCache.directory = folder
         defer { ImageCache.directory = saved }
-        ImageCache.shared.removeAllObjects()
+        // Only this picture's entry: clearing the whole shared cache would wipe other tests' pictures mid-test.
+        ImageCache.shared.removeObject(forKey: ImageCache.key(picture(token: "first")) as NSString)
         var fetches = 0
         let fetch: (Parley.Attachment, Bool) async throws -> Data = { _, _ in fetches += 1; return Self.png }
         #expect(try await ImageCache.load(picture(token: "first"), fetch) != nil)
-        ImageCache.shared.removeAllObjects()   // a relaunch: memory is empty, the disk is not
+        ImageCache.shared.removeObject(forKey: ImageCache.key(picture(token: "first")) as NSString)   // a relaunch: memory is empty, the disk is not
         #expect(try await ImageCache.load(picture(token: "second"), fetch) != nil)
         #expect(fetches == 1)
         #expect(ImageCache.key(picture(token: "first")) == ImageCache.key(picture(token: "second")))

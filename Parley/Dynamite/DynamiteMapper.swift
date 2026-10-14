@@ -86,7 +86,7 @@ enum DynamiteMapper {
                             emoji: entry.avatarInfo.emoji.unicode.isEmpty ? nil : entry.avatarInfo.emoji.unicode,
                             avatarURL: imageURL(entry.avatarURL),
                             memberCount: people.isEmpty ? nil : people.reduce(0) { $0 + Int($1.count) },
-                            joined: entry.membershipState == .memberJoined)
+                            joined: entry.membershipState == .memberJoined, invited: entry.membershipState == .memberInvited)
     }
 
     static func message(_ proto: Dynamite_Message, in conversation: ConversationID, selfID: String, people: [String: Person]) -> Message? {
@@ -108,7 +108,7 @@ enum DynamiteMapper {
             default: "Message deleted"
             }
             return Message(id: id, conversationID: conversation, sender: sender, text: text, createdAt: date(proto.createTime),
-                           formatting: [TextStyleRange(style: .italic, start: 0, length: (text as NSString).length)])
+                           formatting: [TextStyleRange(style: .italic, start: 0, length: (text as NSString).length)], tombstone: true)
         }
         guard proto.deleteTime == 0 else { return nil }
         // A system event becomes a service line when we can say what happened; the rest are hidden, as web shows no bubble.
@@ -1141,6 +1141,9 @@ enum DynamiteMapper {
                             emoji: item.avatarInfo.emoji.unicode.isEmpty ? nil : item.avatarInfo.emoji.unicode,
                             avatarURL: imageURL(item.avatarURL) ?? (kind == .direct ? others.first?.avatarURL : nil),
                             description: item.groupLite.spaceDetails.description_p.isEmpty ? nil : item.groupLite.spaceDetails.description_p,
+                            guidelines: item.groupLite.spaceDetails.guidelines.isEmpty ? nil : item.groupLite.spaceDetails.guidelines,
+                            historyOff: item.groupLite.hasRetention ? item.groupLite.retention.state == .ephemeralOneDay : nil,
+                            section: item.readState.labels.first { $0.type == 4 && !$0.value.isEmpty }?.value,
                             notificationLevel: item.readState.notificationSettings.hasLevel ? level(item.readState.notificationSettings.level) : nil,
                             app: kind != .direct ? nil : item.groupType == 11 ? .gemini
                                 : item.groupType == 2 || item.dmMembers.members.contains { $0.type == .bot } ? .bot : nil,

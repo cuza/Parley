@@ -61,7 +61,46 @@ extension Person {
 struct ConversationPermissions: Hashable, Sendable {
     var editProfile = false     // name and emoji
     var manageMembers = false   // add and remove people
+    var typing = true           // send a typing state; false where Google refuses it
+    var editDetails = false     // description and guidelines
+    var deleteSpace = false
+    var changeRoles = false     // make a member a manager, or back
+    var changeManagers = false  // change a manager's role
+    var toggleHistory = false
+    var reportMessages = false  // Workspace: report a message to the organisation's admin
 }
+/// A sidebar section, as Google Chat keeps them for me: the default ones and the ones I made, in my order.
+struct SidebarSection: Identifiable, Hashable, Sendable {
+    enum Kind: Int, Sendable { case directMessages = 1, spaces = 2, custom = 3, apps = 4, shortcuts = 5 }
+    var kind: Kind
+    var key = ""          // a custom section's key (its conversations carry it); empty for the default ones
+    var name = ""
+    var position: Int     // its place among the sections
+    var id: String { kind == .custom ? key : "default-\(kind.rawValue)" }
+}
+/// A space I blocked, as Google Chat's blocked list shows it.
+struct BlockedSpace: Identifiable, Hashable, Sendable {
+    let id: ConversationID
+    var name: String
+    var blocked: Date
+}
+/// Why a message is reported, in Google Chat's words and order; the raw value is what Google receives.
+enum ReportReason: Int, CaseIterable, Sendable {
+    case harassment = 1, discrimination = 2, explicitContent = 3, spam = 4, confidential = 5, sensitive = 7, other = 6
+    var title: String {
+        switch self {
+        case .harassment: "Harassment, offensive, or rude behavior"
+        case .discrimination: "Discrimination or harmful stereotypes against anyone, including protected groups"
+        case .explicitContent: "Explicit content that's graphic, violent, or otherwise inappropriate"
+        case .spam: "Spam"
+        case .confidential: "Confidential information"
+        case .sensitive: "Sensitive information"
+        case .other: "Something else"
+        }
+    }
+}
+/// A member's role in a space, as Google Chat names them.
+enum MemberRole: String, Codable, Sendable { case member, manager, owner }
 /// A space from the directory, joined or not.
 struct SpaceListing: Identifiable, Hashable, Sendable {
     let id: ConversationID
@@ -70,6 +109,12 @@ struct SpaceListing: Identifiable, Hashable, Sendable {
     var avatarURL: URL? = nil
     var memberCount: Int? = nil
     var joined = false
+    var invited = false   // someone invited me; joining accepts
+    /// The line under its name in Browse spaces: "Invited · 3 members", "1 member".
+    static func detail(_ space: SpaceListing) -> String? {
+        let members = space.memberCount.map { $0 == 1 ? "1 member" : "\($0) members" }
+        return space.invited ? ["Invited", members].compactMap { $0 }.joined(separator: " · ") : members
+    }
 }
 enum ConversationKind: String, Codable, Sendable { case direct, group, space }
 struct Conversation: Identifiable, Hashable, Codable, Sendable {
@@ -83,6 +128,9 @@ struct Conversation: Identifiable, Hashable, Codable, Sendable {
     var emoji: String? = nil    // a space's emoji icon; shown before avatarURL
     var avatarURL: URL? = nil   // space image, or the other person's photo in a 1:1 DM
     var description: String? = nil   // a space's description
+    var guidelines: String? = nil    // a space's guidelines, shown under its description
+    var historyOff: Bool? = nil      // history off: Google deletes new messages after a day; nil before the server says
+    var section: String? = nil       // the key of the custom sidebar section I put it in, shared with the web
     var notificationLevel: NotificationLevel? = nil   // as Google Chat stores it for me; nil until the server reports it
     var app: App? = nil   // a 1:1 DM (`.direct`) with an app instead of a person
     enum App: String, Codable, Sendable { case bot, gemini }   // gemini: Ask Gemini, a sidebar shortcut in Google Chat
@@ -390,6 +438,7 @@ struct Message: Identifiable, Hashable, Codable, Sendable {
     var sources: [Source] = []   // a Gemini answer's sources, listed under its text
     var thinking: [ThinkingStep] = []   // the steps behind a Gemini answer ("Show thinking")
     var translation: Translation? = nil   // Google's translation for me; the timeline shows it first, `text` stays the original
+    var tombstone = false    // deleted, kept in its place as "Message deleted": nothing can be done with it, not even quote it
 }
 /// One step of a Gemini answer's reasoning, as Google Chat lists them under "Show thinking".
 struct ThinkingStep: Hashable, Codable, Sendable {
@@ -423,7 +472,8 @@ extension Message {
                   starred: try c.decodeIfPresent(Bool.self, forKey: .starred) ?? false,
                   sources: try c.decodeIfPresent([Source].self, forKey: .sources) ?? [],
                   thinking: try c.decodeIfPresent([ThinkingStep].self, forKey: .thinking) ?? [],
-                  translation: try c.decodeIfPresent(Translation.self, forKey: .translation))
+                  translation: try c.decodeIfPresent(Translation.self, forKey: .translation),
+                  tombstone: try c.decodeIfPresent(Bool.self, forKey: .tombstone) ?? false)
     }
 }
 struct MessageDraft: Sendable {
@@ -441,7 +491,34 @@ struct ServerDraft: Hashable, Codable, Sendable {
     var formatting: [TextStyleRange] = []
     var updatedAt: Date = .now        // the server's last update time
 }
-struct MessagePage: Sendable { var messages: [Message]; var hasMore: Bool }
+/// A thread in a space's Threads list, as Google Chat's Active threads lists it.
+struct ThreadSummary: Identifiable, Hashable, Sendable {
+    var head: Message
+    var replyCount: Int
+    var unreadCount: Int
+    var mentionsMe: Bool      // an unread reply mentions me or @all
+    var following: Bool
+    var lastReply: Date
+    var id: MessageID { head.id }
+    enum Filter: String, CaseIterable, Sendable { case following = "Following", unread = "Unread", mentions = "Mentions" }
+    /// Every chosen filter must hold, as Google Chat combines them.
+    static func filtered(_ threads: [ThreadSummary], by filters: Set<Filter>) -> [ThreadSummary] {
+        threads.filter { thread in
+            filters.allSatisfy { filter in
+                switch filter {
+                case .following: thread.following
+                case .unread: thread.unreadCount > 0
+                case .mentions: thread.mentionsMe
+                }
+            }
+        }
+    }
+}
+struct MessagePage: Sendable {
+    var messages: [Message]
+    var hasMore: Bool          // older history remains
+    var hasNewer = false       // a window away from the newest messages: newer history remains
+}
 /// A conversation's shared content, as the info panel's tabs group it.
 enum SharedCategory: String, CaseIterable, Sendable { case media = "Media", files = "Files", links = "Links" }
 struct SharedPage: Sendable { var items: [SharedContent.Item]; var hasMore: Bool }
@@ -503,6 +580,13 @@ protocol ChatBackend: Sendable {
     func connect() async throws -> Person
     func conversations() async throws -> [Conversation]
     func messages(in conversation: ConversationID, thread: ThreadID?, before: Date?) async throws -> MessagePage
+    /// The page around `message`, as web Chat opens an old search result; older pages follow with `messages(in:before:)`.
+    func messages(around message: MessageID, in conversation: ConversationID) async throws -> MessagePage
+    /// A space's threads with replies, newest reply first, as Google Chat's Active threads lists them; the list is then
+    /// marked seen.
+    func threads(in conversation: ConversationID) async throws -> [ThreadSummary]
+    /// The next page after the newest one loaded since `messages(around:in:)`.
+    func newerMessages(in conversation: ConversationID) async throws -> MessagePage
     func send(_ draft: MessageDraft, to conversation: ConversationID, thread: ThreadID?) async throws -> Message
     /// Makes a Google Meet meeting for the conversation and posts it, as Google Chat's "Send a Meet link" does.
     func sendMeetLink(in conversation: ConversationID) async throws -> Message
@@ -513,8 +597,14 @@ protocol ChatBackend: Sendable {
     /// Everyone who reacted to a message with `emoji`, as the server lists them (up to 100).
     func reactors(of id: MessageID, emoji: String, custom: CustomEmoji?) async throws -> [Person]
     func markRead(_ conversation: ConversationID) async throws
+    /// Marks a thread read up to its newest reply, so it reads as read on every device.
+    func markThreadRead(_ thread: ThreadID, upTo time: Date) async throws
+    /// Follows a thread (its replies notify me) or unfollows it.
+    func setFollowing(_ following: Bool, thread: ThreadID) async throws
     /// Marks the newest message unread until the conversation is read again.
     func markUnread(_ conversation: ConversationID) async throws
+    /// Marks a conversation, or for a reply its thread, unread from that message on.
+    func markUnread(from message: Message) async throws
     /// Pins (stars) a conversation in my sidebar, or unpins it.
     func setPinned(_ pinned: Bool, conversation: ConversationID) async throws
     /// Mutes a conversation's notifications, or unmutes them; the notification level stays as it was.
@@ -533,7 +623,35 @@ protocol ChatBackend: Sendable {
     func removeMember(_ person: PersonID, from conversation: ConversationID) async throws
     /// Hides a conversation from my sidebar, or shows it again.
     func setHidden(_ hidden: Bool, conversation: ConversationID) async throws
-    func searchMessages(_ query: String, cursor: String?) async throws -> SearchPage
+    /// A new space with me as its only member, as Google Chat's Create a space makes it.
+    func createSpace(name: String, emoji: String?) async throws -> Conversation
+    /// Deletes a space and all its messages for everyone.
+    func deleteSpace(_ conversation: ConversationID) async throws
+    /// The sidebar's sections from the last `conversations()` read, in my order (empty when Google sent none).
+    func sidebarSections() async -> [SidebarSection]
+    func createSection(named name: String, at position: Int) async throws -> SidebarSection
+    func renameSection(_ section: SidebarSection, to name: String) async throws
+    func moveSection(_ section: SidebarSection, to position: Int) async throws
+    func deleteSection(_ section: SidebarSection) async throws
+    /// Moves a conversation into a custom section (its key), or back to its default one (nil), from `previous`.
+    func moveConversation(_ conversation: ConversationID, to section: String?, from previous: String?) async throws
+    /// Blocks or unblocks a person (and their DM with me), optionally reporting them to Google.
+    func setBlocked(_ blocked: Bool, person: PersonID, dm: ConversationID?, report: Bool) async throws
+    /// Blocks or unblocks a space, optionally reporting it to Google.
+    func setBlocked(_ blocked: Bool, space: ConversationID, report: Bool) async throws
+    func blockedPeople() async throws -> [PersonID]
+    func blockedSpaces() async throws -> [BlockedSpace]
+    /// Reports a message to the organisation's admin.
+    func report(_ message: Message, reason: ReportReason, explanation: String) async throws
+    /// A space's description and guidelines, saved together as Google Chat saves them.
+    func updateDetails(_ conversation: ConversationID, description: String, guidelines: String) async throws
+    func setRole(_ role: MemberRole, of person: PersonID, in conversation: ConversationID) async throws
+    /// History on keeps messages; off has Google delete new ones after a day.
+    func setHistory(_ on: Bool, in conversation: ConversationID) async throws
+    /// Each member's role, from the last `members(of:)` read.
+    func roles(in conversation: ConversationID) async -> [PersonID: MemberRole]
+    /// Messages matching `query`, in every conversation or only `conversation`.
+    func searchMessages(_ query: String, in conversation: ConversationID?, cursor: String?) async throws -> SearchPage
     /// Thumbnail (or the full file when there is none) for display; `thumbnail: false` for the original.
     func attachmentData(_ attachment: Attachment, thumbnail: Bool) async throws -> Data
     /// Uploads a local file (`Attachment.localFile`) for a message in `conversation`; returns it with `uploadToken` set.
@@ -647,5 +765,11 @@ extension Character {
     var isEmojiGlyph: Bool {
         guard let first = unicodeScalars.first?.properties else { return false }
         return first.isEmojiPresentation || (first.isEmoji && unicodeScalars.count > 1)
+    }
+}
+
+extension ChatBackend {
+    func searchMessages(_ query: String, cursor: String?) async throws -> SearchPage {
+        try await searchMessages(query, in: nil, cursor: cursor)
     }
 }

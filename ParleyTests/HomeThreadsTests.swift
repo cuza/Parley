@@ -104,6 +104,27 @@ extension AuthTests {
         #expect(threads.map(\.id) == ["space/x/t1/t1"])
         #expect(threads.first?.latest.text == "r1" && threads.first?.unread == true)
     }
+    /// A Home thread opened without its conversation loaded: a reaction to its first message still reaches the screen.
+    @Test func aReactionToAHomeThreadsFirstMessageUpdatesIt() async throws {
+        let topic = Dynamite_Topic.with {
+            $0.id.topicID = "t1"; $0.id.groupID.spaceID.spaceID = "x"; $0.sortTime = 5_000_000
+            $0.replies = [Self.message("t1", topic: "t1", at: 1_000_000, by: "me"), Self.message("r1", topic: "t1", at: 5_000_000)]
+        }
+        let world = Dynamite_PaginatedWorldResponse.with {
+            $0.worldItems = [.with { $0.groupID.spaceID.spaceID = "x"; $0.roomName = "Engineering"; $0.sortTimestamp = 5_000_000 }]
+            $0.shortcutItems = [.with { $0.topic = topic }]
+        }
+        let (backend, _) = try await Self.connected([try Self.proto(world)])
+        _ = try await backend.conversations()
+        _ = await Self.drain(backend)
+        await backend.handle(.with { $0.event.groupID.spaceID.spaceID = "x"; $0.event.bodies = [.with {
+            $0.eventType = .batchReactionsUpdated
+            $0.batchReactionsUpdated.messageID.messageID = "t1"; $0.batchReactionsUpdated.messageID.parentID.topicID.topicID = "t1"
+            $0.batchReactionsUpdated.reactionSummaries = [.with { $0.emoji.unicode = "👍"; $0.count = 1; $0.currentUserReacted = true }]
+        }] })
+        let updated = Self.upserts(await Self.drain(backend)).first { $0.id == "space/x/t1/t1" }
+        #expect(updated?.reactions.first?.emoji == "👍")
+    }
 }
 
 @MainActor

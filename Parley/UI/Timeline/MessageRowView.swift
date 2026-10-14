@@ -29,6 +29,8 @@ struct MessageRowActions {
     var delete: (Message) -> Void = { _ in }
     /// Star or unstar (the new state); nil: not offered.
     var star: ((Bool, Message) -> Void)? = nil
+    var markUnread: ((Message) -> Void)? = nil   // Mark as Unread from this message on; nil: not offered
+    var report: ((Message) -> Void)? = nil   // Report this message (Workspace); nil: not offered
     /// Names of everyone whose read receipt covers the message, for "Seen by …" on my messages.
     var readers: (Message) -> [String] = { _ in [] }
     var loadAttachment: (Attachment, _ thumbnail: Bool) async throws -> Data = { _, _ in throw CancellationError() }
@@ -118,7 +120,7 @@ final class MessageRowView: NSTableRowView {
         textView.isEditable = false; textView.isSelectable = true
         // macOS otherwise draws a Siri / Writing Tools badge on the bubble; message text is read-only.
         if #available(macOS 15.2, *) { textView.writingToolsBehavior = .none }
-        textView.messageMenu = { [weak self] selection in self?.contextMenu(selection: selection) }
+        textView.messageMenu = { [weak self] selection in self?.hasActions == true ? self?.contextMenu(selection: selection) : nil }
         textView.mentionMenu = { [weak self] id, name in self?.mentionMenu(id, name: name) }
         textView.openChatLink = { [weak self] link, url in await self?.actions.openChatLink(link, url) ?? true }
         textView.loadAttachment = { [weak self] in try await (self?.actions.loadAttachment ?? { _, _ in throw CancellationError() })($0, $1) }
@@ -394,7 +396,9 @@ final class MessageRowView: NSTableRowView {
         if let frame, view.frame != frame { view.frame = frame }
     }
 
-    override func menu(for event: NSEvent) -> NSMenu? { row == nil || row?.message.isSystem == true ? nil : contextMenu() }
+    override func menu(for event: NSEvent) -> NSMenu? { hasActions ? contextMenu() : nil }
+    /// A service line and a deleted message offer no actions, as on the web: nothing to quote, react to or forward.
+    private var hasActions: Bool { row.map { !$0.message.isSystem && !$0.message.tombstone } ?? false }
     /// A click or right-click on the sender's avatar or name offers to message them.
     override func mouseDown(with event: NSEvent) {
         if !popUpPersonMenu(event) { super.mouseDown(with: event) }
@@ -457,12 +461,16 @@ final class MessageRowView: NSTableRowView {
             else { actions.copy(message) }
         })
         if message.delivery == .sent, let link = ChatLink.url(message: message.id) {
-            menu.addItem(ClosureMenuItem("Copy Message Link") {
-                NSPasteboard.general.clearContents(); NSPasteboard.general.setString(link.absoluteString, forType: .string)
-            })
+            menu.addItem(ClosureMenuItem("Copy Message Link") { ChatLink.copy(link) })
         }
         if message.delivery == .sent, let star = actions.star {
             menu.addItem(ClosureMenuItem(message.starred ? "Unstar" : "Star") { star(!message.starred, message) })
+        }
+        if message.delivery == .sent, let markUnread = actions.markUnread {
+            menu.addItem(ClosureMenuItem("Mark as Unread") { markUnread(message) })
+        }
+        if message.delivery == .sent, message.sender.id != meID, let report = actions.report {
+            menu.addItem(ClosureMenuItem("Report…") { report(message) })
         }
         if own && message.delivery == .sent {
             menu.addItem(.separator())
@@ -485,7 +493,7 @@ final class MessageRowView: NSTableRowView {
     }
     /// The full emoji picker, for reacting to this row's message; it closes once one is picked.
     func emojiPopover() -> NSPopover? {
-        guard let message = row?.message, !message.isSystem else { return nil }
+        guard hasActions, let message = row?.message else { return nil }
         let popover = NSPopover()
         popover.behavior = .transient
         popover.contentViewController = NSHostingController(rootView: EmojiPicker(

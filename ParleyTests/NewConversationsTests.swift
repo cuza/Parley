@@ -42,7 +42,7 @@ extension AuthTests {
         #expect(Self.rpcs(exchange).filter { $0.hasPrefix("create_dm") || $0.hasPrefix("find_dm") } == ["create_dm_extended"])
         let request = try #require((try Self.sent(exchange, "create_dm_extended") as [Dynamite_CreateDmRequest]).first)
         #expect(request.members.map(\.userID.id) == ["u1"] && request.members.allSatisfy { $0.invitationMode == 1 })
-        #expect(request.retentionSettings.state == 1 && request.hasFlag8 && !request.flag8 && request.spaceOrigin == 12 && request.hasRequestHeader)
+        #expect(request.retentionSettings.state == .permanent && request.hasFlag8 && !request.flag8 && request.spaceOrigin == 12 && request.hasRequestHeader)
     }
     /// As web Chat starts a chat with two people (captured live): `create_group` with an unnamed FLAT_ROOM (type 4), each
     /// invitee wrapped with fields 4 and 5 = 1, options [0], an empty avatar, should_find_existing true and origin 9.

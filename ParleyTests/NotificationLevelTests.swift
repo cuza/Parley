@@ -228,4 +228,40 @@ struct NotificationLevelStoreTests {
         push("r5", thread: "h3")
         #expect(notifier.posted.map(\.id) == ["r2", "r3", "r5"])
     }
+    private func followedThread(_ id: String, in conversation: ConversationID) -> HomeThread {
+        let head = Message(id: id, conversationID: conversation, sender: Person(id: "alex", name: "Alex Rivera"), text: "head")
+        return HomeThread(id: id, conversationID: conversation, head: head, latest: head, unread: false, time: head.createdAt)
+    }
+    /// Home's threads are the server's followed threads: a reply in one notifies at "For you" without the thread loaded.
+    @Test func homeThreadsCountAsFollowed() async throws {
+        let (store, notifier, fake) = await started()
+        await store.setNotificationLevel(.forYou, "general")
+        await fake.setHomeThreads([followedThread("x1", in: "general")])
+        try await store.refresh()
+        store.apply(.messageUpserted(Message(id: "r1", conversationID: "general", threadID: "x1", sender: Person(id: "maria", name: "Maria Chen"), text: "r1")))
+        #expect(notifier.posted.map(\.id) == ["r1"])
+    }
+    /// A reply in a thread Parley doesn't know yet: the server's followed threads say whether it notifies, and Home shows it.
+    @Test func aReplyInAnUnknownThreadAsksTheServerWhetherItIsFollowed() async throws {
+        let (store, notifier, fake) = await started()
+        await store.setNotificationLevel(.forYou, "general")
+        await fake.setHomeThreads([followedThread("x2", in: "general")])   // the server already lists it; Parley hasn't refreshed
+        let maria = Person(id: "maria", name: "Maria Chen")
+        store.apply(.messageUpserted(Message(id: "r2", conversationID: "general", threadID: "x2", sender: maria, text: "r2")))
+        store.apply(.messageUpserted(Message(id: "r3", conversationID: "general", threadID: "x3", sender: maria, text: "r3")))   // not followed
+        let deadline = ContinuousClock.now + .seconds(2)
+        while !notifier.posted.contains(where: { $0.id == "r2" }), ContinuousClock.now < deadline { try await Task.sleep(for: .milliseconds(10)) }
+        #expect(notifier.posted.map(\.id) == ["r2"])
+        #expect(store.homeThreads.contains { $0.id == "x2" })
+    }
+    /// Home lists a followed thread as soon as a reply arrives in it, even where every message notifies anyway.
+    @Test func aReplyInAThreadMissingFromHomeShowsThereSoon() async throws {
+        let (store, notifier, fake) = await started()
+        await fake.setHomeThreads([followedThread("x4", in: "general")])
+        store.apply(.messageUpserted(Message(id: "r4", conversationID: "general", threadID: "x4", sender: Person(id: "maria", name: "Maria Chen"), text: "r4")))
+        let deadline = ContinuousClock.now + .seconds(2)
+        while !store.homeThreads.contains(where: { $0.id == "x4" }), ContinuousClock.now < deadline { try await Task.sleep(for: .milliseconds(10)) }
+        #expect(store.homeThreads.contains { $0.id == "x4" })
+        #expect(notifier.posted.map(\.id) == ["r4"])   // once: it notified when it arrived
+    }
 }

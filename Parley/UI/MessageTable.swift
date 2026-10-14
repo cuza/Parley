@@ -19,6 +19,10 @@ struct MessageTable: NSViewRepresentable {
     /// Called when the reader scrolls into the top zone (three screens, `Coordinator.topZone`), and again after each
     /// change to the rows while still in it.
     let nearTop: () -> Void
+    /// A detached window (opened at an old message) near its bottom: asks for newer history, as `nearTop` asks for older.
+    var nearBottom: () -> Void = {}
+    /// The rows are a window away from the newest messages: newer pages land below without pulling the reader down.
+    var detached = false
     /// Whether the newest message is within a screen; drives the scroll-to-bottom button.
     var atBottomChanged: (Bool) -> Void = { _ in }
     /// Bumped to scroll smoothly to the newest message (the scroll-to-bottom button).
@@ -81,6 +85,8 @@ struct MessageTable: NSViewRepresentable {
         private var settling = false
         private var wasNearTop = false
         private var rowsAtNearTop = 0   // the row count when the table last asked for older history
+        private var wasNearBottom = false
+        private var rowsAtNearBottom = 0
         private var keeping = false
         /// Whether the reader is following the newest message. Only scrolling changes it, not layout passes: SwiftUI
         /// briefly lays the timeline out at transient sizes, which would otherwise read as having scrolled away.
@@ -112,16 +118,21 @@ struct MessageTable: NSViewRepresentable {
             }
             if parent.rows != rows || changedLook {
                 let old = rows
+                // My send just appeared (pending): show it. A page that merely ends with an older message of mine (a window
+                // meeting the newest messages) is not a send.
                 let ownNew = parent.rows.last?.id != old.last?.id && parent.rows.last?.message.sender.id == parent.meID
+                    && parent.rows.last?.message.delivery == .pending
                 if changedLook { layouts = [:] }   // who "me" is decides alignment: cached layouts are for the old identity
-                keepingPlace(toBottom: old.isEmpty || ownNew) { apply(old: old, new: parent.rows, everything: changedLook, in: table) }
+                // A window opened at a message shows that message (below), not its end.
+                keepingPlace(toBottom: (old.isEmpty && !parent.detached) || ownNew) { apply(old: old, new: parent.rows, everything: changedLook, in: table) }
                 checkNearTop()   // a page landed and the reader may still be near the top: ask for the next one
+                checkNearBottom()
             }
             if parent.highlighted != highlighted {
                 let affected = [highlighted, parent.highlighted].compactMap { id in rows.firstIndex { $0.id == id } }
                 highlighted = parent.highlighted
                 affected.forEach(configureRow)
-                if let id = parent.highlighted, let index = rows.firstIndex(where: { $0.id == id }) { table.scrollRowToVisible(index) }
+                if let id = parent.highlighted, let index = rows.firstIndex(where: { $0.id == id }) { center(index) }
             }
             if wantsBottom { scrollToBottom() }
         }
@@ -154,7 +165,7 @@ struct MessageTable: NSViewRepresentable {
             keeping = true
             defer { keeping = false }
             let visible = scroll.contentView.bounds
-            let atBottom = toBottom || pinnedToBottom
+            let atBottom = toBottom || (pinnedToBottom && parent?.detached != true)   // a window's end isn't the newest message
             // Not the row cut off at the top: when it re-wraps (a resize), every row below would move by its change.
             let inView = table.rows(in: uncovered), top = uncovered.minY
             let first = (inView.location..<inView.location + inView.length).first { table.rect(ofRow: $0).minY >= top } ?? inView.location
@@ -268,7 +279,7 @@ struct MessageTable: NSViewRepresentable {
             let clipSize = scroll.contentView.bounds.size
             if !keeping && clipSize == lastClipSize { pinnedToBottom = visible.maxY >= table.bounds.height - 40 }   // a scroll, not a resize
             lastClipSize = clipSize
-            if !keeping { checkNearTop() }   // mid-update the offset is transient; `update` checks once it settles
+            if !keeping { checkNearTop(); checkNearBottom() }   // mid-update the offset is transient; `update` checks once it settles
             let atBottom = visible.maxY >= table.bounds.height - visible.height   // within one screen of the newest message
             if atBottom != wasAtBottom {   // after the current update: this runs while SwiftUI updates the table (keeping place)
                 wasAtBottom = atBottom
@@ -293,6 +304,27 @@ struct MessageTable: NSViewRepresentable {
                 parent?.nearTop()
             }
             wasNearTop = nearTop
+        }
+        /// A detached window's end within `topZone` below the reader: asks for newer history, on entering the zone and
+        /// again each time rows change while still in it.
+        private func checkNearBottom() {
+            guard let table, parent?.detached == true, scroll != nil, !rows.isEmpty else { wasNearBottom = false; return }
+            let visible = uncovered
+            let nearBottom = table.bounds.height - visible.maxY < Self.topZone(visibleHeight: visible.height)
+            if nearBottom && (!wasNearBottom || rows.count != rowsAtNearBottom) {
+                rowsAtNearBottom = rows.count
+                parent?.nearBottom()
+            }
+            wasNearBottom = nearBottom
+        }
+        /// The highlighted message in the middle of the view, as a search result or a link opens it.
+        private func center(_ index: Int) {
+            guard let scroll, let table else { return }
+            let visible = uncovered, row = table.rect(ofRow: index)
+            let target = min(max(-scroll.contentInsets.top, row.midY - visible.height / 2 - scroll.contentInsets.top), bottomOrigin)
+            pinnedToBottom = false
+            scroll.contentView.scroll(to: NSPoint(x: 0, y: target))
+            scroll.reflectScrolledClipView(scroll.contentView)
         }
         /// Three screens of history above the reader, at least 600 pt.
         static func topZone(visibleHeight: CGFloat) -> CGFloat { max(600, visibleHeight * 3) }

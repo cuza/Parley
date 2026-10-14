@@ -2,7 +2,8 @@ import SwiftUI
 
 /// A link to a Google Chat conversation or message, as Google Chat writes them, so Parley can open it in place.
 /// `chat.google.com/room/<space>[/<topic>[/<message>]]`, `/dm/<dm>[/…]`, `/app/chat/<id>` (space or DM: both are tried),
-/// optionally after `/u/<n>`, and Gmail's `mail.google.com/chat/…#chat/space/<id>` (or `#chat/dm/<id>`).
+/// optionally after `/u/<n>`, with the message either as `/<topic>/<message>` or, as web Chat's address bar shows it,
+/// `/topic/<topic>[/message/<message>]`, and Gmail's `mail.google.com/chat/…#chat/space/<id>` (or `#chat/dm/<id>`).
 struct ChatLink: Equatable {
     var conversations: [ConversationID]   // in order of preference; more than one when the link doesn't say which kind
     var topic: String? = nil
@@ -25,6 +26,9 @@ struct ChatLink: Equatable {
         case "chat": conversations = ["space/\(parts[1])", "dm/\(parts[1])"]
         default: return nil
         }
+        if parts.count >= 4, parts[2] == "topic" {
+            parts = [parts[0], parts[1], parts[3]] + (parts.count >= 6 && parts[4] == "message" ? [parts[5]] : [])
+        }
         if parts.count >= 3, !parts[2].isEmpty { topic = parts[2]; message = parts.count >= 4 && !parts[3].isEmpty ? parts[3] : parts[2] }
     }
     init(conversations: [ConversationID], topic: String? = nil, message: String? = nil) {
@@ -35,6 +39,10 @@ struct ChatLink: Equatable {
         let parts = id.split(separator: "/").map(String.init)
         guard parts.count == 4 else { return nil }
         return URL(string: "\(url("\(parts[0])/\(parts[1])").absoluteString)/\(parts[2])/\(parts[3])?cls=10")
+    }
+    /// Copy Link and Copy Message Link: the link alone, as plain text.
+    @MainActor static func copy(_ url: URL, to pasteboard: NSPasteboard = .general) {
+        pasteboard.clearContents(); pasteboard.setString(url.absoluteString, forType: .string)
     }
     /// The link Google Chat uses for a conversation.
     static func url(_ conversation: ConversationID) -> URL {

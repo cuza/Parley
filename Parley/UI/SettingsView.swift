@@ -1,5 +1,22 @@
+import ServiceManagement
 import UserNotifications
 import SwiftUI
+
+/// macOS's login item for an app; `SMAppService.mainApp` in the app, a fake in tests.
+protocol LoginItemService: AnyObject {
+    var status: SMAppService.Status { get }
+    func register() throws
+    func unregister() throws
+}
+extension SMAppService: LoginItemService {}
+/// Settings ▸ General's "Open Parley at login". Off until turned on: macOS registers nothing by itself.
+struct LoginItem {
+    var service: LoginItemService = SMAppService.mainApp
+    var isOn: Bool { service.status == .enabled }
+    /// Turned on, waiting for the user in System Settings ▸ General ▸ Login Items.
+    var needsApproval: Bool { service.status == .requiresApproval }
+    func set(_ on: Bool) throws { if on { try service.register() } else { try service.unregister() } }
+}
 
 /// Settings ▸ Appearance: follow macOS, or keep Parley light or dark.
 enum AppearanceMode: String, CaseIterable {
@@ -64,7 +81,7 @@ struct SettingsView: View {
             case .general: GeneralSettings(store: store)
             case .appearance: AppearanceSettings()
             case .notifications: NotificationsSettings()
-            case .advanced: AdvancedSettings()
+            case .advanced: AdvancedSettings(store: store)
             }
         }
         .formStyle(.grouped)
@@ -110,6 +127,7 @@ private struct GeneralSettings: View {
             } header: { Text("Account") } footer: {
                 if let accountError { Footer(accountError, color: .red) }
             }
+            LoginItemSection()
             Section {
                 Toggle("Limit sections", isOn: $limitSections)
                 Picker("Rows per section", selection: $sectionLimit) {
@@ -202,10 +220,40 @@ private struct AppearanceSettings: View {
     }
 }
 
+/// "Open Parley at login", read from macOS each time Settings shows it, since it can change in System Settings too.
+private struct LoginItemSection: View {
+    @State private var on = false
+    @State private var needsApproval = false
+    @State private var failure: String?
+    private let item = LoginItem()
+    var body: some View {
+        Section {
+            Toggle("Open Parley at login", isOn: $on)
+                .onChange(of: on) { _, on in
+                    guard on != item.isOn else { return }
+                    do { try item.set(on); failure = nil } catch { failure = error.localizedDescription }
+                    read()
+                }
+            if needsApproval {
+                LabeledContent {
+                    Button("Open Login Items") {
+                        NSWorkspace.shared.open(URL(string: "x-apple.systempreferences:com.apple.LoginItems-Settings.extension")!)
+                    }
+                } label: { Text("macOS needs your approval in Login Items.").foregroundStyle(.orange) }
+            }
+        } footer: {
+            if let failure { Footer(failure, color: .red) }
+        }
+        .onAppear(perform: read)
+    }
+    private func read() { on = item.isOn || item.needsApproval; needsApproval = item.needsApproval }
+}
+
 /// Settings ▸ Notifications: on or off, and the sound.
 private struct NotificationsSettings: View {
     @AppStorage(NotificationSettings.enabledKey) private var notify = true
     @AppStorage(NotificationSound.key) private var sound = NotificationSound.standard.stored
+    @AppStorage(NotificationSettings.bounceKey) private var bounce = false
     @State private var sounds = NotificationSound.available()
     @State private var notificationStatus = UNAuthorizationStatus.notDetermined
     @MainActor private static var playing: NSSound?
@@ -249,17 +297,24 @@ private struct NotificationsSettings: View {
                         : "macOS plays its default sound and follows your Focus settings.")
                        + " Banners and sounds are also set in System Settings ▸ Notifications.")
             }
+            Section {
+                Toggle("Bounce the Dock icon", isOn: $bounce).disabled(!notify)
+            } footer: {
+                Footer("Once for each notification, while Parley is in the background.")
+            }
         }
     }
 }
 
-/// Settings ▸ Advanced: connection diagnostics and the unsupported-content report.
+/// Settings ▸ Advanced: connection diagnostics, the unsupported-content report, and who I blocked.
 private struct AdvancedSettings: View {
+    let store: ChatStore
     @Environment(\.openWindow) private var openWindow
     var body: some View {
         // ponytail: the count is read when Settings draws; it doesn't follow new messages while it is open.
         let kinds = MessageShapes.shared.withLock { $0.entries.count }
         Form {
+            BlockedSection(store: store)
             Section {
                 LabeledContent("Connection") {
                     Button("Connection Diagnostics…") { openWindow(id: "connection-diagnostics") }

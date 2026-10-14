@@ -26,6 +26,7 @@ struct ShortcutList: View {
                             if let thread = row.thread {
                                 Button { Task { await store.openHomeThread(thread) } } label: { threadRow(row.room, thread) }
                                     .buttonStyle(.plain)
+                                    .contextMenu { Button("Unfollow thread") { Task { await store.setFollowing(false, thread: thread.id) } } }
                                     .listRowBackground(store.threadID == thread.id ? Color.accentColor.opacity(0.15) : nil)
                             } else {
                                 Button { Task { await store.select(row.room.id) } } label: { homeRow(row.room, row.last) }
