@@ -168,6 +168,7 @@ final class ChatStore {
         detached = []; windowEnds = [:]; newerLoads = []; listedOnce = false; backPlaces = []; forwardPlaces = []
         dialog = nil; forwarding = nil; heldUnread = []; sections = []; blockedPeople = []; dndSchedules = nil
         invitations = []; invitationsFetched = nil
+        coalesced.values.forEach { $0.cancel() }; coalesced = [:]; coalesceAgain = []
     }
     /// What `forgetAccount` clears when another account connects.
     static let accountState: Set<String> = [
@@ -183,7 +184,7 @@ final class ChatStore {
         "followed", "presenceFetched", "watching", "typingSent", "typingRefused", "awaitingFollow",
         "detached", "windowEnds", "newerLoads", "listedOnce", "backPlaces", "forwardPlaces",
         "dialog", "forwarding", "heldUnread", "sections", "blockedPeople", "dndSchedules",
-        "invitations", "invitationsFetched",
+        "invitations", "invitationsFetched", "coalesced", "coalesceAgain",
     ]
     /// What stays across accounts: the app's wiring, settings, timers and the connection, and requests the user made
     /// before the switch (a link to open, content to share, a search to run).
@@ -191,7 +192,7 @@ final class ChatStore {
         "backend", "cache", "cachedAccountID", "me", "connection", "onSessionLost", "error", "connectedSince", "lastEventAt",
         "reconnects", "homeUnreadOnly", "homeThreadsOnly", "highlightDuration", "highlightFade", "eventTask", "cacheTask",
         "searchGeneration", "sweepTask", "now", "isAppActive", "notifier", "notificationSettings", "draftPause", "draftIdle",
-        "waitingLinks", "resyncTask", "resyncAgain", "followAsked", "followRecheck", "toast", "toastDuration", "toastFade", "openURL", "defaults", "sent",
+        "waitingLinks", "followAsked", "followRecheck", "toast", "toastDuration", "toastFade", "openURL", "defaults", "sent",
         "download", "newChatRequests", "newSpaceRequests", "sharing", "searchRequest",
     ]
     /// After the user signs out; cached conversations and drafts stay for the next sign-in.
@@ -287,8 +288,10 @@ final class ChatStore {
                 // A shortcut on screen (Home at launch) stays: the conversation opens, and is read, only when chosen.
                 if shortcut == nil { await select(selectedID) }
             } else {
-                loaded.remove(key(selectedID, nil))
-                await load(selectedID)
+                if !detached.contains(selectedID) {   // an old message open stays open; paging down reaches the new ones
+                    loaded.remove(key(selectedID, nil))
+                    await load(selectedID)
+                }
                 if let threadID {
                     loaded.remove(key(selectedID, threadID))
                     await load(selectedID, thread: threadID)
@@ -311,6 +314,7 @@ final class ChatStore {
         heldUnread.removeAll()   // opening a conversation reads it, one marked unread from a message included
         loaded.remove(key(id, nil))   // no realtime yet: reselecting is how new messages arrive
         await load(id)
+        guard openConversation == id else { return }   // moved on while it loaded: it stays unread
         await markRead(id)
         persist()
         await watchOpen()
@@ -340,6 +344,7 @@ final class ChatStore {
         selectedID = id; threadID = nil; shortcut = nil
         heldUnread.removeAll()
         await loadAround(message, in: id)
+        guard openConversation == id else { return }
         await markRead(id)
         persist()
         await watchOpen()
@@ -349,15 +354,26 @@ final class ChatStore {
     private func loadAround(_ message: MessageID, in id: ConversationID) async {
         let scope = key(id, nil)
         if let running = pageLoads[scope] { await running.value }
-        loading.insert(scope); defer { loading.remove(scope) }
-        do {
-            let page = try await backend.messages(around: message, in: id)
-            messages.removeAll { $0.conversationID == id && $0.threadID == nil && $0.delivery == .sent }
-            page.messages.forEach(upsert)
-            loaded.insert(scope)
-            if page.hasMore { hasMore.insert(scope) } else { hasMore.remove(scope) }
-            extendWindow(id, page)
-        } catch { report(error) }
+        // A page load like any other, so a load started meanwhile waits for it instead of racing it.
+        let task = Task {
+            let known = shownSent(id, thread: nil)
+            do {
+                let page = try await backend.messages(around: message, in: id)
+                let gone = known.subtracting(page.messages.map(\.id))
+                messages.removeAll { gone.contains($0.id) }
+                page.messages.forEach(upsert)
+                loaded.insert(scope)
+                if page.hasMore { hasMore.insert(scope) } else { hasMore.remove(scope) }
+                extendWindow(id, page)
+            } catch { report(error) }
+            pageLoads[scope] = nil; loading.remove(scope)
+        }
+        pageLoads[scope] = task; loading.insert(scope)
+        await task.value
+    }
+    /// The sent messages a scope shows now: what a page that replaces it may drop.
+    private func shownSent(_ id: ConversationID, thread: ThreadID?) -> Set<MessageID> {
+        Set(messages.lazy.filter { $0.conversationID == id && $0.threadID == thread && $0.delivery == .sent }.map(\.id))
     }
     /// The timeline neared the bottom of a detached window: the next newer page, until the window meets the newest messages.
     func loadNewerIfNeeded(_ id: ConversationID) async {
@@ -385,10 +401,13 @@ final class ChatStore {
     }
     private func fetchPage(_ id: String, thread: String?, older: Bool, quietly: Bool = false) async {
         let scope = key(id, thread)
+        let known = shownSent(id, thread: thread)
         do {
             let page = try await backend.messages(in: id, thread: thread, before: older ? timeline(id, thread: thread).first?.createdAt : nil)
             if !older {
-                messages.removeAll { $0.conversationID == id && $0.threadID == thread && $0.delivery == .sent }
+                // The newest page replaces what was shown; a message that arrived during the request isn't in it, and stays.
+                let kept = known.subtracting(page.messages.map(\.id))
+                messages.removeAll { kept.contains($0.id) }
                 if thread == nil { detached.remove(id); windowEnds[id] = nil }
             }
             page.messages.forEach(upsert)
@@ -478,6 +497,7 @@ final class ChatStore {
         threadID = thread; info = false
         loaded.remove(key(conversation, thread))
         await load(conversation, thread: thread)
+        guard threadID == thread, selectedID == conversation else { return }
         await readThread(thread)
     }
     /// An open thread is read up to its newest reply, on the server too, so it reads as read on the web and phone.
@@ -532,7 +552,12 @@ final class ChatStore {
     // MARK: Back and forward, through the conversations and shortcuts opened (⌘[ and ⌘])
 
     /// An Ask Gemini session fills the page, so it is a place of its own; another conversation's thread is a side pane.
-    enum Place: Hashable { case conversation(ConversationID), shortcut(Shortcut), session(ConversationID, ThreadID) }
+    enum Place: Hashable {
+        case conversation(ConversationID), shortcut(Shortcut), session(ConversationID, ThreadID)
+        var conversation: ConversationID? {
+            switch self { case .conversation(let id), .session(let id, _): id; case .shortcut: nil }
+        }
+    }
     private(set) var backPlaces: [Place] = []
     private(set) var forwardPlaces: [Place] = []
     var canGoBack: Bool { !backPlaces.isEmpty || inGeminiSession }
@@ -587,11 +612,11 @@ final class ChatStore {
             let isNew = !messages.contains { $0.id == message.id }
             upsert(message)
             // A pin posts a service line: the board on screen reads again.
-            if isNew, message.isSystem, pinned[message.conversationID] != nil { Task { await loadPinned(message.conversationID) } }
+            if isNew, message.isSystem, pinned[message.conversationID] != nil { coalesce("pinned/" + message.conversationID) { await self.loadPinned(message.conversationID) } }
             // A new message changes the threads listed on screen (Ask Gemini's home, the Threads pane): they read again.
             // ponytail: one read per new message; debounce if a busy room with its Threads pane open makes this chatty.
             if isNew, message.conversationID == selectedID, threadSummaries[message.conversationID] != nil, threadsShown || selected?.app == .gemini {
-                Task { await loadThreads(message.conversationID) }
+                coalesce("threads/" + message.conversationID) { await self.loadThreads(message.conversationID) }
             }
             // A newer reply in a thread Home lists moves its row up.
             // Threads already listed; a reply in another one re-reads Home's threads (checkFollowed, below).
@@ -602,7 +627,7 @@ final class ChatStore {
             }
             // A new reply in the thread open on screen is read as it arrives.
             if isNew, let thread = message.threadID, thread == threadID, message.conversationID == selectedID, isAppActive() {
-                Task { await readThread(thread) }
+                coalesce("readThread/" + thread) { await self.readThread(thread) }
             }
             if isNew, message.sender.id != me.id {   // a message ends its sender's typing, and they're evidently here
                 for scope in typing.keys where scope.hasPrefix(message.conversationID + "/") { typing[scope]?[message.sender.id] = nil }
@@ -623,7 +648,7 @@ final class ChatStore {
             }
             // ponytail: one read receipt per pushed message; debounce if busy rooms make this chatty.
             if isNew, message.sender.id != me.id, message.conversationID == openConversation, isAppActive(), !heldUnread.contains(message.conversationID) {
-                Task { await markRead(message.conversationID) }
+                coalesce("read/" + message.conversationID) { await self.markRead(message.conversationID) }
             }
         case .messageDeleted(let id):
             // A thread's first message takes the thread with it, as Google Chat deletes it; Google sends only this one.
@@ -649,15 +674,21 @@ final class ChatStore {
             hidden.removeAll { $0.id == id }
             messages.removeAll { $0.conversationID == id }
             notifier?.clear(conversation: id)
+            // Gone, so no place to go back or forward to.
+            backPlaces.removeAll { $0.conversation == id }; forwardPlaces.removeAll { $0.conversation == id }
             if selectedID == id {
                 editing = editing.filter { !$0.key.hasPrefix(id + "/") }; heldDrafts = heldDrafts.filter { !$0.key.hasPrefix(id + "/") }
-                selectedID = conversations.first?.id; threadID = nil
-                if let next = selectedID { Task { await select(next) } }
+                threadID = nil
+                if shortcut == nil {   // it was on screen: the next one opens in its place
+                    selectedID = conversations.first?.id
+                    if let next = selectedID { Task { await select(next) } }
+                } else { selectedID = nil }   // behind Home: Home stays, and nothing else opens or is read
             }
         case .threadFollowChanged(let thread, let following):
             if following { followed.insert(thread) } else { followed.remove(thread) }
         case .reacted(let id, let emoji, let person, let added):
             // ponytail: only reactions to my messages loaded here notify; fetch the message if older ones go unannounced.
+            if !added { notifiedReactions.remove("\(id)#\(person)#\(emoji)") }   // added again later, it's news again
             let target = messages.first { $0.id == id }
             log.notice("reaction pushed: \(added ? "added" : "removed", privacy: .public), message \(target == nil ? "not loaded" : target?.sender.id == self.me.id ? "mine" : "someone else's", privacy: .public)")
             guard added, let message = target,
@@ -771,18 +802,18 @@ final class ChatStore {
     }
     @ObservationIgnored private var followCheck: Task<Void, Never>?
     @ObservationIgnored private var awaitingFollow: [Message] = []
-    @ObservationIgnored private var resyncTask: Task<Void, Never>?
-    @ObservationIgnored private var resyncAgain = false
-    /// The server says Parley missed events: refresh. A resync during one runs once more after it, so a burst (a flapping
-    /// connection) is two refreshes, never several at once finishing out of order.
-    private func resync() {
-        guard resyncTask == nil else { resyncAgain = true; return }
-        resyncTask = Task {
-            repeat {
-                resyncAgain = false
-                do { try await refresh() } catch { report(error) }
-            } while resyncAgain
-            resyncTask = nil
+    /// The server says Parley missed events: refresh, one at a time (a flapping connection sends a burst).
+    private func resync() { coalesce("resync") { do { try await self.refresh() } catch { self.report(error) } } }
+    @ObservationIgnored private var coalesced: [String: Task<Void, Never>] = [:]
+    @ObservationIgnored private var coalesceAgain: Set<String> = []
+    /// Work a burst of events asks for again and again (re-reading a list, marking read), where only the latest result
+    /// counts: one run at a time per `key`, and calls during a run make one more run after it. Results never land out
+    /// of order, and a burst costs two runs, not one per event.
+    private func coalesce(_ key: String, _ work: @escaping @MainActor () async -> Void) {
+        guard coalesced[key] == nil else { coalesceAgain.insert(key); return }
+        coalesced[key] = Task {
+            repeat { coalesceAgain.remove(key); await work() } while coalesceAgain.contains(key)
+            coalesced[key] = nil
         }
     }
     @ObservationIgnored private var followAsked = ContinuousClock.now
@@ -1896,7 +1927,14 @@ final class ChatStore {
         }
     }
     private func snapshot() -> LaunchSnapshot {
-        let grouped = Dictionary(grouping: messages.filter { $0.delivery != .pending }, by: { key($0.conversationID, $0.threadID) })
+        // A message still sending is saved as failed: after a quit, Retry sends it. ponytail: if it reached Google just before
+        // the quit, the failed copy shows beside the sent one until deleted.
+        let saved = messages.map { message in
+            var message = message
+            if message.delivery == .pending { message.delivery = .failed }
+            return message
+        }
+        let grouped = Dictionary(grouping: saved, by: { key($0.conversationID, $0.threadID) })
         // A composer being edited holds the message's text; its draft is the one the edit put aside.
         var drafts = drafts, formatting = draftFormatting
         for (scope, held) in heldDrafts { drafts[scope] = held.text; formatting[scope] = held.formatting }

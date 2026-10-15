@@ -287,6 +287,45 @@ struct ChatStoreTests {
         #expect(store.threadSummaries[gemini]?.first?.id == "gs2")
     }
 
+    /// Moving on before a conversation's messages land (⌥↓ through unread ones, ⌘1…9) leaves it unread: only the one
+    /// that stays on screen is read, on the server too.
+    @Test func aConversationPassedThroughStaysUnread() async throws {
+        let fake = FakeBackend(latency: .milliseconds(150))
+        let store = ChatStore(backend: fake)
+        await store.start()
+        let before = await fake.markedRead
+        async let passed: Void = store.select("alex")
+        try await Task.sleep(for: .milliseconds(40))
+        await store.select("maria")
+        await passed
+        let read = Array(await fake.markedRead.dropFirst(before.count))
+        #expect(read == ["maria"])
+        #expect(store.selectedID == "maria")
+    }
+
+    /// Hiding or leaving the conversation behind Home (here, or on another device) keeps Home on screen and opens nothing.
+    @Test func removingTheConversationBehindHomeStaysOnHome() async throws {
+        let fake = FakeBackend()
+        let store = ChatStore(backend: fake)
+        await store.start()
+        await store.select("general")
+        await store.openShortcut(.home)
+        let read = await fake.markedRead.count
+        store.apply(.conversationRemoved("general"))
+        try await Task.sleep(for: .milliseconds(50))
+        #expect(store.shortcut == .home)
+        #expect(await fake.markedRead.count == read)
+    }
+    /// Back and Forward skip a conversation that's gone: it can't open, so it's no place to go.
+    @Test func backSkipsARemovedConversation() async throws {
+        let store = ChatStore(backend: FakeBackend())
+        await store.start()
+        await store.select("general"); await store.select("alex"); await store.select("maria")
+        store.apply(.conversationRemoved("alex"))
+        await store.goBack()
+        #expect(store.selectedID == "general")
+    }
+
     @Test func jumpingToAnUnknownConversationAddsIt() async {
         let store = ChatStore(backend: FakeBackend())
         await store.start()
@@ -422,6 +461,35 @@ struct LaunchCacheAccountTests {
         store.setDraft("typed just before quitting", conversation: id, thread: nil)
         store.flush()
         #expect(cache.load().drafts.values.contains("typed just before quitting"))
+    }
+    /// Draft formatting this build can't read loses the formatting, never the drafts' text.
+    @Test func unreadableDraftFormattingKeepsTheDrafts() throws {
+        let cache = Self.cache()
+        let json = #"{"accountID":"me","drafts":{"k":"kept"},"draftFormatting":{"k":[{"unexpected":true}]},"serverDrafts":{"k":7}}"#
+        try Data(json.utf8).write(to: cache.url)
+        #expect(cache.load().drafts["k"] == "kept")
+    }
+    /// A cache this build can't read at all is moved aside, not overwritten by the next save: its drafts can be recovered.
+    @Test func anUnreadableCacheIsKeptAside() throws {
+        let cache = Self.cache()
+        try Data("not json".utf8).write(to: cache.url)
+        #expect(cache.load().drafts.isEmpty)
+        #expect(try Data(contentsOf: cache.url.appendingPathExtension("unreadable")) == Data("not json".utf8))
+    }
+    /// Quitting while a message is still sending (a slow upload) keeps it, as failed: Retry sends it after relaunch.
+    @Test func aMessageBeingSentSurvivesAQuit() async throws {
+        let cache = Self.cache()
+        let store = ChatStore(backend: FakeBackend(latency: .milliseconds(400)), cache: cache)
+        await store.start()
+        let file = URL.temporaryDirectory.appending(path: "parley-upload-\(UUID().uuidString).txt")
+        try Data("file".utf8).write(to: file)
+        store.attach([file], conversation: "alex", thread: nil)
+        store.setDraft("with a file", conversation: "alex", thread: nil)
+        async let sending: Void = store.send(conversation: "alex")
+        try await Task.sleep(for: .milliseconds(100))
+        store.flush()
+        #expect(cache.load().messages.first { $0.text == "with a file" }?.delivery == .failed)
+        await sending
     }
     @Test func aChangedModelLosesHistoryButKeepsDrafts() throws {
         let cache = Self.cache()

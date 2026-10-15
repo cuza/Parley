@@ -297,6 +297,19 @@ struct NotificationLevelStoreTests {
         #expect(store.homeThreads.contains { $0.id == "x8" })
         #expect(store.conversations.first { $0.id == "engineering" }?.unread == before + 1)
     }
+    /// A burst of pushed messages in the open conversation (a reconnect's catch-up) marks it read once or twice, not once
+    /// per message.
+    @Test func aBurstInTheOpenConversationMarksItReadOnce() async throws {
+        let (store, _, fake) = await started()
+        store.isAppActive = { true }
+        await store.select("general")
+        let before = await fake.markedRead.count
+        let maria = Person(id: "maria", name: "Maria Chen")
+        for i in 0..<50 { store.apply(.messageUpserted(Message(id: "b\(i)", conversationID: "general", sender: maria, text: "\(i)"))) }
+        try await Task.sleep(for: .milliseconds(200))
+        let reads = await fake.markedRead.count - before
+        #expect((1...2).contains(reads), "\(reads) read calls")
+    }
     /// A burst of resyncs (a flapping connection) is one refresh, not several at once that finish out of order.
     @Test func resyncsDoNotPileUp() async throws {
         let (store, _, fake) = await started()

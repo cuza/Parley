@@ -31,6 +31,11 @@ struct InfoPanel: View {
     @State private var addingPeople = false
     @State private var editingDetails = false
     @State private var deleting = false
+    @State private var allMembers = false
+    @State private var memberFilter = ""
+    /// Members listed in the panel itself. A Form builds every row up front (about 3 ms each with avatar, presence, menu
+    /// and card), so a large space shows the first ones and the rest in a lazy, searchable list.
+    static let inlineMembers = 20
 
     private var roster: [Person] { store.roster(room) }
     private var partner: Person? { room.kind == .direct ? roster.first { $0.id != store.me.id } : nil }
@@ -48,7 +53,12 @@ struct InfoPanel: View {
             Section { actions; NotificationLevelPicker(store: store, room: room); history }
             if room.kind == .space, room.guidelines != nil || allowed.editDetails { Section("Guidelines") { guidelines } }
             if let board = store.pinned[room.id], !board.isEmpty { Section("Board") { ForEach(board) { pinned($0) } } }
-            if room.kind != .direct { Section("\(roster.count) members") { ForEach(roster) { member($0) } } }
+            if room.kind != .direct {
+                Section("\(roster.count) members") {
+                    ForEach(roster.prefix(Self.inlineMembers)) { member($0) }
+                    if roster.count > Self.inlineMembers { Button("Show All \(roster.count) Members…") { allMembers = true } }
+                }
+            }
             if room.kind == .space, allowed.deleteSpace {
                 Section { Button("Delete Space…", role: .destructive) { deleting = true } }
             }
@@ -66,6 +76,7 @@ struct InfoPanel: View {
             Button("Cancel", role: .cancel) {}
         }
         .sheet(isPresented: $addingPeople) { AddPeopleSheet(store: store, room: room, roster: roster) }
+        .sheet(isPresented: $allMembers) { membersSheet }
         .sheet(isPresented: $editingDetails) { SpaceDetailsSheet(store: store, room: room) }
         // Google Chat's wording: deleting removes every message for all members.
         .alert("Delete “\(room.name)”?", isPresented: $deleting) {
@@ -160,6 +171,22 @@ struct InfoPanel: View {
     }
 
     // MARK: Members
+    /// Every member, in a List, which builds only the rows on screen; the field filters by name or email.
+    private var membersSheet: some View {
+        let shown = memberFilter.isEmpty ? roster : roster.filter {
+            $0.name.localizedCaseInsensitiveContains(memberFilter) || ($0.email?.localizedCaseInsensitiveContains(memberFilter) ?? false)
+        }
+        return VStack(spacing: 0) {
+            HStack {
+                Text("\(roster.count) members").font(.headline)
+                Spacer()
+                Button("Done") { allMembers = false }.keyboardShortcut(.defaultAction)
+            }.padding(12)
+            TextField("Search members", text: $memberFilter).textFieldStyle(.roundedBorder).padding(.horizontal, 12).padding(.bottom, 8)
+            List(shown) { member($0) }
+        }
+        .frame(width: 360, height: 520)
+    }
     private func member(_ person: Person) -> some View {
         let isMe = person.id == store.me.id
         let role = store.roles[room.id]?[person.id]

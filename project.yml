@@ -14,8 +14,8 @@ settings:
     ENABLE_USER_SCRIPT_SANDBOXING: YES
     STRING_CATALOG_GENERATE_SYMBOLS: YES
     # The app's and the share extension's version, each alone on its line.
-    MARKETING_VERSION: "1.7.5"
-    CURRENT_PROJECT_VERSION: "66"
+    MARKETING_VERSION: "1.7.6"
+    CURRENT_PROJECT_VERSION: "67"
     PARLEY_URL_SCHEME: parley   # the share extension's hand-off link
     PARLEY_DISPLAY_NAME: Parley   # the app's and the share extension's name
   configs:

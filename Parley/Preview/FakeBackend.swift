@@ -671,8 +671,9 @@ actor FakeBackend: ChatBackend {
     }
     func simulateUploadFailure() { failNextUpload = true }
     /// Nothing leaves the Mac: the file stays where it is and the token just names it.
-    func upload(_ attachment: Attachment, to conversation: ConversationID, thread: ThreadID?) throws -> Attachment {
+    func upload(_ attachment: Attachment, to conversation: ConversationID, thread: ThreadID?) async throws -> Attachment {
         uploaded.append(attachment)
+        if latency > .zero { try? await Task.sleep(for: latency) }
         if failNextUpload { failNextUpload = false; throw URLError(.networkConnectionLost) }
         var done = attachment
         done.uploadToken = "fake-\(attachment.name)"

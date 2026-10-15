@@ -181,6 +181,22 @@ struct ReactionNotificationTests {
         #expect(decide(open: "space/a") == nil)                                                      // on screen
         #expect(decide(open: "space/a", active: false) != nil)
     }
+    /// Removed and added again (a change of mind, or a different reaction later): that's a new reaction, and it notifies.
+    @Test func aReactionAddedAgainNotifiesAgain() async throws {
+        let notifier = RecordingNotifier()
+        let store = ChatStore(backend: FakeBackend())
+        store.notifier = notifier
+        store.notificationSettings = { NotificationSettings() }
+        store.isAppActive = { true }
+        await store.start()
+        let other = try #require(store.conversations.first { $0.id != store.selectedID && !$0.muted && $0.notificationLevel != .off })
+        let message = Message(id: "\(other.id)/t9/m8", conversationID: other.id, sender: store.me, text: "shipped it")
+        store.apply(.messageUpserted(message))
+        store.apply(.reacted(message.id, emoji: "🎉", by: "maria", added: true))
+        store.apply(.reacted(message.id, emoji: "🎉", by: "maria", added: false))
+        store.apply(.reacted(message.id, emoji: "🎉", by: "maria", added: true))
+        #expect(notifier.posted.count == 2)
+    }
     @Test func storePostsALiveAddOnceAndIgnoresRemovals() async throws {
         let fake = FakeBackend(), notifier = RecordingNotifier()
         let store = ChatStore(backend: fake)

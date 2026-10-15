@@ -22,6 +22,27 @@ import Testing
         #expect(shown[at - 1] == "e99" && shown[at + 1] == "e101")
         #expect(!shown.contains("e599") && store.detached.contains("engineering") && store.highlightedID == "e100")
     }
+    /// A resync while reading an old message keeps the window there; it doesn't pull the reader back to the newest.
+    @Test func aResyncKeepsAnOldMessageOpen() async throws {
+        let (store, fake) = await started()
+        await store.open("engineering", at: "e100")
+        #expect(store.detached.contains("engineering"))
+        let reads = await fake.listReads
+        store.apply(.resync)
+        for _ in 0..<100 where await fake.listReads == reads { try await Task.sleep(for: .milliseconds(10)) }
+        try await Task.sleep(for: .milliseconds(100))
+        #expect(store.detached.contains("engineering") && ids(store).contains("e100"))
+    }
+    /// A message that arrives while the conversation reloads isn't in the page the server already read: it stays.
+    @Test func aMessageArrivingDuringAReloadStays() async throws {
+        let (store, _) = await started(FakeBackend(latency: .milliseconds(150)))
+        await store.select("alex")
+        async let reload: Void = store.select("alex")   // reselecting reloads the newest page
+        try await Task.sleep(for: .milliseconds(40))
+        store.apply(.messageUpserted(Message(id: "late", conversationID: "alex", sender: Person(id: "alex", name: "Alex"), text: "just now")))
+        await reload
+        #expect(store.timeline("alex").contains { $0.id == "late" })
+    }
     @Test func scrollingDownLoadsNewerPagesUntilTheWindowMeetsTheNewest() async throws {
         let (store, _) = await started()
         await store.open("engineering", at: "e100")

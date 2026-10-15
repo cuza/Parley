@@ -22,9 +22,10 @@ extension LaunchSnapshot {
                   conversations: (try? c.decode([Conversation].self, forKey: .conversations)) ?? [],
                   messages: (try? c.decode([Message].self, forKey: .messages)) ?? [],
                   selectedID: try c.decodeIfPresent(ConversationID.self, forKey: .selectedID), drafts: drafts,
-                  draftFormatting: try c.decodeIfPresent([String: [TextStyleRange]].self, forKey: .draftFormatting) ?? [:],
-                  draftEdits: try c.decodeIfPresent([String: Date].self, forKey: .draftEdits) ?? drafts.filter { !$0.value.isEmpty }.mapValues { _ in .distantPast },
-                  serverDrafts: try c.decodeIfPresent([String: ServerDraft].self, forKey: .serverDrafts) ?? [:],
+                  // Each draft field on its own: one this build can't read costs that field (formatting, sync state), not the text.
+                  draftFormatting: (try? c.decodeIfPresent([String: [TextStyleRange]].self, forKey: .draftFormatting)) ?? [:],
+                  draftEdits: (try? c.decodeIfPresent([String: Date].self, forKey: .draftEdits)) ?? drafts.filter { !$0.value.isEmpty }.mapValues { _ in .distantPast },
+                  serverDrafts: (try? c.decodeIfPresent([String: ServerDraft].self, forKey: .serverDrafts)) ?? [:],
                   homeThreads: (try? c.decodeIfPresent([HomeThread].self, forKey: .homeThreads)) ?? [])
     }
 }
@@ -35,8 +36,15 @@ struct LaunchCache: Sendable {
     #else
     static let dynamite = LaunchCache(url: URL.applicationSupportDirectory.appending(path: "Parley/cache.json"))
     #endif
+    /// A file this build can't read at all is moved aside (`.unreadable`) rather than overwritten by the next save.
     func load() -> LaunchSnapshot {
-        guard let data = try? Data(contentsOf: url), let value = try? JSONDecoder().decode(LaunchSnapshot.self, from: data) else { return LaunchSnapshot() }
+        guard let data = try? Data(contentsOf: url) else { return LaunchSnapshot() }
+        guard let value = try? JSONDecoder().decode(LaunchSnapshot.self, from: data) else {
+            let aside = url.appendingPathExtension("unreadable")
+            try? FileManager.default.removeItem(at: aside)
+            try? FileManager.default.moveItem(at: url, to: aside)
+            return LaunchSnapshot()
+        }
         return value
     }
     func save(_ snapshot: LaunchSnapshot) throws {
