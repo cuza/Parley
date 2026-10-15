@@ -70,6 +70,11 @@ enum DynamiteMapper {
             expires: custom.stateExpiryTimestampUsec > 0 ? date(custom.stateExpiryTimestampUsec) : nil) : nil)
     }
     /// Avatar and preview image URLs may be scheme-relative (`//lh3…`). Only https is loaded.
+    /// Hosts whose image links show as the image itself when Google sent no picture for them: GIF services and Google's.
+    static func inlinesImages(_ url: URL) -> Bool {
+        guard url.scheme == "https", let host = url.host()?.lowercased() else { return false }
+        return ["klipy.com", "giphy.com", "tenor.com", "googleusercontent.com"].contains { host == $0 || host.hasSuffix("." + $0) }
+    }
     static func imageURL(_ raw: String) -> URL? {
         guard let url = URL(string: raw.hasPrefix("//") ? "https:" + raw : raw), url.scheme == "https", url.host() != nil else { return nil }
         return url
@@ -1059,8 +1064,11 @@ enum DynamiteMapper {
             let type = !link.mimeType.isEmpty ? link.mimeType : UTType(filenameExtension: url.pathExtension)?.preferredMIMEType ?? ""
             let thumbnail = imageURL(link.imageURL)
             if type.hasPrefix("image/") {
+                // Without an image from Google, the link itself is the picture only on a GIF service (a GIF pasted from
+                // another app): any other host would be the sender's server, contacted as the chat opens.
+                guard let picture = thumbnail ?? (Self.inlinesImages(url) ? url : nil) else { return nil }
                 return Attachment(name: !link.title.isEmpty ? link.title : url.lastPathComponent, contentType: type, kind: .image,
-                                  thumbnailURL: thumbnail ?? url, url: url, width: w, height: h)
+                                  thumbnailURL: picture, url: url, width: w, height: h)
             }
             guard thumbnail != nil else { return nil }   // Google Chat shows no card, only the link in the text
             let domain = (link.domain.isEmpty ? url.host() ?? "" : link.domain).lowercased()

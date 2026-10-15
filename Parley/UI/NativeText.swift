@@ -122,7 +122,7 @@ struct NativeComposer: NSViewRepresentable {
 }
 /// Each composer style is a custom attribute and `visual` derives fonts, strikes and indents from them, so the
 /// attributes alone define `formatting`. Shortcuts: ⌘B bold, ⌘I italic, ⌘U underline, ⇧⌘X strikethrough, ⇧⌘C code
-/// (⌘E is "edit last message"), ⌥⇧⌘C code block, ⇧⌘I quote, ⇧⌘8 bulleted list, ⌘K link (outside the composer ⌘K is
+/// (⌘E is "edit last message"), ⌥⇧⌘C code block, ⇧⌘I quote, ⇧⌘8 bulleted list, ⇧⌘K link (⌘K is
 /// Jump to Conversation). The formatting bar and the right-click Format menu send the `format…` actions.
 final class ComposerTextView: NSTextView {
     var send: (() -> Void)?
@@ -157,7 +157,8 @@ final class ComposerTextView: NSTextView {
             default: break
             }
         }
-        if event.keyCode == 36 && !event.modifierFlags.contains(.shift) { send?(); return }
+        // Return sends; ⇧Return and ⌥Return add a line, as in Messages.
+        if event.keyCode == 36 && event.modifierFlags.intersection([.shift, .option]).isEmpty { send?(); return }
         if event.keyCode == 126 && string.isEmpty { editLast?(); return }
         if event.keyCode == 53 { cancel?(); return }
         super.keyDown(with: event)
@@ -177,7 +178,8 @@ final class ComposerTextView: NSTextView {
         case (true, "8"): .listItem   // key code 28 is the 8 key, whatever shift makes of it
         default: nil
         }
-        if modifiers == [.command], event.charactersIgnoringModifiers?.lowercased() == "k", let askForLink { askForLink(); return true }
+        // ⇧⌘K: ⌘K is Jump to Conversation everywhere, the composer too, as in chat apps.
+        if modifiers == [.command, .shift], event.charactersIgnoringModifiers?.lowercased() == "k", let askForLink { askForLink(); return true }
         guard let style else { return super.performKeyEquivalent(with: event) }
         toggle(style)
         return true
@@ -283,7 +285,7 @@ final class ComposerTextView: NSTextView {
         menu.addItem(.separator())
         item("Bulleted List", #selector(formatList), "8", [.command, .shift])
         item("Quote", #selector(formatQuote), "i", [.command, .shift])
-        item("Link…", #selector(formatLink), "k")
+        item("Link…", #selector(formatLink), "k", [.command, .shift])
         menu.addItem(.separator())
         item("Code", #selector(formatCode), "c", [.command, .shift])
         item("Code Block", #selector(formatCodeBlock), "c", [.command, .shift, .option])

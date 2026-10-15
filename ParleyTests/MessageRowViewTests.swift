@@ -140,6 +140,42 @@ import Testing
             copy: { _ in calls.append("copy") }, edit: { _ in calls.append("edit") }, delete: { _ in calls.append("delete") }))
         return (view, { calls })
     }
+    /// VoiceOver reads a message as one line, who and what and when, and offers the menu's actions on it.
+    @Test func voiceOverReadsTheMessageAndOffersItsActions() throws {
+        let (view, calls) = row(own: false)
+        let label = try #require(view.accessibilityLabel())
+        let message = try #require(view.row?.message)
+        #expect(label.contains("\(message.sender.name), \(message.text)"))   // after the day, which this first row starts
+        #expect(label.contains(message.createdAt.formatted(date: .omitted, time: .shortened)))
+        let actions = try #require(view.accessibilityCustomActions())
+        #expect(actions.map(\.name).starts(with: ["Reply", "Reply in Thread", "Copy"]))
+        _ = actions.first { $0.name == "Reply" }?.handler?()
+        #expect(calls() == ["quote"])
+        let (own, _) = row(own: true)
+        #expect(own.accessibilityLabel()?.contains(", You, hi, ") == true)
+    }
+    /// Copy Message keeps the message's links and formatting for Mail and Notes (rich text), and plain text for the rest.
+    @Test func copyKeepsLinksAndFormatting() throws {
+        let board = NSPasteboard(name: .init("parley-test-\(UUID().uuidString)"))
+        MessageRowView.pasteboard = board
+        defer { MessageRowView.pasteboard = .general }
+        let view = MessageRowView()
+        let message = Message(id: "m", conversationID: "c", sender: Person(id: "a", name: "X"), text: "see docs",
+                              formatting: [TextStyleRange(style: .link(URL(string: "https://example.com")!), start: 4, length: 4)])
+        view.configure(TimelineRow.rows([message])[0], own: false, kind: .space, meID: "me", actions: MessageRowActions())
+        let item = try #require(view.contextMenu().items.first { $0.title == "Copy" } as? ClosureMenuItem)
+        item.handler()
+        #expect(board.string(forType: .string) == "see docs")
+        let rich = try #require(board.data(forType: .rtf).flatMap { NSAttributedString(rtf: $0, documentAttributes: nil) })
+        #expect(rich.attribute(.link, at: 5, effectiveRange: nil) != nil)
+    }
+    /// With text selected, the menu keeps the system's items for it (Look Up, Translate, Search, Services, Speech).
+    @Test func selectedTextKeepsTheSystemItems() throws {
+        let (view, _) = row(own: false)
+        let menu = try #require(view.contextMenu(selection: "hi") as? MessageMenu)
+        #expect(menu.keepsSystemItems)
+        #expect(try #require(view.contextMenu() as? MessageMenu).keepsSystemItems == false)
+    }
     @Test func theMenuStartsWithQuickReactionsThenActions() {
         let (incoming, _) = row(own: false)
         let menu = incoming.contextMenu()
@@ -258,5 +294,15 @@ import Testing
         #expect(!image.isTemplate)
         #expect(strip.moreButton.contentTintColor == nil)
         #expect(image.size.width > 0)
+    }
+}
+
+/// The sidebar row as VoiceOver reads it.
+@MainActor struct SidebarSpokenTests {
+    @Test func readsUnreadPinnedAndMutedOnlyWhenSo() {
+        var room = Conversation(id: "s", name: "Design", kind: .space, members: [])
+        #expect(ChatView.spoken(room) == "Design")   // not "0 unread"
+        room.unread = 3; room.pinned = true; room.muted = true
+        #expect(ChatView.spoken(room) == "Design, 3 unread, pinned, muted")
     }
 }

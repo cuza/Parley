@@ -141,6 +141,9 @@ struct MessageTable: NSViewRepresentable {
         /// Telegram-style diff: older rows inserted above, newer appended, changed rows re-measured and reconfigured in place.
         private func apply(old: [TimelineRow], new: [TimelineRow], everything: Bool, in table: NSTableView) {
             rows = new
+            due = nil   // indexes into the old rows
+            // A changed row (an edit, a reaction, a receipt, a streamed answer) is a new key; the old ones go once they pile up.
+            if layouts.count > rows.count + 100 { let current = Set(rows); layouts = layouts.filter { current.contains($0.key) } }
             let oldIDs = old.map(\.id), newIDs = new.map(\.id)
             let prepended = newIDs.ends(with: oldIDs), appended = newIDs.starts(with: oldIDs)
             guard !everything, !old.isEmpty, prepended || appended else {
@@ -250,18 +253,29 @@ struct MessageTable: NSViewRepresentable {
                 }
             }
         }
+        /// The rows a re-measure still has to do at `dueWidth`, farthest from the reader first (taken from the end): made
+        /// once per re-measure, not once per chunk, which over a long history was a filter and sort per millisecond.
+        private var due: [Int]?
+        private var dueWidth: CGFloat = 0
         /// Measures the next chunk; false once every row is measured at the table's width.
         private func measureNext() -> Bool {
-            guard let table, let scroll, table.bounds.width > 50 else { settling = false; return false }
+            guard let table, let scroll, table.bounds.width > 50 else { settling = false; due = nil; return false }
             let width = table.bounds.width
-            let visible = table.rows(in: scroll.documentVisibleRect), middle = visible.location + visible.length / 2
-            let due = rows.indices.filter { layouts[rows[$0]]?.first?.width != width }
-            let next = due.sorted { abs($0 - middle) < abs($1 - middle) }.prefix(visible.length + Self.chunk)
+            let visible = table.rows(in: scroll.documentVisibleRect)
+            if due == nil || dueWidth != width {
+                let middle = visible.location + visible.length / 2
+                due = rows.indices.filter { layouts[rows[$0]]?.first?.width != width }.sorted { abs($0 - middle) > abs($1 - middle) }
+                dueWidth = width
+            }
+            let stale = { (i: Int) in i < self.rows.count && self.layouts[self.rows[i]]?.first?.width != width }
+            // What is on screen now first (the reader may have scrolled meanwhile), then the next in line.
+            var next = IndexSet((visible.location..<visible.location + visible.length).filter(stale))
+            while next.count < visible.length + Self.chunk, let i = due?.popLast() { if stale(i) { next.insert(i) } }
             for i in next { _ = fresh(rows[i]) }
-            let indexes = IndexSet(next)
-            keepingPlace { table.noteHeightOfRows(withIndexesChanged: indexes) }
-            indexes.forEach(configureRow)
-            settling = due.count > next.count
+            keepingPlace { table.noteHeightOfRows(withIndexesChanged: next) }
+            next.forEach(configureRow)
+            settling = !(due ?? []).isEmpty
+            if !settling { due = nil }
             return settling
         }
         /// The clip view's origin with the newest message resting just above the bottom inset.
@@ -353,7 +367,8 @@ struct MessageTable: NSViewRepresentable {
             pinnedToBottom = true
             let target = NSPoint(x: 0, y: max(-scroll.contentInsets.top, bottomOrigin))
             // An animation only advances with frames on screen: hidden, occluded or locked, jump instead of stalling.
-            guard scroll.window?.occlusionState.contains(.visible) == true else {
+            // With Reduce Motion, jump too.
+            guard scroll.window?.occlusionState.contains(.visible) == true, !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion else {
                 scroll.contentView.setBoundsOrigin(target); scroll.reflectScrolledClipView(scroll.contentView); return
             }
             NSAnimationContext.runAnimationGroup { _ in scroll.contentView.animator().setBoundsOrigin(target) }

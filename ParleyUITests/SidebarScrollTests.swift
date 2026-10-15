@@ -22,7 +22,7 @@ import XCTest
         XCTAssertTrue(last.isHittable, "the last conversation never scrolled into view")
         XCTAssertEqual(last.label, "Space 320, 320 unread")
         last.click()
-        let read = row(sidebar, "Space 320, 0 unread")
+        let read = sidebar.descendants(matching: .any).matching(NSPredicate(format: "label == %@", "Space 320")).firstMatch   // read: no count
         XCTAssertTrue(read.waitForExistence(timeout: 5), "selecting the last conversation didn't open and read it")
         XCTAssertTrue(app.staticTexts["Start the conversation"].waitForExistence(timeout: 5))
         XCTAssertTrue(read.isHittable, "the sidebar jumped away from the selected row")

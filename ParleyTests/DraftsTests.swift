@@ -232,6 +232,15 @@ struct DraftSyncTests {
         #expect(store.serverDrafts[Self.alex]?.text == "hey, about tomorrow")
         #expect(await !fake.draftWrites.contains("delete alex/timeline"))
     }
+    /// The sidebar's Drafts badge counts the drafts Drafts lists, without reading the text that changes on every keystroke.
+    @Test func theDraftCountMatchesTheList() async throws {
+        let (store, _) = await started()
+        store.setDraft("hello", conversation: "alex", thread: nil)
+        store.setDraft("   ", conversation: "maria", thread: nil)
+        #expect(store.draftCount == store.draftList().count && store.draftCount == 1)
+        store.edit(Message(id: "m1", conversationID: "maria", sender: store.me, text: "old"))   // an edit is no draft
+        #expect(store.draftCount == store.draftList().count)
+    }
     @Test func clearingTheComposerDeletesTheDraft() async throws {
         let (store, fake) = await started()
         store.setDraft("hello", conversation: "alex", thread: nil)

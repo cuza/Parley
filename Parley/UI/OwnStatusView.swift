@@ -48,13 +48,13 @@ struct OwnStatusFooter: View {
                     Button(choice.title) { Task { await store.setDoNotDisturb(for: choice.duration) } }
                 }
                 Divider()
-                Button("Until a specific time…") { pickingDNDEnd = true }
+                Button("Until a Specific Time…") { pickingDNDEnd = true }
                 if dnd { Divider(); Button("Turn off") { Task { await store.setAway(false) } } }
             }
-            Toggle("Set as away", isOn: choice(status.availability == .away) { await store.setAway(true) })
+            Toggle("Set as Away", isOn: choice(status.availability == .away) { await store.setAway(true) })
             Divider()
             Button(status.custom == nil ? "Add a status…" : "Edit status…") { editingStatus = true }
-            if status.custom != nil { Button("Clear status") { Task { await store.setCustomStatus(nil) } } }
+            if status.custom != nil { Button("Clear Status") { Task { await store.setCustomStatus(nil) } } }
         } label: {
             HStack(spacing: 6) {
                 PresenceDot(presence: Self.presence(status))
@@ -138,7 +138,7 @@ private struct CustomStatusSheet: View {
                 }
             }
             HStack {
-                if !text.isEmpty { Button("Clear status") { text = "" } }
+                if !text.isEmpty { Button("Clear Status") { text = "" } }
                 Spacer()
                 Button("Cancel", role: .cancel) { dismiss() }.keyboardShortcut(.cancelAction)
                 Button("Done") {

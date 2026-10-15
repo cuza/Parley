@@ -125,7 +125,7 @@ struct StarredStoreTests {
         let (store, fake) = await started(latency: .milliseconds(300))
         let message = try #require(store.messages.first { $0.id == "d1" })
         let pending = Task { await store.setStarred(true, message) }
-        try await Task.sleep(for: .milliseconds(80))
+        await eventually { store.messages.first { $0.id == "d1" }?.starred == true }
         #expect(store.messages.first { $0.id == "d1" }?.starred == true)
         await pending.value
         #expect(await fake.changes == ["star d1"])

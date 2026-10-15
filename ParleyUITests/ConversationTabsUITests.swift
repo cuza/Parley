@@ -19,7 +19,7 @@ import XCTest
             app.menuItems["Parley"].firstMatch.click()
             let sidebar = app.descendants(matching: .any)["sidebar"].firstMatch
             sidebar.descendants(matching: .any).matching(NSPredicate(format: "label BEGINSWITH %@", name)).firstMatch.rightClick()
-            app.menuItems["Open in new window"].click()
+            app.menuItems["Open in New Window"].click()
             sleep(1)
         }
         let shot = XCTAttachment(screenshot: app.windows.firstMatch.screenshot()); shot.name = "tabs"; shot.lifetime = .keepAlways; add(shot)

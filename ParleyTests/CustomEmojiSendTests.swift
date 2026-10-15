@@ -135,7 +135,7 @@ struct CustomEmojiAnnotationTests {
         let thumbs = ReactionCardView(reaction: Reaction(emoji: "👍", people: ["me", "a"]), names: ChatStore.reactorsLine(names: [], count: 2), load: load)
         card.hover(pill, thumbs)
         #expect(!card.isShown)
-        try await Task.sleep(for: .milliseconds(100))
+        await eventually { card.isShown }
         #expect(card.isShown && card.content?.names == "2 people")
         var named = thumbs; named.names = "Alex and You"
         card.update(other, ReactionCardView(reaction: thumbs.reaction, names: "someone else", load: load))   // another pill's: ignored

@@ -127,7 +127,7 @@ struct ManageGroupsStoreTests {
         #expect(await fake.changes == ["rename Studio design"])
         await fake.simulateChangeFailure()
         await store.rename("design", to: "Nope")
-        #expect(room(store, "design")?.name == "Studio" && store.error != nil)
+        #expect(room(store, "design")?.name == "Studio" && store.toast != nil)   // put back, with a note
     }
     @Test func anEmptyOrUnchangedNameIsNotSent() async throws {
         let (store, fake) = await started()
@@ -215,7 +215,7 @@ struct ManageGroupsStoreTests {
         let before = await fake.memberRequests.count
         let design = try #require(room(store, "design"))
         store.apply(.conversationUpserted(design))
-        try await Task.sleep(for: .milliseconds(100))
+        await eventually { await fake.memberRequests.count == before + 1 }
         #expect(await fake.memberRequests.count == before + 1)
     }
 }

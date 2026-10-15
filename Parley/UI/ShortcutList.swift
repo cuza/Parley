@@ -6,7 +6,8 @@ struct ShortcutList: View {
     @Bindable var store: ChatStore
     let shortcut: Shortcut
     var body: some View {
-        let items = store.shortcutMessages(shortcut)
+        // Home reads its rows, not the shortcut's messages (a scan of every message on each update).
+        let items = shortcut == .home ? [] : store.shortcutMessages(shortcut)
         Group {
             if shortcut == .home {
                 let rows = store.homeRows(unreadOnly: store.homeUnreadOnly, threadsOnly: store.homeThreadsOnly)
@@ -18,20 +19,26 @@ struct ShortcutList: View {
                     }
                     .font(.system(size: 12)).padding(.horizontal, 14).padding(.vertical, 6)
                     if rows.isEmpty {
-                        ContentUnavailableView(store.homeUnreadOnly || store.homeThreadsOnly ? "Nothing here" : "No recent conversations", systemImage: shortcut.icon,
-                                               description: Text(store.homeUnreadOnly || store.homeThreadsOnly ? "No rows match these filters." : "Conversations with new messages show up here."))
+                        let filtered = store.homeUnreadOnly || store.homeThreadsOnly
+                        ContentUnavailableView {
+                            Label(filtered ? "Nothing here" : "No recent conversations", systemImage: shortcut.icon)
+                        } description: {
+                            Text(filtered ? "No rows match these filters." : "Conversations with new messages show up here.")
+                        } actions: {
+                            if filtered { Button("Show All") { store.homeUnreadOnly = false; store.homeThreadsOnly = false } }
+                        }
                             .frame(maxWidth: .infinity, maxHeight: .infinity)   // fills the pane, so the filter bar stays at the top
                     } else {
                         List(rows) { row in
                             if let thread = row.thread {
                                 Button { Task { await store.openHomeThread(thread) } } label: { threadRow(row.room, thread) }
                                     .buttonStyle(.plain)
-                                    .contextMenu { Button("Unfollow thread") { Task { await store.setFollowing(false, thread: thread.id) } } }
+                                    .contextMenu { Button("Unfollow Thread") { Task { await store.setFollowing(false, thread: thread.id) } } }
                                     .listRowBackground(store.threadID == thread.id ? Color.accentColor.opacity(0.15) : nil)
                             } else {
                                 Button { Task { await store.select(row.room.id) } } label: { homeRow(row.room, row.last) }
                                     .buttonStyle(.plain)
-                                    .contextMenu { if row.room.unread > 0 { Button("Mark as read") { Task { await store.markRead(row.room.id) } } } }
+                                    .contextMenu { if row.room.unread > 0 { Button("Mark as Read") { Task { await store.markRead(row.room.id) } } } }
                                     .task(id: store.me.id) { await store.loadPreview(row.room.id) }   // again once the account is known
                             }
                         }
@@ -79,7 +86,7 @@ struct ShortcutList: View {
                     if let time = last?.createdAt ?? room.activity { Text(Self.time(time)).font(.caption).foregroundStyle(.secondary).fixedSize() }
                     if room.unread > 0 {
                         Text("\(room.unread)").font(.system(size: 11, weight: .semibold, design: .rounded)).padding(.horizontal, 6).padding(.vertical, 2)
-                            .background(.blue, in: Capsule()).foregroundStyle(.white).fixedSize()
+                            .background(Color.accentColor, in: Capsule()).foregroundStyle(.white).monospacedDigit().fixedSize()
                     }
                 }
                 .reportFrame("column")
@@ -113,13 +120,13 @@ struct ShortcutList: View {
                     }
                     line(thread.head).font(.system(size: 13)).lineLimit(1).frame(maxWidth: .infinity, alignment: .leading)
                     HStack(alignment: .firstTextBaseline, spacing: 4) {
-                        Text("└").foregroundStyle(.tertiary)
+                        Text("└").foregroundStyle(.tertiary).accessibilityHidden(true)
                         line(thread.latest).font(.system(size: 13, weight: thread.unread ? .medium : .regular)).lineLimit(2)
                     }.frame(maxWidth: .infinity, alignment: .leading)
                 }
                 VStack(alignment: .trailing, spacing: 5) {   // the time over the unread dot, as a conversation's row has it
                     Text(Self.time(thread.time)).font(.caption).foregroundStyle(.secondary).fixedSize()
-                    if thread.unread { Circle().fill(.blue).frame(width: 8, height: 8).accessibilityLabel("Unread") }
+                    if thread.unread { Circle().fill(Color.accentColor).frame(width: 8, height: 8).accessibilityLabel("Unread") }
                 }
             }
         }

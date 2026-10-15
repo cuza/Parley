@@ -36,8 +36,14 @@ struct ThreadsPane: View {
         if let all = store.threadSummaries[room.id] {
             let shown = ThreadSummary.filtered(all, by: filters)
             if shown.isEmpty {
-                ContentUnavailableView(all.isEmpty ? "No threads yet" : "All caught up", systemImage: "bubble.left.and.bubble.right",
-                                       description: Text(all.isEmpty ? "Threads with replies show here." : "No threads match these filters."))
+                // "All caught up" would say nothing is unread, when a Following or Mentions filter only hides the rest.
+                ContentUnavailableView {
+                    Label(all.isEmpty ? "No threads yet" : "No matching threads", systemImage: "bubble.left.and.bubble.right")
+                } description: {
+                    Text(all.isEmpty ? "Threads with replies show here." : "No threads match these filters.")
+                } actions: {
+                    if !all.isEmpty { Button("Clear Filters") { saved = "" } }
+                }
             } else {
                 List(shown) { thread in
                     Button { Task { await store.openThread(thread.head) } } label: { row(thread) }.buttonStyle(.plain)

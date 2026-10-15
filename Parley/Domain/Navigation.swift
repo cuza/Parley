@@ -1,6 +1,6 @@
 import Foundation
 
-/// Keyboard navigation over the sidebar (⌘1…9, ⌥↑/⌥↓ next unread).
+/// Keyboard navigation over the sidebar (⌘1…9, ⌥⌘↑/⌥⌘↓ next unread).
 extension Conversation {
     /// The sidebar's sections, as web Chat: Ask Gemini, pinned DMs and spaces together, direct messages and groups, spaces,
     /// then DMs with apps; each in server order.

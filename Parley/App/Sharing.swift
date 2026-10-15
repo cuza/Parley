@@ -7,10 +7,14 @@ struct Shared: Identifiable, Equatable {
     var text: String
     var files: [URL]
     init(text: String, files: [URL]) { self.text = text; self.files = files }
-    /// Files when the pasteboard has any, else its text; nil when it has neither.
+    /// Words shared along with files (the share sheet writes them on their own type: with files on a pasteboard, its
+    /// plain text is their names).
+    static let textType = NSPasteboard.PasteboardType("dev.cuza.Parley.shared-text")
+    /// Files when the pasteboard has any, with words written beside them; else its text; nil when it has neither.
     init?(_ pasteboard: NSPasteboard) {
         files = pasteboard.readObjects(forClasses: [NSURL.self], options: [.urlReadingFileURLsOnly: true]) as? [URL] ?? []
-        text = files.isEmpty ? pasteboard.string(forType: .string)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? "" : ""
+        let words = pasteboard.pasteboardItems?.lazy.compactMap { $0.string(forType: Self.textType) }.first
+        text = (files.isEmpty ? pasteboard.string(forType: .string) : words)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         if text.isEmpty && files.isEmpty { return nil }
     }
     /// The share sheet's hand-off, `parley://share?pasteboard=<name>`: the extension's pasteboard, read once and freed.

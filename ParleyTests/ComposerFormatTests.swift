@@ -121,7 +121,9 @@ struct FormatAnnotationTests {
         #expect(view.formatting == [TextStyleRange(style: .underline, start: 0, length: 3)])
         var asked = false
         view.askForLink = { asked = true }
-        #expect(try press("k", .command))   // in the composer ⌘K makes a link; elsewhere it opens Jump to Conversation
+        #expect(try !press("k", .command))   // ⌘K is Jump to Conversation everywhere, the composer too
+        #expect(!asked)
+        #expect(try press("k", [.command, .shift]))   // Add Link is ⇧⌘K
         #expect(asked)
     }
     @Test func rightClickOffersAFormatMenu() throws {

@@ -127,13 +127,13 @@ struct ChatStoreTests {
     /// A message jumped to is outlined for a moment, as Telegram flashes it, then goes back to normal by itself.
     @Test func aHighlightFadesByItself() async throws {
         let store = ChatStore(backend: FakeBackend())
-        store.highlightDuration = .milliseconds(100)
+        store.highlightDuration = .milliseconds(400)   // margins of 200 ms each way: a busy Mac doesn't flip the result
         store.highlightedID = "a"
-        try await Task.sleep(for: .milliseconds(60))
+        try await Task.sleep(for: .milliseconds(200))
         store.highlightedID = "b"                       // a newer jump restarts the wait
-        try await Task.sleep(for: .milliseconds(60))
-        #expect(store.highlightedID == "b")
-        try await Task.sleep(for: .milliseconds(150))
+        try await Task.sleep(for: .milliseconds(200))
+        #expect(store.highlightedID == "b")             // 400 ms after "a", but only 200 after "b"
+        await eventually { store.highlightedID == nil }
         #expect(store.highlightedID == nil)
     }
 
@@ -445,6 +445,24 @@ struct LaunchCacheAccountTests {
         first.flush()
         let next = ChatStore(backend: FakeBackend(), cache: cache)
         #expect(next.homeThreads.map(\.id) == first.homeThreads.map(\.id))
+    }
+    /// Signing out on purpose drops what the cache holds of the account's chats (Google keeps it all) and the cached
+    /// pictures and files, but not the drafts, which only this Mac has.
+    @Test func signingOutForgetsHistoryButKeepsDrafts() async throws {
+        let cache = Self.cache()
+        let store = ChatStore(backend: FakeBackend(), cache: cache)
+        var cleared = false
+        store.clearDiskCaches = { cleared = true }
+        await store.start()
+        let id = try #require(store.selectedID)
+        store.setDraft("not sent yet", conversation: id, thread: nil)
+        store.flush()
+        #expect(!cache.load().messages.isEmpty)
+        store.signedOut()
+        let saved = cache.load()
+        #expect(saved.messages.isEmpty && saved.conversations.isEmpty && saved.homeThreads.isEmpty)
+        #expect(saved.drafts.values.contains("not sent yet"))
+        #expect(cleared)
     }
     @Test func ownCacheSurvivesConnect() async throws {
         let cache = Self.cache()

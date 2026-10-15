@@ -72,12 +72,15 @@ actor DynamiteBackend: ChatBackend {
         await resolve([selfID])
         continuation.yield(.connectionChanged(.connecting))
         if realtime {
-            channel?.cancel()
             let punctual = PunctualChannel(authorizer: authorizer,
                                            onEvent: { [weak self] in await self?.apply($0) },
                                            onState: { [weak self] in await self?.channelChanged($0) },
                                            onGap: { [weak self] in await self?.reload() })
             await punctual.subscribe(watched)
+            // From here to the end, nothing awaits: a connect that overlaps this one can't slip in between the old channel
+            // being cancelled and this one taking its place, and leave a channel no one cancels.
+            channel?.cancel()
+            stayAwake(true)
             self.realtimeChannel = punctual
             channel = Task { await punctual.run() }
             // Polling starts from now: what came before is in the pages this connect loads.
@@ -103,7 +106,19 @@ actor DynamiteBackend: ChatBackend {
         return people[selfID] ?? Person(id: selfID, name: "Me")
     }
     /// Closes the realtime channel and polling; tests end an event stream with it.
+    /// While the realtime channel runs, App Nap must not slow its reconnect and the fallback poll: with every window
+    /// closed or hidden, which is how a chat app spends most of its time, a dropped connection would come back late and
+    /// notifications with it. System sleep stays allowed.
+    private var awake: (any NSObjectProtocol)?
+    private func stayAwake(_ on: Bool) {
+        if on, awake == nil {
+            awake = ProcessInfo.processInfo.beginActivity(options: .userInitiatedAllowingIdleSystemSleep, reason: "Google Chat connection")
+        } else if !on, let token = awake {
+            ProcessInfo.processInfo.endActivity(token); awake = nil
+        }
+    }
     func disconnect() {
+        stayAwake(false)
         channel?.cancel()
         channel = nil
         poller?.cancel()
@@ -1127,6 +1142,10 @@ actor DynamiteBackend: ChatBackend {
     func upload(_ attachment: Attachment, to conversation: ConversationID, thread: ThreadID?) async throws -> Attachment {
         guard let file = attachment.url, file.isFileURL else { throw DynamiteError.notYetSupported("This attachment") }
         let group = try DynamiteID.group(conversation)
+        // Too large is known from the file's size, before reading it (on a network volume, a read is a full copy).
+        if let size = try? file.resourceValues(forKeys: [.fileSizeKey]).fileSize, size > Attachment.maxUploadBytes {
+            throw AttachmentError.tooLarge(attachment.name)
+        }
         // ponytail: the whole file in one request (memory-mapped); chunk with `upload` commands if 200 MB proves too much.
         let bytes = try Data(contentsOf: file, options: .mappedIfSafe)
         guard !bytes.isEmpty else { throw AttachmentError.empty(attachment.name) }
@@ -1378,6 +1397,7 @@ actor DynamiteBackend: ChatBackend {
     /// The channel's state as the app sees it. Polling doesn't stand in for it: catch_up_user leaves out new messages.
     private func channelChanged(_ state: ConnectionState) {
         channelState = state
+        if state == .signedOut { poller?.cancel(); poller = nil; stayAwake(false) }   // stopped; polling would only fail again
         continuation.yield(.connectionChanged(state))
     }
     /// One round of polling: the events since the last one, announced as if pushed (notifications included). Events at

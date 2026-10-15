@@ -27,7 +27,15 @@ enum Giphy {
 
     /// The user's API key: a generic password under its own Keychain service, never in defaults or the repo.
     static let keyItem = KeychainPassword(service: "dev.cuza.Parley.giphy", account: "api-key")
-    static var key: String? { try? keyItem.get() }
+    /// Read from the Keychain once, then kept: the picker asks again on every update while it is open.
+    @MainActor static var key: String? {
+        if let cachedKey { return cachedKey }
+        let read = try? keyItem.get()
+        cachedKey = .some(read)
+        return read
+    }
+    @MainActor private static var cachedKey: String??
+    @MainActor static func setKey(_ key: String) throws { try keyItem.set(key); cachedKey = .some(key) }
 
     static let session: URLSession = {
         let config = URLSessionConfiguration.ephemeral

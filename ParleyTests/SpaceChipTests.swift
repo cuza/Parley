@@ -102,3 +102,17 @@ import Testing
         #expect(view.formatting == [TextStyleRange(style: .chip(hall.id, emoji: "🏰", link: URL(string: link)), start: 0, length: 9)])
     }
 }
+
+/// Return sends; ⇧Return and ⌥Return add a line, as in Messages.
+@MainActor struct ReturnKeyTests {
+    @Test func optionReturnAddsALineInsteadOfSending() throws {
+        var sent = false
+        let view = ComposerTextView(usingTextLayoutManager: false)
+        view.send = { sent = true }
+        view.load("hello", [])
+        let optionReturn = try #require(NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: .option, timestamp: 0, windowNumber: 0, context: nil,
+                                                         characters: "\r", charactersIgnoringModifiers: "\r", isARepeat: false, keyCode: 36))
+        view.keyDown(with: optionReturn)
+        #expect(!sent)
+    }
+}

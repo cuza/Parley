@@ -47,6 +47,15 @@ import Testing
         #expect(!WebViewSignIn.hasSession(expired, now: Date(timeIntervalSince1970: 100)))
     }
 
+    /// What leaves the sign-in window goes to the browser only as a web page: a page there can't open a file or start
+    /// another app through its URL scheme, with or without a click.
+    @Test func onlyWebPagesLeaveForTheBrowser() {
+        #expect(WebViewSignIn.opensInBrowser(URL(string: "https://support.google.com/a")!))
+        #expect(WebViewSignIn.opensInBrowser(URL(string: "http://example.com/")!))
+        #expect(!WebViewSignIn.opensInBrowser(URL(string: "file:///Applications/Calculator.app")!))
+        #expect(!WebViewSignIn.opensInBrowser(URL(string: "someapp://do-something")!))
+        #expect(!WebViewSignIn.opensInBrowser(URL(string: "javascript:alert(1)")!))
+    }
     @Test func keepsGoogleSignInPagesInTheWindow() {
         func stays(_ url: String, link: Bool = true) -> Bool { WebViewSignIn.staysInView(URL(string: url)!, linkClick: link) }
         #expect(stays("https://accounts.google.com/v3/signin/identifier"))

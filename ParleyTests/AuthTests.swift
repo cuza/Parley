@@ -10,7 +10,8 @@ final class MemoryVault: SessionVault, @unchecked Sendable {
     func delete() { lock.withLock { value = nil } }
 }
 final class StubExchange: @unchecked Sendable {
-    struct Reply { var status: Int = 200; var headers: [String: String] = [:]; var data: Data = Data(); var failure: URLError.Code? = nil }
+    struct Reply { var status: Int = 200; var headers: [String: String] = [:]; var data: Data = Data(); var failure: URLError.Code? = nil; var delay: TimeInterval = 0
+        var hold: TimeInterval = 0 }   // `delay` before answering; `hold` open after the data, as a long poll
     private let lock = NSLock()
     private var replies: [Reply]
     private var recorded: [URLRequest] = []
@@ -43,10 +44,12 @@ final class AuthStubProtocol: URLProtocol, @unchecked Sendable {
         do {
             guard let exchange = Self.registry.get(request.value(forHTTPHeaderField: "X-Stub-Exchange")) else { throw URLError(.badServerResponse) }
             let reply = try exchange.next(request)
+            if reply.delay > 0 { Thread.sleep(forTimeInterval: reply.delay) }   // a slow server: the caller awaits meanwhile
             if let failure = reply.failure { throw URLError(failure) }
             let response = HTTPURLResponse(url: request.url!, statusCode: reply.status, httpVersion: "HTTP/1.1", headerFields: reply.headers)!
             client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
             client?.urlProtocol(self, didLoad: reply.data)
+            if reply.hold > 0 { Thread.sleep(forTimeInterval: reply.hold) }
             client?.urlProtocolDidFinishLoading(self)
         } catch { client?.urlProtocol(self, didFailWithError: error) }
     }
@@ -115,6 +118,17 @@ struct AuthTests {
         }
         #expect(throws: Never.self) { try WebSessionAuthorizer.validateDestination(rpc.url) }
     }
+    /// The stored session as installed copies hold it today: every later build must read it, or an update signs everyone
+    /// out. Change the format only with a migration, and keep this sample decoding. (Fake values.)
+    @Test func theStoredSessionFormatStillDecodes() throws {
+        let stored = #"{"cookies":[{"name":"SID","value":"fake","domain":".google.com","path":"\/","secure":true,"expires":1893456000}],"userAgent":"Mozilla\/5.0 Safari"}"#
+        let credentials = try JSONDecoder().decode(WebCredentials.self, from: Data(stored.utf8))
+        #expect(credentials.cookies == [SessionCookie(name: "SID", value: "fake", domain: ".google.com", path: "/", secure: true, expires: 1_893_456_000)])
+        #expect(credentials.userAgent == "Mozilla/5.0 Safari")
+        #expect(KeychainSessionVault.releaseService == "dev.cuza.Parley")
+        #expect(KeychainSessionVault.debugService == "dev.cuza.Parley.debug")
+        #expect(KeychainSessionVault.account == "dynamite.web-session")
+    }
     /// Debug builds (and so the test host) never share the installed app's session entry or sign-in data.
     @MainActor @Test func debugBuildsKeepTheirOwnSession() {
         #expect(KeychainSessionVault().service == "dev.cuza.Parley.debug")
@@ -181,6 +195,17 @@ struct AuthTests {
         try await auth.signIn(cookies: [cookie], userAgent: "test-agent")
         await #expect(throws: AuthFailure.signInRequired) { _ = try await auth.punctualRegistration(fresh: true) }
         #expect(vault.read() == nil)
+    }
+    /// Requests that start together without a token share one bootstrap page load, instead of each loading the page.
+    @Test func concurrentRequestsShareOneTokenFetch() async throws {
+        let vault = MemoryVault()
+        vault.write(try JSONEncoder().encode(WebCredentials(cookies: [cookie], userAgent: "test-agent")))
+        var slowBootstrap = bootstrap; slowBootstrap.delay = 0.3
+        let exchange = StubExchange([slowBootstrap, .init(data: Data([1])), .init(data: Data([2])), .init(data: Data([3]))])
+        let auth = WebSessionAuthorizer(vault: vault, session: AuthStubProtocol.session(exchange))
+        async let a = auth.data(for: rpc), b = auth.data(for: rpc), c = auth.data(for: rpc)
+        _ = try await (a, b, c)
+        #expect(exchange.requests.filter { $0.url?.path == WebSessionAuthorizer.bootstrapURL.path }.count == 1)
     }
     @Test func transientHTTPFailurePreservesSession() async throws {
         let vault = MemoryVault()

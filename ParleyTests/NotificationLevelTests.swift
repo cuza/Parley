@@ -205,7 +205,7 @@ struct NotificationLevelStoreTests {
         let (store, _, fake) = await started()
         await fake.simulateChangeFailure()
         await store.setNotificationLevel(.off, "design")
-        #expect(level(store, "design") == nil && store.error != nil)
+        #expect(level(store, "design") == nil && store.toast != nil)   // put back, with a note
     }
     @Test func repliesNotifyAtForYouOnlyInThreadsIFollow() async {
         let (store, notifier, _) = await started()

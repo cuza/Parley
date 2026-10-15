@@ -62,10 +62,10 @@ struct PinnedStoreTests {
         await store.loadPinned("alex")
         #expect(store.pinned["alex"]?.isEmpty == true)
         await store.setPinned(true, message)
-        try await Task.sleep(for: .milliseconds(100))   // the server's echo
+        await eventually { store.messages.first { $0.id == message.id }?.pinned == true && store.pinned["alex"]?.map(\.id) == [message.id] }   // the server's echo
         #expect(store.messages.first { $0.id == message.id }?.pinned == true && store.pinned["alex"]?.map(\.id) == [message.id])
         await store.setPinned(false, message)
-        try await Task.sleep(for: .milliseconds(100))
+        await eventually { store.messages.first { $0.id == message.id }?.pinned == false && store.pinned["alex"]?.isEmpty == true }
         #expect(store.messages.first { $0.id == message.id }?.pinned == false && store.pinned["alex"]?.isEmpty == true)
     }
     @Test func theBoardMarksLoadedMessages() async throws {

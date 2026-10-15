@@ -58,9 +58,11 @@ import UniformTypeIdentifiers
         if let running = downloads[url] { return try await running.value }
         let task = Task { [load] in
             let data = try await load(attachment, false)
-            try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
-            try data.write(to: url, options: .atomic)
-            try Self.quarantine(url)
+            try await Task.detached(priority: .userInitiated) {   // a large video's write would stall the window
+                try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+                try data.write(to: url, options: .atomic)
+                try Self.quarantine(url)
+            }.value
             return url
         }
         downloads[url] = task
@@ -87,12 +89,20 @@ import UniformTypeIdentifiers
         }
         return url
     }
+    /// Copies `source` to `target` off the main thread: a large file's copy would stall the window. `replacing`: the
+    /// user already agreed to replace what is there (Save As).
+    nonisolated static func copy(_ source: URL, to target: URL, replacing: Bool = false) async throws {
+        try await Task.detached(priority: .userInitiated) {
+            if replacing, FileManager.default.fileExists(atPath: target.path) { try FileManager.default.removeItem(at: target) }
+            try FileManager.default.copyItem(at: source, to: target)
+        }.value
+    }
     /// Copies the attachment into `folder` under an unused name and remembers it for Show in Finder.
     @discardableResult func save(_ attachment: Attachment, in folder: URL) async throws -> URL {
         let source = try await file(attachment)
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
         let target = Self.unusedURL(Self.fileName(attachment), in: folder)
-        try FileManager.default.copyItem(at: source, to: target)
+        try await Self.copy(source, to: target)
         Self.saved[attachment] = target
         return target
     }
@@ -112,10 +122,8 @@ import UniformTypeIdentifiers
             guard response == .OK, let target = panel.url, let self else { return }
             Task {
                 do {
-                    let source = try await self.file(attachment)
                     // The panel already asked whether to replace.
-                    if FileManager.default.fileExists(atPath: target.path) { try FileManager.default.removeItem(at: target) }
-                    try FileManager.default.copyItem(at: source, to: target)
+                    try await Self.copy(try await self.file(attachment), to: target, replacing: true)
                     Self.saved[attachment] = target
                 } catch { NSSound.beep() }
             }
@@ -123,11 +131,12 @@ import UniformTypeIdentifiers
         if let window { panel.beginSheetModal(for: window, completionHandler: chosen) } else { chosen(panel.runModal()) }
     }
     /// The file's URL (Finder pastes the file), and for an image its bytes too (Preview, Notes, Mail paste the image).
-    nonisolated static func pasteboardItem(file: URL, attachment: Attachment) -> NSPasteboardItem {
+    /// `bytes`: the image's, read beforehand off the main thread; read here when not given.
+    nonisolated static func pasteboardItem(file: URL, attachment: Attachment, bytes: Data? = nil) -> NSPasteboardItem {
         let item = NSPasteboardItem()
         item.setString(file.absoluteString, forType: .fileURL)
         if attachment.kind == .image, let type = attachment.utType ?? UTType(filenameExtension: file.pathExtension),
-           let data = try? Data(contentsOf: file) {
+           let data = bytes ?? (try? Data(contentsOf: file)) {
             item.setData(data, forType: NSPasteboard.PasteboardType(type.identifier))
         }
         return item
@@ -135,7 +144,8 @@ import UniformTypeIdentifiers
     private func copy(_ attachment: Attachment) async {
         guard let file = try? await file(attachment) else { NSSound.beep(); return }
         NSPasteboard.general.clearContents()
-        NSPasteboard.general.writeObjects([Self.pasteboardItem(file: file, attachment: attachment)])
+        let bytes = attachment.kind == .image ? await Task.detached { try? Data(contentsOf: file) }.value : nil
+        NSPasteboard.general.writeObjects([Self.pasteboardItem(file: file, attachment: attachment, bytes: bytes)])
     }
 
     // MARK: Menu
@@ -255,7 +265,7 @@ extension AttachmentFiles: NSFilePromiseProviderDelegate {
         nonisolated(unsafe) let done = completionHandler   // AppKit's handler may be called from any thread
         Task {
             do {
-                try FileManager.default.copyItem(at: try await file(attachment), to: url)
+                try await Self.copy(try await file(attachment), to: url)
                 done(nil)
             } catch { done(error) }
         }

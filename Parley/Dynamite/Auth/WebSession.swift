@@ -107,14 +107,16 @@ protocol SessionVault: Sendable {
 struct KeychainSessionVault: SessionVault {
     // Xcode's Debug builds keep their own session: an entry saved by one signature locks the other build out of it,
     // so a Debug build and the installed app running side by side would keep signing each other out.
+    // What an installed copy reads after an update: change these only with a migration (a test pins them).
+    static let releaseService = "dev.cuza.Parley", debugService = "dev.cuza.Parley.debug", account = "dynamite.web-session"
     #if DEBUG
-    var service = "dev.cuza.Parley.debug"
+    var service = Self.debugService
     #else
-    var service = "dev.cuza.Parley"
+    var service = Self.releaseService
     #endif
     private var query: [String: Any] {
         [kSecClass as String: kSecClassGenericPassword,
-         kSecAttrService as String: service, kSecAttrAccount as String: "dynamite.web-session"]
+         kSecAttrService as String: service, kSecAttrAccount as String: Self.account]
     }
     func read() throws -> Data? {
         var q = query
@@ -166,6 +168,8 @@ actor WebSessionAuthorizer {
     private let vault: any SessionVault
     private let session: URLSession
     private var xsrf: String?
+    /// The bootstrap page load in flight: requests that find no token wait for it instead of each loading the page.
+    private var xsrfFetch: Task<(String, HTTPURLResponse), any Error>?
     private var generation = 0
     private var punctualBlock: String?   // the realtime registration from the last bootstrap page
     init(vault: any SessionVault = KeychainSessionVault(), session: URLSession? = nil) {
@@ -210,7 +214,7 @@ actor WebSessionAuthorizer {
     }
     func signOut() throws {
         generation += 1
-        xsrf = nil
+        xsrf = nil; xsrfFetch = nil
         try vault.delete()
     }
     private func storedCredentials() throws -> WebCredentials {
@@ -313,11 +317,16 @@ actor WebSessionAuthorizer {
         do {
             for attempt in 0...1 {
                 if xsrf == nil {
-                    let (token, bootstrap) = try await fetchXSRF(try storedCredentials())
+                    let fetch = xsrfFetch ?? Task { try await fetchXSRF(try storedCredentials()) }
+                    xsrfFetch = fetch
+                    let result: (String, HTTPURLResponse)
+                    do { result = try await fetch.value } catch { if xsrfFetch == fetch { xsrfFetch = nil }; throw error }
+                    if xsrfFetch == fetch { xsrfFetch = nil }
                     guard current == generation else { throw CancellationError() }
-                    xsrf = token
-                    saveCookies(from: bootstrap, generation: current)
+                    xsrf = result.0
+                    saveCookies(from: result.1, generation: current)
                 }
+                let sentToken = xsrf
                 guard current == generation else { throw CancellationError() }
                 try Task.checkCancellation()
                 // Read per attempt so a retry carries cookies the failed reply or the bootstrap just updated.
@@ -340,7 +349,7 @@ actor WebSessionAuthorizer {
                 guard let response = response as? HTTPURLResponse else { throw AuthFailure.unexpectedResponse }
                 saveCookies(from: response, generation: current)
                 if response.statusCode == 401 || response.statusCode == 403 {
-                    xsrf = nil
+                    if xsrf == sentToken { xsrf = nil }   // not one another request has just refreshed
                     if attempt == 0 { continue }
                     let page = await text(body)
                     if Self.isSignInPage(response, body: page) { throw AuthFailure.signInRequired }

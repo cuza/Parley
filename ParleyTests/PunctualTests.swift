@@ -17,6 +17,13 @@ struct PunctualWireTests {
         #expect(registration.apiKey == "key1")
         #expect(PunctualWire.registrationBlock(in: "<html>no block</html>") == nil)
     }
+    /// A lease of nothing (0 or less) would renew the channel in a loop at network speed: at least a minute.
+    @Test func aTinyLeaseIsAMinute() throws {
+        for lease in ["0", "-5", "10"] {
+            let json = Self.block.replacingOccurrences(of: "[3600]", with: "[\(lease)]")
+            #expect(try #require(PunctualWire.Registration(json)).leaseSeconds == 60)
+        }
+    }
     @Test func unknownEnvironmentIsRejected() {
         #expect(PunctualWire.Registration(Self.block.replacingOccurrences(of: "prod-dynamite-prod-02-us", with: "staging-x")) == nil)
     }
@@ -58,6 +65,54 @@ extension AuthTests {
     private static func frame(_ json: String) -> String { "\(json.utf16.count)\n\(json)" }
     private static let bootstrap = StubExchange.Reply(data: Data((#"{"SMqcke":"test-xsrf"} "# + PunctualWireTests.block).utf8))
 
+    /// Conversations subscribed or dropped while the channel opens (the open request was already built) are watched or
+    /// cancelled once the stream starts, not left until the next reconnect.
+    @Test(.timeLimit(.minutes(1))) func typingWatchesChangedWhileOpeningAreSentOnceStarted() async throws {
+        let vault = MemoryVault()
+        vault.write(try JSONEncoder().encode(WebCredentials(cookies: [SessionCookie(name: "SID", value: "s", domain: ".google.com", path: "/", secure: true, expires: -1)], userAgent: "T")))
+        let exchange = StubExchange([Self.bootstrap,
+                                     .init(data: Data(#"["G1",1,null,"10","20"]"#.utf8), delay: 0.4),   // chooseServer, slow
+                                     .init(data: Data(Self.frame(#"[[0,["c","SID1","",8,15,30000]]]"#).utf8)),
+                                     .init(data: Data(Self.frame(#"[[1,[[[["1",[["100"]]]]]]]]"#).utf8)),
+                                     .init(data: Data()), .init(data: Data()), .init(data: Data())])
+        let auth = WebSessionAuthorizer(vault: vault, session: AuthStubProtocol.session(exchange))
+        let channel = PunctualChannel(authorizer: auth, config: .init(backoff: { _ in .seconds(3600) }), onEvent: { _ in }, onState: { _ in })
+        await channel.subscribe(["dm/a", "space/b"])   // watches 2 and 3, in the open request
+        let run = Task { await channel.run() }
+        try await Task.sleep(for: .milliseconds(150))   // the open request is built; chooseServer is still on its way
+        await channel.subscribe(["dm/a", "space/c"])   // c added (watch 4), b dropped
+        func sent() -> String {
+            exchange.requests.dropFirst(3).map { String(decoding: AuthTests.body($0), as: UTF8.self).removingPercentEncoding ?? "" }.joined()
+        }
+        for _ in 0..<200 where !(sent().contains(#"["group"],["c"],["typing"]"#) && sent().contains(PunctualWire.cancel([3]))) {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        run.cancel(); await run.value
+        #expect(sent().contains(#"["group"],["c"],["typing"]"#))
+        #expect(sent().contains(PunctualWire.cancel([3])))
+    }
+    /// Woken from sleep on a connection that died: a nudge reopens at once instead of waiting on the dead socket and then
+    /// the backoff.
+    @Test(.timeLimit(.minutes(1))) func aNudgeReopensAConnectedChannel() async throws {
+        let vault = MemoryVault()
+        vault.write(try JSONEncoder().encode(WebCredentials(cookies: [SessionCookie(name: "SID", value: "s", domain: ".google.com", path: "/", secure: true, expires: -1)], userAgent: "T")))
+        let choose = StubExchange.Reply(data: Data(#"["G1",1,null,"10","20"]"#.utf8))
+        let open = StubExchange.Reply(data: Data(Self.frame(#"[[0,["c","SID1","",8,15,30000]]]"#).utf8))
+        let exchange = StubExchange([Self.bootstrap, choose, open,
+                                     // The stream starts, then the long poll hangs, as on a connection that died in sleep.
+                                     .init(data: Data(Self.frame(#"[[1,[[[["1",[["100"]]]]]]]]"#).utf8), hold: 2),
+                                     Self.bootstrap, choose, open])
+        let auth = WebSessionAuthorizer(vault: vault, session: AuthStubProtocol.session(exchange))
+        let (states, sink) = AsyncStream<ConnectionState>.makeStream()
+        let channel = PunctualChannel(authorizer: auth, config: .init(backoff: { _ in .seconds(3600) }), onEvent: { _ in }, onState: { sink.yield($0) })
+        let run = Task { await channel.run() }
+        for await state in states where state == .connected { break }
+        await channel.nudge()
+        func chooses() -> Int { exchange.requests.filter { $0.url?.path.hasSuffix("chooseServer") == true }.count }
+        for _ in 0..<500 where chooses() < 2 { try await Task.sleep(for: .milliseconds(10)) }
+        run.cancel(); await run.value
+        #expect(chooses() == 2, "\(exchange.requests.map { ($0.url?.path ?? "") + "?" + ($0.url?.query?.prefix(40) ?? "") })")
+    }
     @Test(.timeLimit(.minutes(1))) func punctualChannelDeliversEvents() async throws {
         let vault = MemoryVault()
         let cookies = [SessionCookie(name: "SID", value: "s", domain: ".google.com", path: "/", secure: true, expires: -1),

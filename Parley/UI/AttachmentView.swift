@@ -176,7 +176,10 @@ extension Attachment {
 
 /// Decoded attachment thumbnails, shared by the timeline, its prefetch and the info panel.
 @MainActor enum ImageCache {
-    static let shared: NSCache<NSString, NSImage> = { let cache = NSCache<NSString, NSImage>(); cache.countLimit = 200; return cache }()
+    /// Decoded pictures in memory, up to 200 or 150 MB of pixels, whichever comes first.
+    static let shared: NSCache<NSString, NSImage> = {
+        let cache = NSCache<NSString, NSImage>(); cache.countLimit = 200; cache.totalCostLimit = 150_000_000; return cache
+    }()
     private static var inFlight: [String: Task<NSImage?, Error>] = [:]
     static func key(_ attachment: Attachment) -> String { attachment.cacheKey ?? (attachment.thumbnailURL ?? attachment.url)?.absoluteString ?? attachment.name }
     /// Where fetched pictures are kept between launches, by key: the app's folder in Caches, as macOS expects (left out
@@ -228,7 +231,7 @@ extension Attachment {
                 try? FileManager.default.setAttributes([.modificationDate: Date.now], ofItemAtPath: file.path)
                 return image
             }.value
-            if let kept { shared.setObject(kept, forKey: key as NSString); return kept }
+            if let kept { shared.setObject(kept, forKey: key as NSString, cost: kept.pixelBytes); return kept }
             let bytes = try await data(attachment, true)
             guard let image = await Task.detached(priority: .userInitiated, operation: { () -> NSImage? in
                 guard let image = decode(bytes, maxPixels: maxPixels) else { return nil }
@@ -238,7 +241,7 @@ extension Attachment {
                 }
                 return image
             }).value else { return nil }
-            shared.setObject(image, forKey: key as NSString)
+            shared.setObject(image, forKey: key as NSString, cost: image.pixelBytes)
             return image
         }
         inFlight[key] = task
@@ -253,6 +256,15 @@ extension Attachment {
                                         kCGImageSourceCreateThumbnailWithTransform: true, kCGImageSourceThumbnailMaxPixelSize: maxPixels]
         guard let image = CGImageSourceCreateThumbnailAtIndex(source, 0, options as CFDictionary) else { return nil }
         return NSImage(cgImage: image, size: NSSize(width: image.width, height: image.height))
+    }
+}
+
+extension NSImage {
+    /// What its pixels take in memory (4 bytes each), as a cache's cost.
+    var pixelBytes: Int {
+        let rep = representations.first
+        let pixels = (rep?.pixelsWide ?? 0) * (rep?.pixelsHigh ?? 0)
+        return 4 * (pixels > 0 ? pixels : Int(size.width * size.height))
     }
 }
 
@@ -335,7 +347,8 @@ final class MediaPictureView: NSView {
     /// One per picture, made once: the first frame shrunk to ~32 px, blurred, and kept for as long as the picture is.
     /// A few hundred microseconds, so it is made where it is first needed, on the main thread.
     // ponytail: synchronous on first show; move it to the decode step if a profile ever shows it.
-    nonisolated(unsafe) private static let blurs = NSCache<NSImage, CGImage>()
+    // Limited: NSCache holds its keys, here the pictures themselves, until it evicts the entry.
+    nonisolated(unsafe) private static let blurs: NSCache<NSImage, CGImage> = { let cache = NSCache<NSImage, CGImage>(); cache.countLimit = 200; return cache }()
     private static let context = CIContext(options: [.useSoftwareRenderer: false])
     static func blurred(_ image: NSImage) -> CGImage? {
         if let cached = blurs.object(forKey: image) { return cached }

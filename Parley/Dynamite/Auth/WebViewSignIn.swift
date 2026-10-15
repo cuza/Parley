@@ -112,6 +112,9 @@ final class WebViewSignIn: NSObject, SignInBrowser, WKNavigationDelegate, WKUIDe
         guard scheme == "https" else { return false }
         return isGoogleSignInHost(url.host() ?? "") || !linkClick
     }
+    /// Only a web page leaves the sign-in window, for the user's browser; a page can't open a file or start another app
+    /// through its URL scheme from here, clicked or not.
+    static func opensInBrowser(_ url: URL) -> Bool { ["http", "https"].contains(url.scheme?.lowercased() ?? "") }
     static func isGoogleSignInHost(_ host: String) -> Bool {
         let host = host.lowercased()
         return host.hasPrefix("accounts.google.") || ["accounts.youtube.com", "chat.google.com", "mail.google.com"].contains(host)
@@ -136,7 +139,7 @@ final class WebViewSignIn: NSObject, SignInBrowser, WKNavigationDelegate, WKUIDe
         guard let url = action.request.url else { return .cancel }
         if action.targetFrame?.isMainFrame != false {
             guard Self.staysInView(url, linkClick: action.navigationType == .linkActivated) else {
-                NSWorkspace.shared.open(url)
+                if Self.opensInBrowser(url) { NSWorkspace.shared.open(url) }
                 return .cancel
             }
             if url.host() == "chat.google.com", url.path().hasPrefix("/accounts/SetOSID") { handOffBegan() }
@@ -156,7 +159,7 @@ final class WebViewSignIn: NSObject, SignInBrowser, WKNavigationDelegate, WKUIDe
     func webView(_ webView: WKWebView, createWebViewWith configuration: WKWebViewConfiguration,
                  for action: WKNavigationAction, windowFeatures: WKWindowFeatures) -> WKWebView? {
         if let url = action.request.url {
-            if Self.staysInView(url, linkClick: true) { webView.load(URLRequest(url: url)) } else { NSWorkspace.shared.open(url) }
+            if Self.staysInView(url, linkClick: true) { webView.load(URLRequest(url: url)) } else if Self.opensInBrowser(url) { NSWorkspace.shared.open(url) }
         }
         return nil
     }

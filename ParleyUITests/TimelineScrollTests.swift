@@ -22,7 +22,7 @@ import XCTest
         app = XCUIApplication()
         app.launchArguments = ["-uiTestingLongHistory"]
         app.launch()
-        app.descendants(matching: .any).matching(NSPredicate(format: "label BEGINSWITH %@", "Engineering,")).firstMatch.click()
+        app.descendants(matching: .any)["sidebar"].firstMatch.descendants(matching: .any).matching(NSPredicate(format: "label BEGINSWITH %@", "Engineering")).firstMatch.click()
         XCTAssertTrue(timeline.waitForExistence(timeout: 5))
         scroll(-1)   // a first scroll publishes the state
         wait("the newest page never showed") { state.count == 50 }

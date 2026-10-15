@@ -33,6 +33,17 @@ import Testing
         pasteboard.clearContents()
         #expect(Shared(pasteboard) == nil)   // nothing to share
     }
+    /// A share with files and words (a photo with a caption) keeps both: the words come on a type of their own, so a
+    /// file's name, which the pasteboard also offers as text, never passes for them.
+    @Test func filesAndTextTravelTogether() throws {
+        let pasteboard = NSPasteboard(name: .init("Parley share test \(UUID().uuidString)"))
+        defer { pasteboard.releaseGlobally() }
+        let url = try Self.file()
+        pasteboard.clearContents()
+        let words = NSPasteboardItem(); words.setString("look at this", forType: Shared.textType)
+        pasteboard.writeObjects([url as NSURL, words])
+        #expect(Shared(pasteboard) == Shared(text: "look at this", files: [url]))
+    }
     /// Services ▸ Send to Parley hands what it reads to the app, or says why not.
     @Test func theServiceHandsOverWhatItReads() throws {
         let pasteboard = NSPasteboard(name: .init("Parley service test \(UUID().uuidString)"))

@@ -200,7 +200,7 @@ enum NotificationPolicy {
         let picture = await png(for: note.picture, load: load)
         do { return try await communicate(intent(for: note, image: picture), base) }
         catch {
-            log.error("communication notification refused: \(error.localizedDescription, privacy: .public)")
+            log.error("communication notification refused: \(ConnectionDiagnostics.redact(error.localizedDescription), privacy: .public)")
             return base
         }
     }
@@ -211,7 +211,7 @@ enum NotificationPolicy {
         let interaction = INInteraction(intent: intent, response: nil)
         interaction.direction = .incoming
         do { try await interaction.donate() }
-        catch { log.error("donating the message failed: \(error.localizedDescription, privacy: .public)") }
+        catch { log.error("donating the message failed: \(ConnectionDiagnostics.redact(error.localizedDescription), privacy: .public)") }
         return try content.updating(from: intent)
     }
 
@@ -306,7 +306,7 @@ enum NotificationPolicy {
     static func requestAuthorization() async -> UNAuthorizationStatus {
         let center = UNUserNotificationCenter.current()
         do { _ = try await center.requestAuthorization(options: [.alert, .sound]) }
-        catch { log.error("notification authorization failed: \(error.localizedDescription, privacy: .public)") }
+        catch { log.error("notification authorization failed: \(ConnectionDiagnostics.redact(error.localizedDescription), privacy: .public)") }
         return await center.notificationSettings().authorizationStatus
     }
     func post(_ notification: ChatNotification) {
@@ -332,7 +332,7 @@ enum NotificationPolicy {
                 log.notice("banner posted")
                 await Self.playSound()
             }
-            catch { log.error("posting a notification failed: \(error.localizedDescription, privacy: .public)") }
+            catch { log.error("posting a notification failed: \(ConnectionDiagnostics.redact(error.localizedDescription), privacy: .public)") }
         }
     }
     /// While Parley is in front: the banner, with macOS's sound only when macOS plays it (Default).

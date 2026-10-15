@@ -15,7 +15,11 @@ final class ShareViewController: NSViewController {
         for item in items {
             for provider in item.attachments ?? [] {
                 if let url = await Self.url(provider, .fileURL) { files.append(url) }
-                else if let url = await Self.url(provider, .url) { texts.append(url.absoluteString) }
+                else if let url = await Self.url(provider, .url) {
+                    // A page from Safari comes with its title: the title, then the link, as Messages shares it.
+                    let title = (item.attributedTitle ?? item.attributedContentText)?.string.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+                    texts.append(title.isEmpty || title == url.absoluteString ? url.absoluteString : title + "\n" + url.absoluteString)
+                }
                 else if provider.hasItemConformingToTypeIdentifier(UTType.plainText.identifier),
                         let text = try? await provider.loadItem(forTypeIdentifier: UTType.plainText.identifier) as? String { texts.append(text) }
                 else if let file = await Self.file(provider) { files.append(file) }
@@ -25,7 +29,16 @@ final class ShareViewController: NSViewController {
         let name = "dev.cuza.Parley.share.\(UUID().uuidString)"
         let pasteboard = NSPasteboard(name: .init(name))
         pasteboard.clearContents()
-        if !files.isEmpty { pasteboard.writeObjects(files as [NSURL]) } else { pasteboard.setString(texts.joined(separator: "\n"), forType: .string) }
+        if files.isEmpty { pasteboard.setString(texts.joined(separator: "\n"), forType: .string) } else {
+            // Words beside files on a type of their own (the app's `Shared.textType`): the files' plain text is their names.
+            var objects: [any NSPasteboardWriting] = files as [NSURL]
+            if !texts.isEmpty {
+                let words = NSPasteboardItem()
+                words.setString(texts.joined(separator: "\n"), forType: .init("dev.cuza.Parley.shared-text"))
+                objects.append(words)
+            }
+            pasteboard.writeObjects(objects)
+        }
         let scheme = Bundle.main.object(forInfoDictionaryKey: "ParleyURLScheme") as? String ?? "parley"
         if let link = URL(string: "\(scheme)://share?pasteboard=\(name)") { NSWorkspace.shared.open(link) }
         extensionContext?.completeRequest(returningItems: nil)

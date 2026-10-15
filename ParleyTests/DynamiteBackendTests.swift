@@ -43,6 +43,15 @@ extension AuthTests {
                 "get_self_user_status", Dynamite_GetSelfUserStatusRequest())
         }
     }
+    /// A call that makes something new each time (a Meet link, a group, a report) isn't repeated: if the lost connection
+    /// had already delivered it, a retry would make a second one. The error shows instead.
+    @Test func callsThatCreateAreNotRetried() async throws {
+        let (auth, exchange) = try Self.signedIn([.init(failure: .networkConnectionLost), .init(data: Data())])
+        await #expect(throws: URLError.self) {
+            let _: Dynamite_CreateVideoCallResponse = try await DynamiteClient(authorizer: auth).call("create_video_call", Dynamite_CreateVideoCallRequest())
+        }
+        #expect(exchange.requests.filter { $0.url?.path == "/api/create_video_call" }.count == 1)
+    }
     @Test func clientMapsUndecodableBodyToMalformedProto() async throws {
         let garbage = StubExchange.Reply(headers: ["Content-Type": "application/x-protobuf"], data: Data([0xFF, 0xFF, 0xFF]))
         let (auth, _) = try Self.signedIn([garbage])

@@ -135,7 +135,7 @@ extension AuthTests {
         await store.submitDialog(action: create, inputs: [Card.Input(name: "title", value: "Fix it"), Card.Input(name: "priority", value: "high")])
         #expect(await fake.dialogSteps.last == "submit \(message.id) app=shipyard title=Fix it priority=high")
         #expect(store.dialog == nil && store.toast == "Issue #43 created.")
-        try await Task.sleep(for: .milliseconds(50))   // the app's message arrives through the stream
+        await eventually { store.messages.contains { $0.sender.id == "shipyard" && $0.text.hasSuffix("Fix it") } }   // through the stream
         #expect(store.messages.contains { $0.sender.id == "shipyard" && $0.text.hasSuffix("Fix it") })
     }
     @Test func theNextStepReplacesTheCardAndARefusalSaysWhoRefused() async throws {

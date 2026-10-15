@@ -38,7 +38,7 @@ struct BubbleColorPicker: View {
         _color = State(initialValue: Color(nsColor: NSColor(hex: hex.wrappedValue) ?? .controlAccentColor))
     }
     var body: some View {
-        ColorPicker("Bubble colour", selection: $color, supportsOpacity: false)
+        ColorPicker("Bubble color", selection: $color, supportsOpacity: false)
             .labelsHidden().help("Your bubbles")
             .task(id: color) {   // saved once the colour stops moving, so a drag doesn't redraw every row on every step
                 try? await Task.sleep(for: .milliseconds(150))
@@ -143,7 +143,7 @@ private struct GeneralSettings: View {
                     .onChange(of: giphyKey) { _, key in
                         let key = key.trimmingCharacters(in: .whitespacesAndNewlines)
                         do {
-                            try Giphy.keyItem.set(key)
+                            try Giphy.setKey(key)
                             keyError = nil
                         } catch { keyError = error.localizedDescription }
                     }
@@ -162,7 +162,7 @@ private struct GeneralSettings: View {
                     } catch { accountError = error.localizedDescription }
                 }
             }
-        } message: { Text("Parley forgets this Google session. Your drafts stay on this Mac.") }
+        } message: { Text("Parley forgets this Google session and the messages it keeps on this Mac. Your drafts stay.") }
     }
 }
 
@@ -186,7 +186,7 @@ private struct AppearanceSettings: View {
                 .labelsHidden().fixedSize()
                 BubbleColorPicker(hex: bubble)
                 Button("Reset") { bubble.wrappedValue = "" }.disabled(bubble.wrappedValue.isEmpty)
-                    .help("Use the accent colour").accessibilityLabel("Use the accent colour")
+                    .help("Use the accent color").accessibilityLabel("Use the accent color")
             }
         }
     }

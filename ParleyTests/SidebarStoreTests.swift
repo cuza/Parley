@@ -16,7 +16,7 @@ struct SidebarStoreTests {
     @Test func pinShowsBeforeTheServerAnswers() async throws {
         let (store, fake) = await started(latency: .milliseconds(400))
         let pending = Task { await store.setPinned(true, "alex") }
-        try await Task.sleep(for: .milliseconds(100))
+        await eventually { room(store, "alex")?.pinned == true }
         #expect(room(store, "alex")?.pinned == true)
         await pending.value
         #expect(await fake.changes == ["pin alex"])
@@ -35,11 +35,11 @@ struct SidebarStoreTests {
         let (store, fake) = await started()
         await fake.simulateChangeFailure()
         await store.setPinned(true, "alex")
-        #expect(room(store, "alex")?.pinned == false && store.error != nil)
-        store.error = nil
+        #expect(room(store, "alex")?.pinned == false && store.toast != nil && store.error == nil)   // a note, not an alert
+        store.toast = nil
         await fake.simulateChangeFailure()
         await store.setMuted(false, "engineering")
-        #expect(room(store, "engineering")?.muted == true && store.error != nil)
+        #expect(room(store, "engineering")?.muted == true && store.toast != nil)
     }
     @Test func markUnreadShowsUnreadAndSurvivesARefresh() async throws {
         let (store, fake) = await started()
@@ -54,7 +54,7 @@ struct SidebarStoreTests {
         let (store, fake) = await started()
         await fake.simulateChangeFailure()
         await store.markUnread("launch")
-        #expect(room(store, "launch")?.unread == 0 && store.error != nil)
+        #expect(room(store, "launch")?.unread == 0 && store.toast != nil)
     }
     @Test func leaveRemovesTheConversationAndARefusalPutsItBack() async throws {
         let (store, fake) = await started()

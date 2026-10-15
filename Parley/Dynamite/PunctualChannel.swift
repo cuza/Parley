@@ -57,8 +57,14 @@ actor PunctualChannel {
         default: String(describing: type(of: error))
         }
     }
-    /// Network came back or the Mac woke: skip the rest of the current backoff wait.
-    func nudge() { backoffSleep?.cancel() }
+    /// Network came back or the Mac woke: skip the rest of the current backoff wait, or, connected, reopen at once. A
+    /// connection from before sleep may be dead, and its long poll would wait out its timeout first; the stream resumes
+    /// from its last watermark, so reopening loses nothing.
+    func nudge() {
+        if connected { reopenNow = true; session?.cancel() } else { backoffSleep?.cancel() }
+    }
+    private var session: Task<Void, any Error>?
+    private var reopenNow = false
 
     /// The conversations whose typing to watch; added and cancelled on a live channel, all re-sent on reconnect.
     func subscribe(_ conversations: Set<ConversationID>) async {
@@ -70,11 +76,24 @@ actor PunctualChannel {
             typing[group] = nextID
             return PunctualWire.Watch(id: nextID, target: .typing(group), start: nil, resumed: false, reason: 1)
         }
-        guard connected else { return }
+        guard connected else { return }   // sent with the next open, or when the stream starts (see `sendTypingChanges`)
+        await update(watches, cancelled: cancelled)
+    }
+    private func update(_ watches: [PunctualWire.Watch], cancelled: [Int]) async {
         do {
             if !watches.isEmpty { try await send(PunctualWire.batch(watches, streamType: streamType)) }
             if !cancelled.isEmpty { try await send(PunctualWire.cancel(cancelled.sorted())) }
         } catch { log.error("Typing watch update failed: \(Self.reason(error), privacy: .public)") }
+    }
+    /// The typing watches the open request carried. A subscribe while the channel opens only changes `typing`; once the
+    /// stream starts, what changed since is sent.
+    private var openedTyping: [String: Int] = [:]
+    private func sendTypingChanges() async {
+        let added = typing.filter { openedTyping[$0.key] != $0.value }.sorted { $0.value < $1.value }
+            .map { PunctualWire.Watch(id: $0.value, target: .typing($0.key), start: nil, resumed: false, reason: 1) }
+        let cancelled = openedTyping.filter { typing[$0.key] != $0.value }.map(\.value)
+        openedTyping = typing
+        await update(added, cancelled: cancelled)
     }
 
     func run() async {
@@ -84,13 +103,17 @@ actor PunctualChannel {
             do {
                 try await openSession()
                 let lease = registration?.leaseSeconds ?? 3600
-                try await withThrowingTaskGroup(of: Void.self) { group in
-                    group.addTask { try await self.pollLoop() }
-                    group.addTask { try await self.refreshLoop() }
-                    group.addTask { try await Task.sleep(for: self.config.renewAfter(lease)); throw PunctualError.renew }
-                    _ = try await group.next()
-                    group.cancelAll()
+                let current = Task {
+                    try await withThrowingTaskGroup(of: Void.self) { group in
+                        group.addTask { try await self.pollLoop() }
+                        group.addTask { try await self.refreshLoop() }
+                        group.addTask { try await Task.sleep(for: self.config.renewAfter(lease)); throw PunctualError.renew }
+                        _ = try await group.next()
+                        group.cancelAll()
+                    }
                 }
+                session = current
+                try await withTaskCancellationHandler { try await current.value } onCancel: { current.cancel() }
             } catch where (error as? AuthFailure)?.endsSession == true {
                 await onState(.signedOut)
                 return
@@ -101,6 +124,11 @@ actor PunctualChannel {
                 log.error("Punctual session ended: \(Self.reason(error), privacy: .public)")
             }
             if Task.isCancelled { return }
+            if reopenNow {   // nudged: reopen without the backoff wait
+                reopenNow = false; connected = false
+                await onState(.reconnecting)
+                continue
+            }
             failures = connected && opened.duration(to: .now) >= .seconds(30) ? 1 : failures + 1
             connected = false
             await onState(.reconnecting)
@@ -123,6 +151,7 @@ actor PunctualChannel {
         registration = fresh
         let reason = first ? 1 : 3
         let user = PunctualWire.Watch(id: 1, target: .user(fresh.utid), start: userStart ?? fresh.startMicros, resumed: userStart != nil, reason: reason)
+        openedTyping = typing
         let watches = [user] + typing.sorted { $0.value < $1.value }.map {
             PunctualWire.Watch(id: $0.value, target: .typing($0.key), start: nil, resumed: false, reason: reason)
         }
@@ -179,6 +208,7 @@ actor PunctualChannel {
             guard !connected else { return }
             connected = true
             log.notice("Punctual: user stream started")
+            await sendTypingChanges()
             await onState(.connected)
             // Google Chat catches up after every reconnect; the backend does that on SESSION_READY.
             await onEvent(.with { $0.bodies = [.with { $0.eventType = .sessionReady }] })

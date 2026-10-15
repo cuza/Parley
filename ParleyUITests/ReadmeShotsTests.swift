@@ -18,7 +18,7 @@ import XCTest
         if open == "thread" { replies.click() }
         if open == "home" { app.descendants(matching: .any).matching(NSPredicate(format: "value == %@", "Home")).firstMatch.click() }
         // The app DM's row has an unread badge, so it reads as one element labelled "Notebook, 1 unread".
-        if open == "apps" { app.descendants(matching: .any).matching(NSPredicate(format: "value == %@ OR label BEGINSWITH %@", "Notebook", "Notebook,")).firstMatch.click() }
+        if open == "apps" { app.descendants(matching: .any)["sidebar"].firstMatch.descendants(matching: .any).matching(NSPredicate(format: "label BEGINSWITH %@", "Notebook")).firstMatch.click() }
         if open == "info" { app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Design studio")).firstMatch.click() }
         // Park the pointer on empty sidebar space so no hover tooltip is captured.
         app.windows.firstMatch.coordinate(withNormalizedOffset: CGVector(dx: 0.1, dy: 0.8)).hover()

@@ -22,7 +22,7 @@ import XCTest
         row.hover(); sleep(1)
         shot(app, "drafts-hover")   // the actions replace the time; VoiceOver has them as the row's actions
 
-        any.matching(NSPredicate(format: "value == %@ OR label BEGINSWITH %@", "Launch crew", "Launch crew,")).firstMatch.click()
+        any["sidebar"].firstMatch.descendants(matching: .any).matching(NSPredicate(format: "label BEGINSWITH %@", "Launch crew")).firstMatch.click()
         XCTAssertTrue(any.matching(NSPredicate(format: "label BEGINSWITH %@", "Scheduled for tomorrow")).firstMatch.waitForExistence(timeout: 5))
         let send = app.buttons["Send message"]
         XCTAssertTrue(send.waitForExistence(timeout: 5))   // the demo draft is in the composer

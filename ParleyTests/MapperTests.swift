@@ -397,6 +397,12 @@ struct AvatarAndPreviewTests {
                                                               url: URL(string: "https://example.com/a"), snippet: "About us", domain: "example.com"))
         #expect(DynamiteMapper.attachment(image)?.kind == .image)
         #expect(DynamiteMapper.attachment(image)?.thumbnailURL == URL(string: "https://lh3.googleusercontent.com/p"))
+        // An image link Google sent no image for shows no card, as in Google Chat: Parley never loads a sender's own server.
+        let bare = link { $0.mimeType = "image/png" }
+        #expect(DynamiteMapper.attachment(bare) == nil)
+        #expect(DynamiteMapper.inlinesImages(URL(string: "https://media.giphy.com/media/x/giphy.gif")!))
+        #expect(!DynamiteMapper.inlinesImages(URL(string: "https://giphy.com.evil.example/x.gif")!))
+        #expect(!DynamiteMapper.inlinesImages(URL(string: "http://static2.klipy.com/x.gif")!))
         #expect(DynamiteMapper.attachment(forced)?.name == "x")   // an explicit chip_render_type overrides should_not_render
         for skipped in [hidden, doNot, richText, noImage, inline] { #expect(DynamiteMapper.attachment(skipped) == nil) }
     }

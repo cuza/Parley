@@ -193,19 +193,47 @@ final class ChatStore {
         "reconnects", "homeUnreadOnly", "homeThreadsOnly", "highlightDuration", "highlightFade", "eventTask", "cacheTask",
         "searchGeneration", "sweepTask", "now", "isAppActive", "notifier", "notificationSettings", "draftPause", "draftIdle",
         "waitingLinks", "followAsked", "followRecheck", "toast", "toastDuration", "toastFade", "openURL", "defaults", "sent",
-        "download", "newChatRequests", "newSpaceRequests", "sharing", "searchRequest",
+        "download", "clearDiskCaches", "newChatRequests", "newSpaceRequests", "sharing", "searchRequest",
     ]
-    /// After the user signs out; cached conversations and drafts stay for the next sign-in.
+    /// Deletes the pictures and files kept on disk for the signed-in account; tests replace it.
+    @ObservationIgnored var clearDiskCaches: () -> Void = {
+        for folder in [AttachmentFiles.defaultFolder, ImageCache.directory].compactMap({ $0 }) { try? FileManager.default.removeItem(at: folder) }
+    }
+    /// After the user chose Sign Out: the account's chats leave this Mac (the launch cache, pictures and files; Google keeps
+    /// them all), and its drafts stay, as the dialog says, for the next sign-in to the same account. A session that expired
+    /// on its own keeps everything, so signing in again is quick.
     func signedOut() {
+        let kept = (drafts, draftFormatting, draftEdits, serverDrafts)
+        forgetAccount()
+        (drafts, draftFormatting, draftEdits, serverDrafts) = kept
         me = Person(id: "", name: "")
         connection = .signedOut
+        flush()
+        clearDiskCaches()
     }
     /// Shows a failure to the user. Cancellation is not one: the work was superseded or no longer wanted.
     /// A lost session is not one either: it shows as the session-expired banner, which offers to sign in again.
-    func report(_ error: Error) {
+    /// `undone`: a change shown at once and now put back (a pin, a mute, a role, a reaction), which says so in a note that
+    /// fades rather than an alert to dismiss.
+    func report(_ error: Error, undone: String? = nil) {
         if error is CancellationError || (error as? URLError)?.code == .cancelled || endedSession(error) { return }
         log.error("\(ConnectionDiagnostics.redact(error.localizedDescription), privacy: .public)")
-        self.error = error.localizedDescription
+        if let undone { toast = "Couldn't \(undone). \(Self.plain(error))" } else { self.error = Self.plain(error) }
+    }
+    /// A failure in plain words: the usual network ones say what to do, not their error domain and code.
+    static func plain(_ error: Error) -> String {
+        switch error {
+        case let url as URLError:
+            switch url.code {
+            case .notConnectedToInternet, .dataNotAllowed: "You're offline. Check your connection and try again."
+            case .timedOut: "Google Chat didn't answer. Check your connection and try again."
+            case .networkConnectionLost, .cannotFindHost, .cannotConnectToHost, .dnsLookupFailed, .secureConnectionFailed:
+                "The connection to Google Chat dropped. Try again."
+            default: url.localizedDescription
+            }
+        case AuthFailure.http(let status): "Google Chat refused this (HTTP \(status))."
+        default: error.localizedDescription
+        }
     }
     private func endedSession(_ error: Error) -> Bool {
         guard (error as? AuthFailure)?.endsSession == true else { return false }
@@ -279,8 +307,8 @@ final class ChatStore {
         conversations = listed.filter { $0.hidden == nil }; hidden = listed.filter { $0.hidden != nil }; homeThreads = threads
         sections = await backend.sidebarSections()
         followed.formUnion(threads.map(\.id))   // Home's threads are the server's followed ones
-        await refreshInvitations(force: true)
-        await loadBlocked()
+        // Alongside the open conversation's page, not before it: the blocked list hides messages, so it lands with them.
+        async let blocked: Void = loadBlocked()
         let vanished = !conversations.contains(where: { $0.id == selectedID })
         if vanished { selectedID = conversations.first?.id }
         if let selectedID {
@@ -298,8 +326,10 @@ final class ChatStore {
                 }
             }
         }
+        await blocked
         _ = await listDrafts()
         await listScheduled()
+        await refreshInvitations(force: true)   // after the conversation shows: the space directory is a slow read
         persist()
         if !listedOnce {
             listedOnce = true
@@ -505,7 +535,7 @@ final class ChatStore {
         guard let newest = messages.filter({ $0.threadID == thread || $0.id == thread }).map(\.createdAt).max() else { return }
         if let i = homeThreads.firstIndex(where: { $0.id == thread }) { homeThreads[i].unread = false }
         do { try await backend.markThreadRead(thread, upTo: newest) }
-        catch { log.error("mark thread read failed: \(String(describing: error), privacy: .public)") }
+        catch { log.error("mark thread read failed: \(ConnectionDiagnostics.redact(String(describing: error)), privacy: .public)") }
     }
     func isFollowing(_ thread: ThreadID) -> Bool { followed.contains(thread) }
     /// Shown at once; Google's label event confirms it, and a refusal puts it back and says why.
@@ -1150,6 +1180,8 @@ final class ChatStore {
     }
     /// The Drafts shortcut: every composer holding a draft, newest first. `updatedAt` is when it last changed, here or on
     /// Google (`.distantPast` when unknown).
+    /// How many drafts Drafts lists, from `draftedScopes`: the sidebar's badge doesn't update on every keystroke.
+    var draftCount: Int { draftedScopes.filter { !isEditing($0) && place($0) != nil }.count }
     func draftList() -> [ServerDraft] {
         drafts.compactMap { scope, text -> ServerDraft? in
             guard !Self.blank(text), !isEditing(scope), let (conversation, thread) = place(scope) else { return nil }
@@ -1474,13 +1506,13 @@ final class ChatStore {
         let text = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty, let message = messages.first(where: { $0.id == id }), message.sender.id == me.id, message.delivery == .sent else { return false }
         do { try await backend.edit(id, text: text, formatting: []); return true }
-        catch { log.error("edit failed: \(String(describing: error), privacy: .public)"); return false }
+        catch { log.error("edit failed: \(ConnectionDiagnostics.redact(String(describing: error)), privacy: .public)"); return false }
     }
     /// Siri's unsend: one of my sent messages is deleted for everyone. False when it isn't mine or Google refused it.
     func unsend(_ id: MessageID) async -> Bool {
         guard let message = messages.first(where: { $0.id == id }), message.sender.id == me.id, message.delivery == .sent else { return false }
         do { try await backend.delete(id); return true }
-        catch { log.error("unsend failed: \(String(describing: error), privacy: .public)"); return false }
+        catch { log.error("unsend failed: \(ConnectionDiagnostics.redact(String(describing: error)), privacy: .public)"); return false }
     }
     /// Siri's "mark this as read/unread": read clears the conversation; unread starts at the message, as its menu does.
     func setRead(_ read: Bool, _ message: Message) async {
@@ -1490,7 +1522,7 @@ final class ChatStore {
     func react(_ emoji: String, custom: CustomEmoji? = nil, to message: Message) async {
         let existing = message.reactions.first { $0.emoji == emoji }
         let present = !(existing?.people.contains(me.id) ?? false)
-        do { try await backend.setReaction(emoji, custom: existing?.custom ?? custom, on: message.id, present: present) } catch { report(error) }
+        do { try await backend.setReaction(emoji, custom: existing?.custom ?? custom, on: message.id, present: present) } catch { report(error, undone: "react") }
     }
     /// Errors stay with the caller: a missing thumbnail shouldn't raise the store-wide error.
     /// A file not sent yet (the local echo) is read from disk.
@@ -1505,7 +1537,7 @@ final class ChatStore {
     func markRead(_ id: String) async {
         notifier?.clear(conversation: id)
         // In the background, and tried again on the next visit: a refusal is for the log, not an alert.
-        do { try await backend.markRead(id) } catch { log.error("mark read failed: \(String(describing: error), privacy: .public)") }
+        do { try await backend.markRead(id) } catch { log.error("mark read failed: \(ConnectionDiagnostics.redact(String(describing: error)), privacy: .public)") }
     }
     func setPinned(_ pinned: Bool, _ id: ConversationID) async {
         await change(id, \.pinned, to: pinned) { try await self.backend.setPinned(pinned, conversation: id) }
@@ -1543,7 +1575,7 @@ final class ChatStore {
         conversations[i][keyPath: field] = value; persist()
         do { try await send() } catch {
             if let i = conversations.firstIndex(where: { $0.id == id }) { conversations[i][keyPath: field] = before }
-            report(error); persist()
+            report(error, undone: "change the conversation"); persist()
         }
     }
     func leave(_ id: ConversationID) async { await removeFromSidebar(id) { try await self.backend.leave(id) } }
@@ -1694,7 +1726,7 @@ final class ChatStore {
     func setRole(_ role: MemberRole, of person: PersonID, in id: ConversationID) async {
         let before = roles[id]?[person]
         roles[id, default: [:]][person] = role
-        do { try await backend.setRole(role, of: person, in: id) } catch { roles[id]?[person] = before; report(error) }
+        do { try await backend.setRole(role, of: person, in: id) } catch { roles[id]?[person] = before; report(error, undone: "change the role") }
     }
     func setEmoji(_ emoji: String, _ id: ConversationID) async {
         await change(id, \.emoji, to: emoji) { try await self.backend.updateProfile(id, name: nil, emoji: emoji) }

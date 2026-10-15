@@ -41,6 +41,10 @@ struct DynamiteClient: Sendable {
         return (try? Dynamite_ClientFeatureCapabilities(serializedBytes: Data(bytes))) ?? .init()
     }()
 
+    /// Calls that make something new each time they run. If the lost connection had already delivered one, a retry would
+    /// make a second Meet link, group, section or report, or run an app's action twice, so the error shows instead.
+    static let notRepeated: Set<String> = ["create_video_call", "create_group", "create_roster_section", "report_message",
+                                          "click_card", "submit_form_action", "invoke_dialog"]
     func call<Response: SwiftProtobuf.Message>(_ method: String, _ request: some SwiftProtobuf.Message) async throws -> Response {
         var urlRequest = URLRequest(url: URL(string: "https://chat.google.com/api/\(method)?rt=b")!)
         urlRequest.httpMethod = "POST"
@@ -50,9 +54,9 @@ struct DynamiteClient: Sendable {
         urlRequest.setValue("application/x-protobuf", forHTTPHeaderField: "Accept")
         let (data, response): (Data, HTTPURLResponse)
         do { (data, response) = try await authorizer.data(for: urlRequest) }
-        catch let error as URLError where error.code == .networkConnectionLost {
+        catch let error as URLError where error.code == .networkConnectionLost && !Self.notRepeated.contains(method) {
             // URLSession reused a keep-alive connection the server had closed; retry once on a fresh one. Safe for
-            // sends too: their ids are client-made, so Google refuses a repeat instead of posting it twice.
+            // reads, settings and sends: a send's id is client-made, so Google refuses a repeat instead of posting it twice.
             (data, response) = try await authorizer.data(for: urlRequest)
         }
         do { return try Response(serializedBytes: DynamiteReadProbe.responseBytes(data, response: response)) }

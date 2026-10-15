@@ -23,7 +23,8 @@ enum PunctualWire {
                   let base = URL(string: "https://chat.google.com/punctual/" + env.dropFirst("prod-dynamite-".count)) else { return nil }
             baseURL = base
             startMicros = seconds * 1_000_000 + (start.count > 1 ? int(start[1]) ?? 0 : 0) / 1000
-            leaseSeconds = Int(int((config[3] as? [Any])?.first) ?? 3600)
+            // At least a minute: the channel renews at half the lease, and nothing would renew it in a loop.
+            leaseSeconds = max(60, Int(int((config[3] as? [Any])?.first) ?? 3600))
             self.utid = utid
             apiKey = key
         }

@@ -3,7 +3,10 @@ import AppKit
 /// Public images (profile photos, space icons), fetched over https with no cookies or credentials,
 /// as Google Chat does. Chat media goes through `ChatBackend.attachmentData`.
 @MainActor enum RemoteImage {
-    private static let cache: NSCache<NSURL, NSImage> = { let cache = NSCache<NSURL, NSImage>(); cache.countLimit = 300; return cache }()
+    /// Up to 300 pictures or 50 MB of pixels, whichever comes first.
+    private static let cache: NSCache<NSURL, NSImage> = {
+        let cache = NSCache<NSURL, NSImage>(); cache.countLimit = 300; cache.totalCostLimit = 50_000_000; return cache
+    }()
     private static let session: URLSession = {
         let config = URLSessionConfiguration.ephemeral
         config.httpCookieStorage = nil
@@ -34,7 +37,7 @@ import AppKit
         for candidate in key == url ? [url] : [key, url] where candidate.scheme == "https" && !Task.isCancelled {
             guard let (data, response) = try? await session.data(from: candidate),
                   (response as? HTTPURLResponse)?.statusCode == 200, let image = NSImage(data: data) else { continue }
-            cache.setObject(image, forKey: key as NSURL)
+            cache.setObject(image, forKey: key as NSURL, cost: image.pixelBytes)
             return image
         }
         return nil

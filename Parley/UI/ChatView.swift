@@ -23,7 +23,7 @@ struct Avatar: View {
             } else if let image {
                 Image(nsImage: image).resizable().scaledToFill()
             } else {
-                shape.fill(Color(hue: hue, saturation: 0.35, brightness: 0.65))
+                shape.fill(Color(hue: hue, saturation: 0.35, brightness: 0.55))   // white initials stay readable on it
                 if space { Image(systemName: "number").font(.system(size: size * 0.52, weight: .medium)) }
                 else { Text(Self.initials(name)).font(.system(size: size * 0.4, weight: .semibold, design: .rounded)) }
             }
@@ -215,8 +215,14 @@ struct ChatView: View {
                             ThreadsPane(store: store, room: room)
                         }
                     }
-                    // Esc closes the info panel wherever focus is; the composer's own Esc also closes it.
-                    .background { if store.info { Button("") { store.info = false }.keyboardShortcut(.cancelAction).opacity(0).accessibilityHidden(true) } }
+                    // Esc closes the info panel wherever focus is; the composer's own Esc also closes it. While the composer
+                    // quotes or edits, Esc is the composer's, to drop the quote or end the edit first.
+                    .background {
+                        let scope = store.key(room.id, nil)
+                        if store.info, store.quoting[scope] == nil, store.editing[scope] == nil {
+                            Button("") { store.info = false }.keyboardShortcut(.cancelAction).opacity(0).accessibilityHidden(true)
+                        }
+                    }
                 }
                     .toolbar {
                         // On the left in the title's place and size, as Home and the other shortcuts show theirs.
@@ -238,23 +244,23 @@ struct ChatView: View {
                         if #available(macOS 26, *) { ToolbarSpacer(.flexible) }   // search on the right, the name on the left
                         // Web's call button; a menu, as calls and huddles may join it.
                         ToolbarItem(placement: .primaryAction) {
-                            Menu { Button("Send a Meet Link") { sendMeetLink(room.id) } } label: { Image(systemName: "video") }
+                            Menu { Button("Send a Meet Link") { sendMeetLink(room.id) } } label: { Label("Video Call", systemImage: "video").labelStyle(.iconOnly) }
                                 .menuIndicator(.visible).help("Video call")
                         }
                         if Self.offersThreads(room) {   // the conversation's threads, as Google Chat's Active threads
                             ToolbarItem(placement: .primaryAction) {
-                                Button { Task { await store.toggleThreads() } } label: { Image(systemName: "bubble.left.and.text.bubble.right") }
+                                Button { Task { await store.toggleThreads() } } label: { Label("Threads", systemImage: "bubble.left.and.text.bubble.right").labelStyle(.iconOnly) }
                                     .help("Threads")
                             }
                         }
                         if fixedConversation == nil {   // results open in the main window, so search lives only there
-                            ToolbarItem(placement: .primaryAction) { Button { find() } label: { Image(systemName: "magnifyingglass") }.help("Search messages (⌘F)") }
+                            ToolbarItem(placement: .primaryAction) { Button { find() } label: { Label("Search", systemImage: "magnifyingglass").labelStyle(.iconOnly) }.help("Search messages (⌘F)") }
                         }
                     }
                     .focusedSceneValue(\.meetLinkConversation, room.id)
                     .toolbar(removing: .title)   // the conversation's name is the title; the window keeps "Parley" for its menus
                     .safeAreaInset(edge: .top, spacing: 0) { Divider() }   // the line under the header, as Home's
-            } else { ContentUnavailableView("Choose a conversation", systemImage: "bubble.left.and.bubble.right", description: Text("Your conversations will appear here."))
+            } else { ContentUnavailableView("Choose a conversation", systemImage: "bubble.left.and.bubble.right", description: Text("Select one in the sidebar, or press ⌘K to jump to one."))
                 .safeAreaInset(edge: .top, spacing: 0) { expiredBanner } }
     }
     var body: some View {
@@ -308,12 +314,12 @@ struct ChatView: View {
         }
         .focusedSceneValue(\.chatCommands, commands)
         .background {
-            Group {   // ⌘1 to ⌘9 stay out of the menus, as tabs' do in Safari
-                ForEach(1...9, id: \.self) { number in
+            Group {   // ⌘1 to ⌘9 stay out of the menus, as tabs' do in Safari; the main window's only
+                if fixedConversation == nil { ForEach(1...9, id: \.self) { number in
                     Button("") { if let room = Conversation.atShortcut(number, in: store.conversations, limit: sectionLimitArgs.limit,
                                                                        expanded: sectionLimitArgs.expanded, selected: store.selectedID, custom: store.sections) { Task { await store.select(room.id) } } }
                         .keyboardShortcut(KeyEquivalent(Character(String(number))), modifiers: .command)
-                }
+                } }
             }.hidden()
         }
         .overlay {
@@ -351,7 +357,9 @@ struct ChatView: View {
             }
         }
         .animation(.default, value: store.toast)
-        .alert("Something went wrong",isPresented: Binding(get: { store.error != nil }, set: { if !$0 { store.error = nil } })) { Button("OK") { store.error = nil } } message: { Text(store.error ?? "") }
+        // VoiceOver hears a note as it shows; it fades before anyone could find it.
+        .onChange(of: store.toast) { _, toast in if let toast { AccessibilityNotification.Announcement(toast).post() } }
+        .alert("Couldn’t finish that", isPresented: Binding(get: { store.error != nil }, set: { if !$0 { store.error = nil } })) { Button("OK") { store.error = nil } } message: { Text(store.error ?? "") }
         .task(id: fixedConversation.flatMap(store.hasConversation)) {
             if let fixedConversation {   // a restored window: loads, or closes when the conversation isn't this account's
                 switch store.hasConversation(fixedConversation) {
@@ -377,7 +385,7 @@ struct ChatView: View {
     /// Move to: one of my sections, a new one, or back to its default section, as Google Chat's Move conversation.
     @ViewBuilder private func moveMenu(_ room: Conversation) -> some View {
         if room.app != .gemini {
-            Menu("Move to") {
+            Menu("Move To") {
                 if room.section != nil { Button(room.kind == .space ? "Spaces" : room.app != nil ? "Apps" : "Direct messages") { Task { await store.moveConversation(room.id, to: nil) } } }
                 ForEach(store.sections.filter { $0.kind == .custom && $0.key != room.section }) { section in
                     Button(section.name) { Task { await store.moveConversation(room.id, to: section.key) } }
@@ -386,6 +394,11 @@ struct ChatView: View {
                 Button("New Section…") { sectionName = ""; naming = SectionNaming(moving: room.id) }
             }
         }
+    }
+    /// A sidebar row as VoiceOver reads it: the name, then unread, pinned and muted when they are so.
+    static func spoken(_ room: Conversation) -> String {
+        ([room.name] + [room.unread > 0 ? "\(room.unread) unread" : nil, room.pinned ? "pinned" : nil, room.muted ? "muted" : nil].compactMap { $0 })
+            .joined(separator: ", ")
     }
     /// One of my own sections, by its title.
     private func customSection(_ title: String) -> SidebarSection? { store.sections.first { $0.kind == .custom && $0.name == title } }
@@ -398,7 +411,7 @@ struct ChatView: View {
                     ForEach(Shortcut.allCases, id: \.self) { shortcut in
                         HStack {
                             Label(shortcut.title, systemImage: shortcut.icon).font(.system(size: 13))
-                            if shortcut == .drafts, case let count = store.draftList().count + store.scheduled.count, count > 0 {   // as web shows it
+                            if shortcut == .drafts, case let count = store.draftCount + store.scheduled.count, count > 0 {   // as web shows it
                                 Spacer(minLength: 0)
                                 Text("\(count)").font(.system(size: 11)).foregroundStyle(.secondary).accessibilityLabel("\(count) drafts")
                             }
@@ -414,15 +427,15 @@ struct ChatView: View {
                         Text(room.name).font(.system(size: 13, weight: room.unread > 0 ? .semibold : .regular)).lineLimit(1).truncationMode(.tail).help(room.name)
                         Spacer(minLength: 0)
                         if room.muted { Image(systemName: "bell.slash").font(.caption2).foregroundStyle(.secondary) }
-                        if room.unread > 0 { Text("\(room.unread)").font(.system(size: 11, weight: .semibold, design: .rounded)).padding(.horizontal, 6).padding(.vertical, 2).background(.blue, in: Capsule()).foregroundStyle(.white).fixedSize() }
+                        if room.unread > 0 { Text("\(room.unread)").font(.system(size: 11, weight: .semibold, design: .rounded)).padding(.horizontal, 6).padding(.vertical, 2).background(Color.accentColor, in: Capsule()).foregroundStyle(.white).monospacedDigit().fixedSize() }
                     }.tag(room.id)
                         .contextMenu {
-                            if room.unread > 0 { Button("Mark as read") { Task { await store.markRead(room.id) } } }
-                            else { Button("Mark as unread") { Task { await store.markUnread(room.id) } } }
+                            if room.unread > 0 { Button("Mark as Read") { Task { await store.markRead(room.id) } } }
+                            else { Button("Mark as Unread") { Task { await store.markUnread(room.id) } } }
                             Button(room.pinned ? "Unpin" : "Pin") { Task { await store.setPinned(!room.pinned, room.id) } }
                             Button(room.muted ? "Unmute" : "Mute") { Task { await store.setMuted(!room.muted, room.id) } }
                             NotificationLevelPicker(store: store, room: room)
-                            Button("Open in new window") { openWindow(value: room.id) }
+                            Button("Open in New Window") { openWindow(value: room.id) }
                             Button("Copy Link") { ChatLink.copy(ChatLink.url(room.id)) }
                             Button("Hide") { Task { await store.hide(room.id) } }
                             moveMenu(room)
@@ -436,10 +449,11 @@ struct ChatView: View {
                                 Button("Block…", role: .destructive) { blocking = .person(partner, name: room.name) }
                             }
                         }
-                        .accessibilityElement(children: .ignore).accessibilityLabel("\(room.name), \(room.unread) unread")
+                        .accessibilityElement(children: .ignore).accessibilityLabel(Self.spoken(room))
+                        .draggable(ChatLink.url(room.id))   // to Safari, Notes or Finder, as its Google Chat link
                 }
                 if rooms.isEmpty, customSection(title) != nil {
-                    Text("Add a conversation with its Move to menu.").font(.caption).foregroundStyle(.secondary).selectionDisabled()
+                    Text("Right-click a conversation and choose Move To.").font(.caption).foregroundStyle(.secondary).selectionDisabled()
                 }
                 if !hidden.isEmpty {
                     let open = sectionLimitArgs.expanded.contains(title)
@@ -574,18 +588,21 @@ struct TimelineView: View {
     /// The main timeline shows a window opened at an old message, away from the newest ones.
     private var isWindow: Bool { thread == nil && store.detached.contains(conversation.id) }
     /// Receipts show in the conversation's own timeline, not in a thread.
-    private var rows: [TimelineRow] {
+    private func rows(_ items: [Message]) -> [TimelineRow] {
         let seen = thread == nil ? store.seen(in: conversation).mapValues { $0.map { store.name(of: $0, in: conversation.id) } } : [:]
         return TimelineRow.rows(items, seen: seen, drafts: thread == nil ? store.threadsWithDrafts(in: conversation.id) : [], transcripts: store.openTranscripts)
     }
     var body: some View {
+        let items = items   // filtered and sorted once per update, not once per use
         // The composer floats over the timeline, which scrolls under it with a bottom inset of the composer's height.
         Group {
-            if items.isEmpty {
+            if items.isEmpty, store.loading.contains(store.key(conversation.id, thread)) {   // not empty: not loaded yet
+                ProgressView().frame(maxWidth: .infinity, maxHeight: .infinity).padding(.bottom, composerHeight)
+            } else if items.isEmpty {
                 ContentUnavailableView("Start the conversation", systemImage: "bubble.left", description: Text("Send a message below."))
                     .frame(maxWidth: .infinity, maxHeight: .infinity).padding(.bottom, composerHeight)   // full width: the composer spans it
             } else {
-                MessageTable(rows: rows, meID: store.me.id, kind: conversation.kind, style: style, look: [wallpaper.rawValue, darkWallpaper.rawValue, bubbleColor, darkBubbleColor].joined(separator: "/"), highlighted: store.highlightedID,
+                MessageTable(rows: rows(items), meID: store.me.id, kind: conversation.kind, style: style, look: [wallpaper.rawValue, darkWallpaper.rawValue, bubbleColor, darkBubbleColor].joined(separator: "/"), highlighted: store.highlightedID,
                              identifier: thread == nil ? "timeline" : "thread", actions: actions,
                              nearTop: { Task { await store.loadOlderIfNeeded(conversation.id, thread: thread) } },
                              nearBottom: { Task { await store.loadNewerIfNeeded(conversation.id) } }, detached: isWindow,
@@ -683,9 +700,7 @@ struct ComposerBar: View {
     /// A pending attachment above the field: a thumbnail for images, the file's icon otherwise, and a remove button.
     private func chip(_ file: Attachment) -> some View {
         HStack(spacing: 6) {
-            let path = file.url?.path(percentEncoded: false) ?? ""
-            Image(nsImage: file.kind == .image ? NSImage(contentsOfFile: path) ?? NSWorkspace.shared.icon(forFile: path) : NSWorkspace.shared.icon(forFile: path))
-                .resizable().scaledToFill().frame(width: 32, height: 32).clipShape(RoundedRectangle(cornerRadius: 5))
+            PendingThumbnail(file: file)
             Text(file.name).font(.caption).lineLimit(1).truncationMode(.middle).frame(maxWidth: 140, alignment: .leading)
             Button { store.detach(file, conversation: conversation.id, thread: thread) } label: { Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary) }
                 .buttonStyle(.plain).help("Remove").accessibilityLabel("Remove \(file.name)")
@@ -730,7 +745,7 @@ struct ComposerBar: View {
                             formatButton("list.bullet", "Bulleted list (⇧⌘8)", #selector(ComposerTextView.formatList(_:)))
                             Divider().frame(height: 16)
                             formatButton("text.quote", "Quote (⇧⌘I)", #selector(ComposerTextView.formatQuote(_:)))
-                            formatButton("link", "Link (⌘K)", #selector(ComposerTextView.formatLink(_:)))
+                            formatButton("link", "Link (⇧⌘K)", #selector(ComposerTextView.formatLink(_:)))
                             Divider().frame(height: 16)
                             formatButton("chevron.left.forwardslash.chevron.right", "Code (⇧⌘C)", #selector(ComposerTextView.formatCode(_:)))
                             formatButton("curlybraces.square", "Code block (⌥⇧⌘C)", #selector(ComposerTextView.formatCodeBlock(_:)))
@@ -776,7 +791,7 @@ struct ComposerBar: View {
                                 Image(systemName: "arrow.up").font(.system(size: 16, weight: .semibold)).foregroundStyle(canSend ? .white : .secondary)
                                     .frame(width: Self.control, height: Self.control)
                                     .floatingGlass(Circle(), tint: canSend ? .accentColor : nil, interactive: true)
-                            }.buttonStyle(.plain).disabled(!canSend).help("Send message (right-click to schedule)").accessibilityLabel("Send message")
+                            }.buttonStyle(.plain).disabled(!canSend).help("Send message: Return. A new line: Shift-Return. Right-click to schedule.").accessibilityLabel("Send message")
                             .contextMenu {
                                 ScheduleMenu(enabled: store.canSchedule(conversation: conversation.id, thread: thread)) { date in
                                     Task { await store.schedule(conversation: conversation.id, thread: thread, at: date) }
@@ -817,7 +832,6 @@ struct ComposerBar: View {
             fieldRow
         }
         .floatingGlass(RoundedRectangle(cornerRadius: Self.control / 2, style: .continuous))
-        .help("Return to send · Shift-Return for a new line · Paste or drop files to attach")
     }
     /// The reply or forward inside the field, as Telegram shows it: an accent bar, who, and one line of the message.
     private func quoteHeader(_ quote: QuotedMessage) -> some View {
@@ -901,6 +915,23 @@ struct ComposerBar: View {
     }}
 
 /// Follow or unfollow a thread, as Google Chat's thread header offers it: a filled bell while followed.
+/// A file waiting in the composer: a picture's thumbnail, made once off the main thread (the composer redraws on every
+/// keystroke, and reading a large photo there made typing stutter), or the file's icon.
+struct PendingThumbnail: View {
+    let file: Attachment
+    @State private var picture: NSImage?
+    private var path: String { file.url?.path(percentEncoded: false) ?? "" }
+    var body: some View {
+        Image(nsImage: picture ?? NSWorkspace.shared.icon(forFile: path))
+            .resizable().scaledToFill().frame(width: 32, height: 32).clipShape(RoundedRectangle(cornerRadius: 5))
+            .task(id: path) { if file.kind == .image, let url = file.url { picture = await Self.load(url) } }
+    }
+    /// 64 px on the longer side: the chip is 32 pt, on a Retina screen.
+    nonisolated static func load(_ url: URL) async -> NSImage? {
+        await Task.detached { (try? Data(contentsOf: url)).flatMap { ImageCache.decode($0, maxPixels: 64) } }.value
+    }
+}
+
 struct ThreadFollowButton: View {
     let store: ChatStore
     let thread: ThreadID
@@ -909,7 +940,7 @@ struct ThreadFollowButton: View {
     func toggle() async { await store.setFollowing(!store.isFollowing(thread), thread: thread) }
     var body: some View {
         let following = store.isFollowing(thread)
-        Button { Task { await toggle() } } label: { Image(systemName: following ? "bell.fill" : "bell.slash") }
+        Button { Task { await toggle() } } label: { Image(systemName: following ? "bell.fill" : "bell").contentTransition(.symbolEffect(.replace)) }
             .buttonStyle(.plain)
             .help(following ? "Unfollow thread: its replies stop notifying you" : "Follow thread: its replies notify you")
             .accessibilityLabel(label)
@@ -1164,11 +1195,24 @@ struct FinderPanel: View {
         _filters = State(initialValue: SearchFilters(saidIn: scope.map { [$0.id] } ?? []))
     }
     @State private var selected: String?
+    @State private var searching = false
     @Environment(\.dismiss) private var dismiss
     private struct Ask: Equatable { var query: String; var filters: SearchFilters }
+    /// What the list shows when it has no results: a prompt before anything is asked, progress, or that nothing matched.
+    @ViewBuilder private var noResults: some View {
+        if query.trimmingCharacters(in: .whitespaces).isEmpty && filters.isEmpty {
+            ContentUnavailableView("Search messages", systemImage: "magnifyingglass", description: Text("Type words, or pick a person, a conversation or a date."))
+        } else if searching {
+            ProgressView()
+        } else {
+            ContentUnavailableView.search(text: query)
+        }
+    }
     var body: some View {
         VStack(spacing: 0) {
             TextField("Search messages", text: $query).textFieldStyle(.plain).font(.title3).padding(.horizontal, 18).padding(.top, 18)
+                .onKeyPress(.downArrow) { move(1); return .handled }   // through the results without leaving the field
+                .onKeyPress(.upArrow) { move(-1); return .handled }
                 .padding(.bottom, 10).onSubmit { choose() }
             SearchChips(store: store, filters: $filters).padding(.horizontal, 18).padding(.bottom, 10)
             Divider()
@@ -1180,13 +1224,21 @@ struct FinderPanel: View {
                         .tag(message.id).onTapGesture { selected = message.id; choose() }
                 }
             }.frame(height: 280)
+            .overlay { if store.searchResults.isEmpty { noResults } }
             HStack { Text("Searches Google Chat").font(.caption).foregroundStyle(.secondary); Spacer(); Button("Close") { dismiss() }.keyboardShortcut(.cancelAction) }.padding(12)
         }.frame(width: 500)
             .task(id: Ask(query: query, filters: filters)) {
                 try? await Task.sleep(for: .milliseconds(250))   // one request per pause in typing, not per keystroke
                 guard !Task.isCancelled else { return }
+                searching = true; defer { searching = false }
                 await store.search(query, filters: filters); selected = store.searchResults.first?.id
             }
+    }
+    private func move(_ step: Int) {
+        let ids = store.searchResults.map(\.id)
+        guard !ids.isEmpty else { return }
+        let at = selected.flatMap(ids.firstIndex) ?? (step > 0 ? -1 : ids.count)
+        selected = ids[min(max(at + step, 0), ids.count - 1)]
     }
     private func choose() {
         guard let selected else { return }

@@ -20,21 +20,27 @@ struct ParleyApp: App {
         self.authorizer = authorizer
         let store: ChatStore
         var live = false
+        // The test and demo switches exist in Debug builds only: a release build always runs the real account.
+        #if DEBUG
+        let arguments = ProcessInfo.processInfo.arguments, testHost = ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil
+        #else
+        let arguments: [String] = [], testHost = false
+        #endif
         // Tests and the demo workspaces keep no pictures on disk: they'd share the Debug build's folder.
-        if ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil
-            || ProcessInfo.processInfo.arguments.contains(where: { $0.hasPrefix("-uiTesting") }) { ImageCache.directory = nil; CardLayout.sizesFile = nil }
-        if ProcessInfo.processInfo.arguments.contains("-uiTestingLongHistory") {
+        if testHost
+            || arguments.contains(where: { $0.hasPrefix("-uiTesting") }) { ImageCache.directory = nil; CardLayout.sizesFile = nil }
+        if arguments.contains("-uiTestingLongHistory") {
             store = ChatStore(backend: FakeBackend(longHistory: 600, latency: .milliseconds(300)))
-        } else if ProcessInfo.processInfo.arguments.contains("-uiTestingFormattedThread") {
+        } else if arguments.contains("-uiTestingFormattedThread") {
             store = ChatStore(backend: FakeBackend(formattedThread: true))
-        } else if ProcessInfo.processInfo.arguments.contains("-uiTestingManyConversations") {
+        } else if arguments.contains("-uiTestingManyConversations") {
             for key in ["collapsedSidebarSections", SidebarLimit.enabledKey] { UserDefaults.standard.removeObject(forKey: key) }
             store = ChatStore(backend: FakeBackend(manyConversations: 320))
-        } else if ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil || ProcessInfo.processInfo.arguments.contains("-uiTestingDemo") {
+        } else if testHost || arguments.contains("-uiTestingDemo") {
             store = ChatStore(backend: FakeBackend())
             RemoteImage.preload(FakeBackend.demoIcons)
-            if ProcessInfo.processInfo.arguments.contains("-uiTestingDemo") {   // the README shots don't follow the Mac's appearance
-                NSApplication.shared.appearance = NSAppearance(named: ProcessInfo.processInfo.arguments.contains("-uiTestingDark") ? .darkAqua : .aqua)
+            if arguments.contains("-uiTestingDemo") {   // the README shots don't follow the Mac's appearance
+                NSApplication.shared.appearance = NSAppearance(named: arguments.contains("-uiTestingDark") ? .darkAqua : .aqua)
             }
         } else {
             live = true
@@ -124,6 +130,7 @@ struct ParleyApp: App {
         WindowGroup(for: ConversationID.self) { $id in
             if let id = id { ChatView(store: store, fixedConversation: id).environment(signIn) }
         }
+            .defaultSize(width: 520, height: 680)
         WindowGroup(for: ThreadRef.self) { $ref in
             if let ref { ThreadWindow(store: store, ref: ref).environment(signIn) }
         }
@@ -155,8 +162,9 @@ struct ChatMenuCommands: Commands {
             Button("Forward") { Task { await store.goForward() } }.keyboardShortcut("]").disabled(!store.canGoForward)
             Divider()
             Button("Jump to Conversation…") { chat?.jump() }.keyboardShortcut("k").disabled(chat == nil)
-            Button("Next Unread") { chat?.unread(true) }.keyboardShortcut(.downArrow, modifiers: .option).disabled(chat == nil)
-            Button("Previous Unread") { chat?.unread(false) }.keyboardShortcut(.upArrow, modifiers: .option).disabled(chat == nil)
+            // ⌥⌘, not ⌥: ⌥↑/⌥↓ move by paragraph in every text field.
+            Button("Next Unread") { chat?.unread(true) }.keyboardShortcut(.downArrow, modifiers: [.option, .command]).disabled(chat == nil)
+            Button("Previous Unread") { chat?.unread(false) }.keyboardShortcut(.upArrow, modifiers: [.option, .command]).disabled(chat == nil)
         }
     }
 }
@@ -176,7 +184,11 @@ private struct DiagnosticsMenuItem: View {
     var dockMenu: (() -> NSMenu)?
     func applicationDockMenu(_ sender: NSApplication) -> NSMenu? { dockMenu?() }
     let shareService = ShareService()
-    func applicationDidFinishLaunching(_ notification: Notification) { NSApp.servicesProvider = shareService }
+    func applicationDidFinishLaunching(_ notification: Notification) {
+        NSApp.servicesProvider = shareService
+        // The emoji catalog walks ~130,000 code points: build it now, in the background, not on the first `:` typed.
+        Task.detached(priority: .utility) { _ = EmojiCatalog.categories }
+    }
     /// Links sent to Parley; ones that arrive before the window (the link launched Parley) wait for it.
     var openURL: ((URL) -> Void)? { didSet { if let openURL { waitingURLs.forEach(openURL); waitingURLs = [] } } }
     private var waitingURLs: [URL] = []

@@ -145,7 +145,10 @@ enum VoiceLayout {
     }
     private func startTimer() {
         timer?.invalidate()
-        timer = Timer.scheduledTimer(withTimeInterval: 1.0 / 30, repeats: true) { [weak self] _ in MainActor.assumeIsolated { self?.tick() } }
+        // In the common modes: a default-mode timer stops while the user scrolls, freezing the progress.
+        let timer = Timer(timeInterval: 1.0 / 30, repeats: true) { [weak self] _ in MainActor.assumeIsolated { self?.tick() } }
+        RunLoop.main.add(timer, forMode: .common)
+        self.timer = timer
     }
     private func tick() {
         guard let player else { return }
@@ -282,7 +285,10 @@ struct VoiceMessageView: View {
         guard recorder.record() else { throw Failure.couldNotStart }
         self.recorder = recorder
         isRecording = true; elapsed = 0; levels = []
-        timer = Timer.scheduledTimer(withTimeInterval: Waveform.interval, repeats: true) { [weak self] _ in MainActor.assumeIsolated { self?.sample() } }
+        // In the common modes, so levels keep coming while the user scrolls during a recording.
+        let timer = Timer(timeInterval: Waveform.interval, repeats: true) { [weak self] _ in MainActor.assumeIsolated { self?.sample() } }
+        RunLoop.main.add(timer, forMode: .common)
+        self.timer = timer
     }
     /// Ends the recording; nil when it was too short to send (the file is then removed).
     func finish() -> Recording? {
@@ -313,12 +319,10 @@ struct VoiceMessageView: View {
 /// The composer while recording: a pulsing red dot, the time, and the last few seconds of levels.
 struct RecordingBar: View {
     let recorder: VoiceRecorder
-    @State private var pulse = false
     var body: some View {
         HStack(spacing: 10) {
-            Circle().fill(.red).frame(width: 9, height: 9).opacity(pulse ? 0.3 : 1)
-                .animation(.easeInOut(duration: 0.6).repeatForever(), value: pulse)
-                .onAppear { pulse = true }
+            // The system's pulse, which stays still with Reduce Motion.
+            Image(systemName: "record.circle.fill").foregroundStyle(.red).symbolEffect(.pulse).accessibilityLabel("Recording")
             Text(Waveform.time(recorder.elapsed)).font(.body.monospacedDigit())
             Canvas { context, size in
                 let count = Int(size.width / 3), recent = Array(recorder.levels.suffix(count))

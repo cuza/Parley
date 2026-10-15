@@ -186,7 +186,7 @@ struct HomeThreadsStoreTests {
         let thread = try #require(store.homeRows().compactMap(\.thread).last)
         let reply = Message(id: "pushed", conversationID: thread.conversationID, threadID: thread.id, sender: Person(id: "alex", name: "Alex"), text: "New reply")
         await fake.push(.messageUpserted(reply))
-        try await Task.sleep(for: .milliseconds(50))
+        await eventually { store.homeRows().first?.last?.id == "pushed" }
         let top = try #require(store.homeRows().first)
         #expect(top.id == thread.id && top.last?.id == "pushed" && top.unread)
     }

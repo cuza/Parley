@@ -135,7 +135,7 @@ final class MessageRowView: NSTableRowView {
         viaLabel.background = .labelColor.withAlphaComponent(0.08)
         viaLabel.inset = RowLayout.viaInset
         wantsLayer = true
-        flash.backgroundColor = NSColor(srgbRed: 0x68 / 255.0, green: 0xA8 / 255.0, blue: 0xE2 / 255.0, alpha: 1).cgColor
+        flash.backgroundColor = NSColor.controlAccentColor.cgColor   // set again as it flashes, for the current accent
         flash.opacity = 0; flash.zPosition = 10
         layer?.addSublayer(flash)
         for view: NSView in [dateLabel, avatarView, bubbleView, quoteView, quoteSenderLabel, quoteTextLabel, nameLabel, viaLabel, textView, repliesLink, sourcesLink, translationLink, thinkingLink, timeLabel, retryLink, serviceLabel, seenLabel] {
@@ -163,6 +163,42 @@ final class MessageRowView: NSTableRowView {
 
     /// Shows `row`. Pass `layout` when it was already computed for this row at the row view's width (the table's
     /// height cache); otherwise it is computed at the next `layout()`.
+    /// The row as VoiceOver reads it: the day when it starts one, who, the quote, the text, attachments, the time, and its
+    /// state (edited, sending, not sent, seen by).
+    /// Where Copy writes; tests use their own.
+    static var pasteboard = NSPasteboard.general
+    /// The message as shown, as rich text (links, bold, lists) for Mail and Notes and plain text for the rest. The bubble's
+    /// colours stay behind: pasted, they'd be the bubble's, not the document's.
+    static func copy(_ rich: NSAttributedString) {
+        let clean = NSMutableAttributedString(attributedString: rich), all = NSRange(location: 0, length: clean.length)
+        clean.removeAttribute(.foregroundColor, range: all); clean.removeAttribute(.backgroundColor, range: all)
+        pasteboard.clearContents()
+        pasteboard.writeObjects([clean])
+    }
+    static func spoken(_ row: TimelineRow, own: Bool) -> String {
+        let message = row.message
+        var parts: [String] = []
+        if row.newDay { parts.append(message.createdAt.formatted(date: .complete, time: .omitted)) }
+        if !message.isSystem { parts.append(own ? "You" : message.sender.name) }
+        if let quote = message.quote { parts.append("replying to \(quote.sender): \(quote.text)") }
+        let text = TextStyleRange.plain(message.text, message.formatting)
+        if !text.isEmpty { parts.append(text) }
+        parts += message.attachments.map(\.name).filter { !$0.isEmpty }
+        parts.append(message.createdAt.formatted(date: .omitted, time: .shortened))
+        if message.edited { parts.append("edited") }
+        switch message.delivery {
+        case .pending: parts.append("sending")
+        case .failed: parts.append("not sent")
+        case .sent: break
+        }
+        if !row.seenBy.isEmpty { parts.append("seen by " + row.seenBy.formatted(.list(type: .and))) }
+        return parts.joined(separator: ", ")
+    }
+    override func accessibilityCustomActions() -> [NSAccessibilityCustomAction]? {
+        contextMenu().items.compactMap { $0 as? ClosureMenuItem }.filter(\.isEnabled).map { item in
+            NSAccessibilityCustomAction(name: item.title) { item.handler(); return true }
+        }
+    }
     func configure(_ row: TimelineRow, own: Bool, kind: ConversationKind, meID: String, layout: RowLayout? = nil,
                    highlighted: Bool = false, style: TimelineStyle = .bubbles, actions: MessageRowActions) {
         let own = own && style == .bubbles   // plain shows everyone like an incoming message
@@ -177,6 +213,9 @@ final class MessageRowView: NSTableRowView {
         else if let layout { rowLayout = layout }
         self.row = row; self.own = own; self.kind = kind; self.actions = actions
         self.meID = meID
+        // VoiceOver reads the row as one line; its actions are the menu's (built only when VoiceOver asks). The row stays a
+        // container, so the text inside (its links, a selection) can still be reached.
+        setAccessibilityLabel(Self.spoken(row, own: own))
         let ink = BubblePalette.ownInk, accent = BubblePalette.ownAccent
         let secondary: NSColor = own && !lone ? accent.withAlphaComponent(0.75) : .secondaryLabelColor
         let senderColor = Self.color(for: message.sender.id)
@@ -184,7 +223,10 @@ final class MessageRowView: NSTableRowView {
         dateLabel.text = RowLayout.dateText(message, color: BubblePalette.serviceText)
         dateLabel.background = BubblePalette.servicePill
         dateLabel.inset = RowLayout.serviceInset
-        avatarView.rootView = Avatar(name: message.sender.name, size: RowLayout.avatarSize, url: message.sender.avatarURL)
+        // Only when it changes: a SwiftUI update (and its image task) on every row reused while scrolling adds up.
+        if avatarView.rootView.name != message.sender.name || avatarView.rootView.url != message.sender.avatarURL {
+            avatarView.rootView = Avatar(name: message.sender.name, size: RowLayout.avatarSize, url: message.sender.avatarURL)
+        }
         bubbleView.fill = lone ? .clear : own ? BubblePalette.own : BubblePalette.incoming; bubbleView.own = own
         if flashes { flashRow() }
         self.highlighted = highlighted
@@ -389,6 +431,7 @@ final class MessageRowView: NSTableRowView {
     }
     /// Telegram's jump flash: the row tints to half its blue and back.
     private func flashRow() {
+        effectiveAppearance.performAsCurrentDrawingAppearance { flash.backgroundColor = NSColor.controlAccentColor.cgColor }
         let fade = CAKeyframeAnimation(keyPath: "opacity")
         fade.values = [0, 0.5, 0.5, 0]; fade.keyTimes = [0, 0.15, 0.55, 1]; fade.duration = 1.5
         flash.add(fade, forKey: "flash")
@@ -440,6 +483,7 @@ final class MessageRowView: NSTableRowView {
     /// `attachment`: the attachment right-clicked, whose items (Quick Look, Save, Copy) follow the reactions.
     func contextMenu(selection: String? = nil, attachment: Attachment? = nil) -> NSMenu {
         let menu = MessageMenu()
+        menu.keepsSystemItems = selection?.isEmpty == false   // selected text keeps Look Up, Translate, Services…
         guard let message = row?.message else { return menu }
         defer { menu.seal() }
         let strip = NSMenuItem()
@@ -458,8 +502,9 @@ final class MessageRowView: NSTableRowView {
         if message.delivery == .sent { menu.addItem(ClosureMenuItem("Reply") { [actions] in actions.quote(message) }) }
         menu.addItem(ClosureMenuItem("Reply in Thread") { [actions] in actions.openThread(message) })
         if message.delivery == .sent, !message.isSystem, let forward = actions.forward { menu.addItem(ClosureMenuItem("Forward…") { forward(message) }) }
-        menu.addItem(ClosureMenuItem("Copy") { [actions] in
-            if let selection, !selection.isEmpty { NSPasteboard.general.clearContents(); NSPasteboard.general.setString(selection, forType: .string) }
+        menu.addItem(ClosureMenuItem("Copy") { [weak self, actions] in
+            if let selection, !selection.isEmpty { Self.pasteboard.clearContents(); Self.pasteboard.setString(selection, forType: .string) }
+            else if let rich = self?.textView.attributedString(), rich.length > 0 { Self.copy(rich) }
             else { actions.copy(message) }
         })
         if message.delivery == .sent, let link = ChatLink.url(message: message.id) {
@@ -548,6 +593,10 @@ final class BubbleView: NSView {
         layer.path = Self.path(size: bounds.size, tail: tail, mirrored: own)
         effectiveAppearance.performAsCurrentDrawingAppearance {   // resolve dynamic colours for light/dark
             layer.fillColor = fill.cgColor   // BubblePalette's
+            // Increase Contrast: an outline, so a pale incoming bubble doesn't melt into a light background.
+            let outlined = !own && fill != .clear && NSWorkspace.shared.accessibilityDisplayShouldIncreaseContrast
+            layer.strokeColor = outlined ? NSColor.separatorColor.cgColor : nil
+            layer.lineWidth = outlined ? 1 : 0
         }
         CATransaction.commit()
     }
@@ -669,7 +718,7 @@ extension MessageRowView {
 }
 
 final class ClosureMenuItem: NSMenuItem {
-    private let handler: () -> Void
+    let handler: () -> Void   // also VoiceOver's action of the same name (see MessageRowView.accessibilityCustomActions)
     init(_ title: String, _ handler: @escaping () -> Void) {
         self.handler = handler
         super.init(title: title, action: #selector(run), keyEquivalent: "")
@@ -683,6 +732,9 @@ final class ClosureMenuItem: NSMenuItem {
 /// menu opens), so the menu is the same whether it opens on the text or on the bubble.
 final class MessageMenu: NSMenu, NSMenuDelegate {
     private var own: Set<ObjectIdentifier> = []
+    /// Opened on selected text: the system's items for it (Look Up, Translate, Search With Google, Share, Services,
+    /// Speech) join ours, as in Messages.
+    var keepsSystemItems = false { didSet { allowsContextMenuPlugIns = keepsSystemItems } }
     /// Runs once the menu has closed: a popover can't open while the menu still tracks.
     var afterClose: (@MainActor () -> Void)?
     init() {
@@ -695,6 +747,7 @@ final class MessageMenu: NSMenu, NSMenuDelegate {
     /// The items so far are ours; others are dropped when the menu opens.
     func seal() { own = Set(items.map(ObjectIdentifier.init)) }
     func menuWillOpen(_ menu: NSMenu) {
+        guard !keepsSystemItems else { return }
         for item in items where !own.contains(ObjectIdentifier(item)) { removeItem(item) }
     }
     func menuDidClose(_ menu: NSMenu) {
@@ -833,12 +886,20 @@ final class MessageTextView: NSTextView {
     override func menu(for event: NSEvent) -> NSMenu? {
         let range = selectedRange()
         let selection = range.length > 0 ? (string as NSString).substring(with: range) : nil
-        return messageMenu?(selection) ?? super.menu(for: event)
+        guard let menu = messageMenu?(selection) else { return super.menu(for: event) }
+        // Selected text: the text's own items (Look Up, Translate, Search With Google, Share, Speech) follow ours.
+        if selection != nil, let text = super.menu(for: event) {
+            let wanted = text.items.filter { $0.isEnabled || $0.hasSubmenu || $0.isSeparatorItem }
+            if !wanted.isEmpty { menu.addItem(.separator()) }
+            for item in wanted { text.removeItem(item); menu.addItem(item) }
+        }
+        return menu
     }
-    /// Pops the message menu up for the row, not for the text, so the system adds no text items to it.
+    /// Pops the message menu up for the row, not for the text, so the system adds no text items to it; with text
+    /// selected, for the text, so the system adds its items for the selection (Services).
     override func rightMouseDown(with event: NSEvent) {
         guard messageMenu != nil, let row = superview, let menu = menu(for: event) else { return super.rightMouseDown(with: event) }
-        NSMenu.popUpContextMenu(menu, with: event, for: row)
+        NSMenu.popUpContextMenu(menu, with: event, for: selectedRange().length > 0 ? self : row)
     }
 }
 

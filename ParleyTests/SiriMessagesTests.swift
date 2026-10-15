@@ -31,12 +31,12 @@ import Testing
         let mine = try #require(store.messages.first { $0.id == "design/d3/d3" || ($0.conversationID == "design" && $0.sender.id == store.me.id && $0.threadID == nil) })
         let theirs = try #require(store.messages.first { $0.conversationID == "design" && $0.sender.id != store.me.id && !$0.isSystem })
         #expect(await store.editText(of: mine.id, to: "Agreed, compact sidebar first."))
-        try await Task.sleep(for: .milliseconds(100))   // the server's echo
+        await eventually { store.messages.first { $0.id == mine.id }?.text == "Agreed, compact sidebar first." }   // the server's echo
         #expect(store.messages.first { $0.id == mine.id }?.text == "Agreed, compact sidebar first.")
         #expect(await store.editText(of: theirs.id, to: "Not mine") == false)
         #expect(await store.unsend(theirs.id) == false)
         #expect(await store.unsend(mine.id))
-        try await Task.sleep(for: .milliseconds(100))
+        await eventually { !store.messages.contains { $0.id == mine.id } }
         #expect(!store.messages.contains { $0.id == mine.id })
     }
     /// Each visible row names its message for Siri.

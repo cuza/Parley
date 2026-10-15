@@ -8,8 +8,7 @@ import SwiftUI
     private let controller: SPUStandardUpdaterController?
     @Published private(set) var canCheck = false
 
-    /// Tests, the demo and UI-testing launches aren't live; a Debug run shares the installed app's bundle ID, and must
-    /// never replace itself with a release build.
+    /// Tests, the demo and UI-testing launches aren't live; a Debug build never updates itself into a release build.
     nonisolated static func shouldStart(live: Bool, debug: Bool) -> Bool { live && !debug }
 
     init(start: Bool) {

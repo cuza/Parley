@@ -7,7 +7,9 @@ import XCTest
         app.launchArguments = ["-uiTestingDemo"]
         app.launch()
         let any = app.descendants(matching: .any)
-        let maria = any.matching(NSPredicate(format: "value == %@ OR label BEGINSWITH %@", "Maria Chen", "Maria Chen,")).firstMatch
+        let sidebar = any["sidebar"].firstMatch
+        XCTAssertTrue(sidebar.waitForExistence(timeout: 5))
+        let maria = sidebar.descendants(matching: .any).matching(NSPredicate(format: "label BEGINSWITH %@", "Maria Chen")).firstMatch
         XCTAssertTrue(maria.waitForExistence(timeout: 5))
         maria.click()
         let mine = app.textViews.matching(NSPredicate(format: "value == %@", "Absolutely. Send it over!")).firstMatch

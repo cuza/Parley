@@ -66,7 +66,11 @@ struct GeminiPane: View {
         }
     }
     @ViewBuilder private var sessions: some View {
-        if let all = store.threadSummaries[room.id], !all.isEmpty {
+        if store.threadSummaries[room.id] == nil {
+            ProgressView().padding(.top, 24)
+        } else if store.threadSummaries[room.id]?.isEmpty == true {
+            Text("No recent chats. Ask something below to start one.").foregroundStyle(.secondary).padding(.top, 24)
+        } else if let all = store.threadSummaries[room.id] {
             VStack(alignment: .leading, spacing: 4) {
                 Text("Recent").font(.subheadline.weight(.semibold)).foregroundStyle(.secondary).padding(.leading, 4)
                 ForEach(all) { session in

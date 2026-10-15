@@ -242,8 +242,10 @@ import Testing
     @Test(arguments: stride(from: 0, through: 160, by: 20).map { CGFloat($0) })
     func aProgrammaticResizeKeepsAReaderScrolledUpInPlace(offset: CGFloat) throws { try resizeKeepsTheReadersPlace(live: false, scrolledUp: true, offset: offset) }
     /// An animated resize (a pane opening grows the window, the zoom button) counts as a live resize while it runs but
-    /// never posts its end: the rows must still end up measured for the final width.
-    @Test func anAnimatedResizeEndsWithEveryRowMeasured() async throws {
+    /// never posts its end: the rows must still end up measured for the final width. The window server only animates
+    /// with the display awake, so a sleeping Mac skips it (the drag test below covers the re-measure without it).
+    @Test(.enabled(if: CGDisplayIsAsleep(CGMainDisplayID()) == 0, "the window server doesn't animate while the display sleeps"))
+    func anAnimatedResizeEndsWithEveryRowMeasured() async throws {
         let h = Harness(), shown = messages(0..<12)
         h.show(shown)
         let rows = TimelineRow.rows(shown)

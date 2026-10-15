@@ -41,7 +41,7 @@ struct ConnectionDiagnosticsView: View {
                     model.refresh()
                 }
             }
-        } message: { Text("Parley forgets this Google session. Your drafts stay on this Mac.") }
+        } message: { Text("Parley forgets this Google session and the messages it keeps on this Mac. Your drafts stay.") }
     }
 
     private var account: some View {
