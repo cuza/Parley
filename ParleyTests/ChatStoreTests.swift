@@ -252,6 +252,25 @@ struct ChatStoreTests {
         #expect(store.selectedID == other)
     }
 
+    /// An Ask Gemini session is a place of its own: leaving it and coming Back reopens it, and Forward from its home too.
+    @Test func backReturnsToTheAskGeminiSessionLeft() async throws {
+        let store = ChatStore(backend: FakeBackend())
+        await store.start()
+        let other = try #require(store.conversations.first { $0.app != .gemini }).id
+        let gemini = try #require(store.conversations.first { $0.app == .gemini }).id
+        await store.select(gemini)
+        await store.openThread(try #require(store.messages.first { $0.id == "gs1" }))
+        await store.select(other)   // a jump elsewhere
+        await store.goBack()
+        #expect(store.selectedID == gemini && store.threadID == "gs1")
+        await store.goBack()
+        #expect(store.selectedID == gemini && store.threadID == nil)
+        await store.goForward()
+        #expect(store.selectedID == gemini && store.threadID == "gs1")
+        await store.goForward()
+        #expect(store.selectedID == other)
+    }
+
     @Test func jumpingToAnUnknownConversationAddsIt() async {
         let store = ChatStore(backend: FakeBackend())
         await store.start()

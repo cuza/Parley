@@ -433,7 +433,8 @@ final class ChatStore {
     func openThread(_ message: Message) async {
         await openThread(message.threadID ?? message.id, in: message.conversationID)
     }
-    private func openThread(_ thread: ThreadID, in conversation: ConversationID) async {
+    private func openThread(_ thread: ThreadID, in conversation: ConversationID, recording: Bool = true) async {
+        if recording, conversations.first(where: { $0.id == conversation })?.app == .gemini { visit(.session(conversation, thread)) }
         threadID = thread; info = false
         loaded.remove(key(conversation, thread))
         await load(conversation, thread: thread)
@@ -490,14 +491,17 @@ final class ChatStore {
     }
     // MARK: Back and forward, through the conversations and shortcuts opened (⌘[ and ⌘])
 
-    enum Place: Hashable { case conversation(ConversationID), shortcut(Shortcut) }
+    /// An Ask Gemini session fills the page, so it is a place of its own; another conversation's thread is a side pane.
+    enum Place: Hashable { case conversation(ConversationID), shortcut(Shortcut), session(ConversationID, ThreadID) }
     private(set) var backPlaces: [Place] = []
     private(set) var forwardPlaces: [Place] = []
     var canGoBack: Bool { !backPlaces.isEmpty || inGeminiSession }
-    /// An Ask Gemini session fills the page, so Back closes it to Ask Gemini's home first.
     private var inGeminiSession: Bool { threadID != nil && selected?.app == .gemini }
     var canGoForward: Bool { !forwardPlaces.isEmpty }
-    private var place: Place? { shortcut.map(Place.shortcut) ?? selectedID.map(Place.conversation) }
+    private var place: Place? {
+        if inGeminiSession, let id = selectedID, let thread = threadID { return .session(id, thread) }
+        return shortcut.map(Place.shortcut) ?? selectedID.map(Place.conversation)
+    }
     /// Opening a new place: the current one goes on the back list and the forward list ends, as in a browser.
     private func visit(_ next: Place) {
         guard let place, place != next else { return }
@@ -505,8 +509,11 @@ final class ChatStore {
         if backPlaces.count > 100 { backPlaces.removeFirst() }
     }
     func goBack() async {
-        if inGeminiSession { threadID = nil; return }
-        guard let to = backPlaces.popLast() else { return }
+        guard let to = backPlaces.popLast() else {
+            // A session opened with nothing before it (a notification at launch): Back still closes it to the home.
+            if inGeminiSession, let place { forwardPlaces.append(place); threadID = nil }
+            return
+        }
         if let place { forwardPlaces.append(place) }
         await open(to)
     }
@@ -519,6 +526,9 @@ final class ChatStore {
         switch place {
         case .conversation(let id): await select(id, recording: false)
         case .shortcut(let shortcut): await openShortcut(shortcut, recording: false)
+        case .session(let id, let thread):
+            await select(id, recording: false)
+            await openThread(thread, in: id, recording: false)
         }
     }
 
