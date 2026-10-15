@@ -264,4 +264,20 @@ struct NotificationLevelStoreTests {
         #expect(store.homeThreads.contains { $0.id == "x4" })
         #expect(notifier.posted.map(\.id) == ["r4"])   // once: it notified when it arrived
     }
+    /// Google lists a reply's thread a moment after pushing the reply: a read right away misses it, the one after finds it.
+    @Test func aThreadTheServerListsLateStillReachesHome() async throws {
+        let (store, notifier, fake) = await started()
+        store.followRecheck = .milliseconds(300)
+        await fake.setHomeThreads([])
+        await store.setNotificationLevel(.forYou, "general")
+        let maria = Person(id: "maria", name: "Maria Chen")
+        store.apply(.messageUpserted(Message(id: "r6", conversationID: "general", threadID: "x6", sender: maria, text: "r6")))
+        store.apply(.messageUpserted(Message(id: "r7", conversationID: "engineering", threadID: "x7", sender: maria, text: "r7")))   // a burst
+        try await Task.sleep(for: .milliseconds(100))   // the first read is done and found neither
+        await fake.setHomeThreads([followedThread("x6", in: "general"), followedThread("x7", in: "engineering")])
+        let deadline = ContinuousClock.now + .seconds(2)
+        while store.homeThreads.count < 2, ContinuousClock.now < deadline { try await Task.sleep(for: .milliseconds(10)) }
+        #expect(Set(store.homeThreads.map(\.id)) == ["x6", "x7"])
+        #expect(notifier.posted.map(\.id).contains("r6"))   // its banner waited for the read that found it
+    }
 }

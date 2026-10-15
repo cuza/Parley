@@ -548,6 +548,11 @@ final class ChatStore {
             upsert(message)
             // A pin posts a service line: the board on screen reads again.
             if isNew, message.isSystem, pinned[message.conversationID] != nil { Task { await loadPinned(message.conversationID) } }
+            // A new message changes the threads listed on screen (Ask Gemini's home, the Threads pane): they read again.
+            // ponytail: one read per new message; debounce if a busy room with its Threads pane open makes this chatty.
+            if isNew, message.conversationID == selectedID, threadSummaries[message.conversationID] != nil, threadsShown || selected?.app == .gemini {
+                Task { await loadThreads(message.conversationID) }
+            }
             // A newer reply in a thread Home lists moves its row up.
             // Threads already listed; a reply in another one re-reads Home's threads (checkFollowed, below).
             if let thread = message.threadID, let i = homeThreads.firstIndex(where: { $0.id == thread }), message.createdAt > homeThreads[i].latest.createdAt {
@@ -726,24 +731,34 @@ final class ChatStore {
     }
     @ObservationIgnored private var followCheck: Task<Void, Never>?
     @ObservationIgnored private var awaitingFollow: [Message] = []
-    @ObservationIgnored private var lastFollowCheck: Date?
+    @ObservationIgnored private var followAsked = ContinuousClock.now
+    /// Google lists a reply's thread a moment after pushing the reply, so the read right after a push can miss it.
+    // ponytail: in a busy space with replies in threads Home doesn't list, this reads the world every 5 s; listen for the
+    // topic's own update if that load shows.
+    @ObservationIgnored var followRecheck: Duration = .seconds(5)
     /// A reply in a thread Home doesn't list: re-read the server's followed threads (Home's) so Home shows it, and post the
-    /// banner of a `message` whose notification depends on following. One re-read covers a burst; without a banner waiting,
-    /// at most one every 15 s.
+    /// banner of a `message` whose notification depends on following. One read right away and one `followRecheck` after
+    /// the last such reply; a burst between them waits for that one.
     private func checkFollowed(_ message: Message?) {
         if let message { awaitingFollow.append(message) }
-        else if let last = lastFollowCheck, now().timeIntervalSince(last) < 15 { return }
+        followAsked = .now
         guard followCheck == nil else { return }
-        lastFollowCheck = now()
         followCheck = Task {
             defer { followCheck = nil }
-            guard let listed = try? await backend.conversations() else { awaitingFollow = []; return }
-            let threads = await backend.homeThreads()
-            conversations = listed.filter { $0.hidden == nil }; hidden = listed.filter { $0.hidden != nil }; homeThreads = threads
-            sections = await backend.sidebarSections()
-            followed.formUnion(threads.map(\.id))
-            let pending = awaitingFollow; awaitingFollow = []
-            for message in pending where message.threadID.map(followed.contains) == true { announce(message) }
+            var read: ContinuousClock.Instant?
+            while read.map({ $0 < followAsked + followRecheck }) ?? true {
+                if read != nil { try? await Task.sleep(until: max(.now, followAsked + followRecheck)) }
+                read = .now
+                guard let listed = try? await backend.conversations() else { continue }
+                let threads = await backend.homeThreads()
+                conversations = listed.filter { $0.hidden == nil }; hidden = listed.filter { $0.hidden != nil }; homeThreads = threads
+                sections = await backend.sidebarSections()
+                followed.formUnion(threads.map(\.id))
+                let found = awaitingFollow.filter { $0.threadID.map(followed.contains) == true }
+                awaitingFollow.removeAll { message in found.contains { $0.id == message.id } }
+                found.forEach { announce($0) }
+            }
+            awaitingFollow = []
         }
     }
     /// The composer's text changed: tell the others at most every 5 s per composer, never for blank text or while

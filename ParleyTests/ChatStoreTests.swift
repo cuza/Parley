@@ -271,6 +271,22 @@ struct ChatStoreTests {
         #expect(store.selectedID == other)
     }
 
+    /// Ask Gemini's home lists its sessions as they change: a new answer moves its session to the top.
+    @Test func askGeminisHomeFollowsNewAnswers() async throws {
+        let fake = FakeBackend()
+        let store = ChatStore(backend: fake)
+        await store.start()
+        let gemini = try #require(store.conversations.first { $0.app == .gemini }).id
+        await store.select(gemini)
+        await store.loadThreads(gemini)
+        #expect(store.threadSummaries[gemini]?.first?.id == "gs1")
+        await fake.simulateIncoming(Message(id: "gs2r2", conversationID: gemini, threadID: "gs2", sender: Person(id: "g", name: "Gemini"),
+                                            text: "One more thing", createdAt: .now))
+        let deadline = ContinuousClock.now + .seconds(2)
+        while store.threadSummaries[gemini]?.first?.id != "gs2", ContinuousClock.now < deadline { try await Task.sleep(for: .milliseconds(10)) }
+        #expect(store.threadSummaries[gemini]?.first?.id == "gs2")
+    }
+
     @Test func jumpingToAnUnknownConversationAddsIt() async {
         let store = ChatStore(backend: FakeBackend())
         await store.start()
