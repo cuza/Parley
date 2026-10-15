@@ -53,18 +53,27 @@ import UniformTypeIdentifiers
     /// The attachment as a file, downloaded once; concurrent callers share the download.
     func file(_ attachment: Attachment) async throws -> URL {
         if let url = attachment.url, url.isFileURL { return url }
-        if let cached = cachedFile(attachment) { return cached }
+        if let cached = cachedFile(attachment) { try? Self.quarantine(cached); return cached }   // cached before the flag
         let url = cacheURL(attachment)
         if let running = downloads[url] { return try await running.value }
         let task = Task { [load] in
             let data = try await load(attachment, false)
             try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
             try data.write(to: url, options: .atomic)
+            try Self.quarantine(url)
             return url
         }
         downloads[url] = task
         defer { downloads[url] = nil }
         return try await task.value
+    }
+
+    /// From the internet, as a browser download is: Gatekeeper checks an app or script before it first opens. Saving,
+    /// Save As and dragging out copy the cached file, and a copy keeps the flag.
+    nonisolated static func quarantine(_ url: URL) throws {
+        var file = url, values = URLResourceValues()
+        values.quarantineProperties = [kLSQuarantineAgentNameKey as String: "Parley", kLSQuarantineTypeKey as String: kLSQuarantineTypeWebDownload as String]
+        try file.setResourceValues(values)
     }
 
     // MARK: Save and copy

@@ -146,7 +146,7 @@ import Testing
         #expect(menu.items.first?.view is ReactionStrip)
         #expect(menu.items.dropFirst().filter { !$0.isSeparatorItem }.map(\.title) == ["Reply", "Reply in Thread", "Copy"])
         let (own, _) = row(own: true)
-        #expect(own.contextMenu().items.dropFirst().filter { !$0.isSeparatorItem }.map(\.title) == ["Reply", "Reply in Thread", "Copy", "Edit", "Delete"])
+        #expect(own.contextMenu().items.dropFirst().filter { !$0.isSeparatorItem }.map(\.title) == ["Reply", "Reply in Thread", "Copy", "Edit", "Delete…"])
     }
     @Test func markAsUnreadIsOfferedAndMarksFromThisMessage() throws {
         var marked: [MessageID] = []

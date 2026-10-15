@@ -130,15 +130,17 @@ enum NotificationPolicy {
     /// A pushed message's notification, or nil when it shouldn't interrupt: own, muted (even an @mention), edited, older than
     /// two minutes (an update to a message not loaded here), a text-less system event, below the conversation's level
     /// (unknown counts as every message), or already on screen. `threadFollowed`: the reply's thread is one I follow.
+    /// `timelineShown`: the open conversation's own messages are on screen, not only its open thread (false on Home, whose
+    /// thread pane opens in the conversation selected last).
     static func notification(for message: Message, in conversation: Conversation?, me: String, openConversation: ConversationID?,
-                             openThread: ThreadID?, appActive: Bool, settings: NotificationSettings, threadFollowed: Bool = false,
+                             openThread: ThreadID?, timelineShown: Bool = true, appActive: Bool, settings: NotificationSettings, threadFollowed: Bool = false,
                              now: Date = .now) -> ChatNotification? {
         guard settings.enabled, !message.isSystem, message.sender.id != me, !(conversation?.muted ?? false), !message.edited,
               message.createdAt > now.addingTimeInterval(-120), !message.text.isEmpty || !message.attachments.isEmpty,
               conversation?.notificationLevel?.notifies(head: message.threadID == nil, followed: message.threadID != nil && threadFollowed,
                                                         mentioned: mentions(message, me: me)) ?? true else { return nil }
         let direct = conversation?.kind == .direct
-        let onScreen = appActive && message.conversationID == openConversation && (message.threadID == nil || message.threadID == openThread)
+        let onScreen = appActive && message.conversationID == openConversation && (message.threadID == nil ? timelineShown : message.threadID == openThread)
         guard !onScreen else { return nil }
         let gif = message.attachments.first.map { $0.contentType == "image/gif" || $0.url?.pathExtension.lowercased() == "gif" } ?? false
         return ChatNotification(id: message.id, title: direct || conversation == nil ? message.sender.name : conversation!.name,
@@ -158,11 +160,11 @@ enum NotificationPolicy {
     /// Someone else's reaction to a message I sent, as Google Chat words it, or nil when it shouldn't interrupt: notifications
     /// off, the conversation muted or set to "Don't notify", or the message on screen. Removals and repeats are the caller's.
     static func reaction(_ emoji: String, by reactor: Person, to message: Message, in conversation: Conversation?, me: String,
-                         openConversation: ConversationID?, openThread: ThreadID?, appActive: Bool,
+                         openConversation: ConversationID?, openThread: ThreadID?, timelineShown: Bool = true, appActive: Bool,
                          settings: NotificationSettings) -> ChatNotification? {
         guard settings.enabled, message.sender.id == me, reactor.id != me, !(conversation?.muted ?? false),
               conversation?.notificationLevel != .off else { return nil }
-        let onScreen = appActive && message.conversationID == openConversation && (message.threadID == nil || message.threadID == openThread)
+        let onScreen = appActive && message.conversationID == openConversation && (message.threadID == nil ? timelineShown : message.threadID == openThread)
         guard !onScreen else { return nil }
         let direct = conversation?.kind == .direct
         let text = TextStyleRange.plain(message.text, message.formatting).trimmingCharacters(in: .whitespacesAndNewlines)

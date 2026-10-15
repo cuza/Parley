@@ -67,6 +67,17 @@ import Testing
         #expect(AttachmentFiles.saved[report] == target)
     }
 
+    /// A file from a chat is from the internet: saved, it carries the quarantine flag, so Gatekeeper checks an app or
+    /// script someone sent before it first opens, as with a browser download.
+    @Test func aSavedFileIsQuarantined() async throws {
+        let files = files()
+        let tool = Attachment(name: "tool.command", kind: .file, url: URL(string: "https://chat.google.com/a?token=\(UUID())"))
+        let target = try await files.save(tool, in: folder.appending(path: "Downloads"))
+        let quarantine = try target.resourceValues(forKeys: [.quarantinePropertiesKey]).quarantineProperties
+        #expect(quarantine?[kLSQuarantineTypeKey as String] as? String == kLSQuarantineTypeWebDownload as String)
+        #expect(try await files.file(tool).resourceValues(forKeys: [.quarantinePropertiesKey]).quarantineProperties != nil)   // the cached copy too
+    }
+
     // MARK: Quick Look
     @Test func previewGoesThroughTheConversationsFilesAndMediaButNotLinks() {
         let files = files()

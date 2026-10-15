@@ -25,11 +25,12 @@ enum AuthFailure: Error, LocalizedError, Equatable {
         }
     }
     static let signInCategory = "Google sign-in"
-    /// Google itself refused the session or sent it to sign in: it is dead. Anything else (a proxy, a portal, a
-    /// protocol change) keeps it for diagnosis and a later retry.
+    /// Google sent the session to sign in: it is dead. Anything else (a proxy, a portal, an access policy, throttling, a
+    /// protocol change) keeps it for diagnosis and a later retry. A bootstrap 401 or 403 that is Google's sign-in page
+    /// comes as `signInRequired`.
     var endsSession: Bool {
         switch self {
-        case .signInRequired, .bootstrapRejected: true
+        case .signInRequired: true
         case .bootstrapRedirect(let destination): destination == Self.signInCategory
         default: false
         }
@@ -245,7 +246,9 @@ actor WebSessionAuthorizer {
             let category = host == "accounts.google.com" ? AuthFailure.signInCategory : host == "chat.google.com" ? "another Google Chat page" : "an unexpected destination"
             throw AuthFailure.bootstrapRedirect(category)
         }
-        if response.statusCode == 401 || response.statusCode == 403 { throw AuthFailure.bootstrapRejected(response.statusCode) }
+        if response.statusCode == 401 || response.statusCode == 403 {
+            throw Self.isSignInPage(response, body: String(decoding: data, as: UTF8.self)) ? AuthFailure.signInRequired : AuthFailure.bootstrapRejected(response.statusCode)
+        }
         guard response.statusCode == 200 else { throw AuthFailure.http(response.statusCode) }
         let page = String(decoding: data, as: UTF8.self)
         guard let token = Self.extractXSRF(page) else { throw AuthFailure.bootstrapTokenMissing }

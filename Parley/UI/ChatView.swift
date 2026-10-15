@@ -69,6 +69,7 @@ struct ChatView: View {
     @State private var hostWindow = WindowRef()   // this view's own window
     @State private var leaving: Conversation?   // asks before leaving
     @State private var blocking: BlockSheet.Target?
+    @State private var deletingSection: SidebarSection?   // asks before deleting a section
     @State private var naming: SectionNaming?   // New Section (with the conversation that goes in it) or Rename
     @State private var sectionName = ""
     struct SectionNaming: Identifiable { var id: String { section?.id ?? "new-\(moving ?? "")" }; var section: SidebarSection?; var moving: ConversationID? }
@@ -331,6 +332,9 @@ struct ChatView: View {
         .confirmationDialog("Leave “\(leaving?.name ?? "")”?", isPresented: Binding(get: { leaving != nil }, set: { if !$0 { leaving = nil } })) {
             Button("Leave", role: .destructive) { if let room = leaving { Task { await store.leave(room.id) } } }
         } message: { Text("It leaves your sidebar. You can be added again later.") }
+        .confirmationDialog("Delete the section “\(deletingSection?.name ?? "")”?", isPresented: Binding(get: { deletingSection != nil }, set: { if !$0 { deletingSection = nil } })) {
+            Button("Delete Section", role: .destructive) { if let section = deletingSection { Task { await store.deleteSection(section) } } }
+        } message: { Text("Its conversations go back to their usual sections.") }
         // An app's dialog, over the main window (ponytail: one sheet for all windows; a dialog opened from a
         // conversation's own window shows in the main one).
         .sheet(isPresented: Binding(get: { fixedConversation == nil && store.dialog != nil },
@@ -464,7 +468,7 @@ struct ChatView: View {
                                 Button("Move Section Up") { Task { await store.moveSection(mine, up: true) } }
                                 Button("Move Section Down") { Task { await store.moveSection(mine, up: false) } }
                                 Divider()
-                                Button("Delete Section", role: .destructive) { Task { await store.deleteSection(mine) } }
+                                Button("Delete Section…", role: .destructive) { deletingSection = mine }
                             }
                         }
                     if collapsed, case let unread = rooms.filter { !$0.muted }.reduce(0, { $0 + $1.unread }), unread > 0 {
@@ -516,6 +520,7 @@ struct TimelineView: View {
     @State private var atBottom = true
     @State private var arrivedAway = 0   // new messages while scrolled up: the scroll-to-bottom badge
     @State private var reporting: Message?
+    @State private var deleting: Message?   // asks before deleting a message for everyone
     @State private var scrollRequest = 0
     @AppStorage("timelineStyle") private var style = TimelineStyle.bubbles
     @AppStorage(Wallpaper.key(dark: false)) private var wallpaper = Wallpaper.none
@@ -555,7 +560,7 @@ struct TimelineView: View {
                           openChatLink: { link, _ in await store.open(link) },
                           retry: { message in Task { await store.retry(message) } },
                           edit: { store.edit($0) },
-                          delete: { message in Task { await store.delete(message) } },
+                          delete: { deleting = $0 },
                           star: { starred, message in Task { await store.setStarred(starred, message) } },
                           pin: { pinned, message in Task { await store.setPinned(pinned, message) } },
                           markUnread: { message in Task { await store.markUnread(from: message) } },
@@ -590,6 +595,9 @@ struct TimelineView: View {
         }
         .background { WallpaperView(doodles: doodles) }
         .sheet(item: $reporting) { ReportSheet(store: store, message: $0) }
+        .confirmationDialog("Delete this message?", isPresented: Binding(get: { deleting != nil }, set: { if !$0 { deleting = nil } })) {
+            Button("Delete", role: .destructive) { if let message = deleting { Task { await store.delete(message) } } }
+        } message: { Text("It's deleted for everyone.") }
         .overlay(alignment: .top) {
             if store.loading.contains(store.key(conversation.id, thread)) && !items.isEmpty {
                 ProgressView().controlSize(.small).padding(8)
@@ -793,7 +801,7 @@ struct ComposerBar: View {
         }
     }
     /// Ends this composer's edit and clears the message's text from it.
-    private func endEdit() { store.editing[scope] = nil; store.setDraft("", conversation: conversation.id, thread: thread) }
+    private func endEdit() { store.endEdit(conversation: conversation.id, thread: thread) }
     private func sendRecording() {
         guard let recording = recorder.finish() else { return }
         Task { await store.sendVoice(recording.file, duration: recording.duration, waveform: recording.levels, conversation: conversation.id, thread: thread) }

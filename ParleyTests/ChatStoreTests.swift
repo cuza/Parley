@@ -52,7 +52,7 @@ struct ChatStoreTests {
         #expect(store.error == nil)
         #expect(store.connection == connection)
     }
-    @Test(arguments: [AuthFailure.signInRequired, .bootstrapRedirect(AuthFailure.signInCategory), .bootstrapRejected(401)])
+    @Test(arguments: [AuthFailure.signInRequired, .bootstrapRedirect(AuthFailure.signInCategory)])
     func aSessionLostMidUseShowsTheExpiredBannerNotAnError(_ failure: AuthFailure) async throws {
         let fake = FakeBackend()
         let store = ChatStore(backend: fake)
@@ -368,6 +368,34 @@ struct LaunchCacheAccountTests {
         #expect(store.drafts["engineering/timeline"] == nil && store.me == FakeBackend.me)
         store.flush()
         #expect(cache.load().accountID == FakeBackend.me.id)
+    }
+    /// Signing in as another account in the same run: nothing the first account loaded stays, so Settings can't save its
+    /// Do Not Disturb schedules into the second, and Back can't open its conversations.
+    @Test func anotherAccountStartsClean() async throws {
+        let fake = FakeBackend()
+        let store = ChatStore(backend: fake)
+        await store.start()
+        await store.select("general"); await store.select("alex")
+        await store.loadDndSchedules()
+        await store.loadThreads("general")
+        await store.loadPermissions("general")
+        #expect(store.dndSchedules != nil && store.canGoBack && store.threadSummaries["general"] != nil && store.permissions["general"] != nil)
+        await fake.simulateAccount(Person(id: "b", name: "B"))
+        await store.start()
+        #expect(store.me.id == "b")
+        #expect(store.dndSchedules == nil)
+        #expect(store.backPlaces.isEmpty && store.forwardPlaces.isEmpty)
+        #expect(store.threadSummaries["general"] == nil)
+    }
+    /// Every stored property is either the account's (cleared when another account connects) or the app's (kept). A new
+    /// property fails here until it is put in one list, so `forgetAccount` can't silently miss it.
+    @Test func everyStoredPropertyIsClassifiedForAccountSwitches() {
+        let names = Set(Mirror(reflecting: ChatStore(backend: FakeBackend())).children.compactMap { $0.label.map { $0.hasPrefix("_") ? String($0.dropFirst()) : $0 } })
+            .subtracting(["$observationRegistrar"])
+        let classified = ChatStore.accountState.union(ChatStore.appState)
+        #expect(names.subtracting(classified).sorted() == [], "classify these in ChatStore.accountState or .appState")
+        #expect(classified.subtracting(names).sorted() == [], "these are no longer stored properties")
+        #expect(ChatStore.accountState.isDisjoint(with: ChatStore.appState))
     }
     /// Home's thread rows come back with the cache, so a conversation shown as its thread doesn't flash up as a plain row first.
     @Test func homeThreadsComeBackWithTheCache() async throws {

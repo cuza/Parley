@@ -264,6 +264,48 @@ struct NotificationLevelStoreTests {
         #expect(store.homeThreads.contains { $0.id == "x4" })
         #expect(notifier.posted.map(\.id) == ["r4"])   // once: it notified when it arrived
     }
+    /// On Home the last-opened conversation is still selected (Home's thread pane opens in it), but its timeline is off
+    /// screen: a new message there stays unread and notifies, as in any other conversation.
+    @Test func homeLeavesTheLastConversationUnread() async throws {
+        let (store, notifier, _) = await started()
+        store.isAppActive = { true }
+        await store.select("general")
+        await store.openShortcut(.home)
+        #expect(store.selectedID == "general")
+        let maria = Person(id: "maria", name: "Maria Chen")
+        store.apply(.messageUpserted(Message(id: "h1", conversationID: "general", sender: maria, text: "new on Home")))
+        #expect(notifier.posted.map(\.id) == ["h1"])
+        var room = try #require(store.conversations.first { $0.id == "general" })
+        room.unread = 1
+        store.apply(.conversationUpserted(room))
+        #expect(store.conversations.first { $0.id == "general" }?.unread == 1)
+    }
+    /// Home's re-read only takes the server's followed threads: it leaves the conversation list as Parley has it, with
+    /// changes the server hasn't sent back yet (here a badge counted from a pushed message).
+    @Test func homesReReadLeavesTheConversationListAlone() async throws {
+        let (store, _, fake) = await started()
+        store.followRecheck = .milliseconds(50)
+        await fake.setHomeThreads([followedThread("x8", in: "general")])
+        let before = try #require(store.conversations.first { $0.id == "engineering" }).unread
+        let maria = Person(id: "maria", name: "Maria Chen")
+        store.apply(.messageUpserted(Message(id: "e1", conversationID: "engineering", sender: maria, text: "new")))
+        #expect(store.conversations.first { $0.id == "engineering" }?.unread == before + 1)
+        store.apply(.messageUpserted(Message(id: "r8", conversationID: "general", threadID: "x8", sender: maria, text: "r8")))
+        let deadline = ContinuousClock.now + .seconds(2)
+        while !store.homeThreads.contains(where: { $0.id == "x8" }), ContinuousClock.now < deadline { try await Task.sleep(for: .milliseconds(10)) }
+        try await Task.sleep(for: .milliseconds(150))   // the second read too
+        #expect(store.homeThreads.contains { $0.id == "x8" })
+        #expect(store.conversations.first { $0.id == "engineering" }?.unread == before + 1)
+    }
+    /// A burst of resyncs (a flapping connection) is one refresh, not several at once that finish out of order.
+    @Test func resyncsDoNotPileUp() async throws {
+        let (store, _, fake) = await started()
+        let start = await fake.listReads
+        for _ in 0..<5 { store.apply(.resync) }
+        try await Task.sleep(for: .milliseconds(300))
+        let reads = await fake.listReads - start
+        #expect(reads == 1, "\(reads) list reads")
+    }
     /// Google lists a reply's thread a moment after pushing the reply: a read right away misses it, the one after finds it.
     @Test func aThreadTheServerListsLateStillReachesHome() async throws {
         let (store, notifier, fake) = await started()

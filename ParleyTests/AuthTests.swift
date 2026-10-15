@@ -163,6 +163,25 @@ struct AuthTests {
         #expect(exchange.requests.count == 4)
         #expect(vault.read() != nil)
     }
+    /// A 403 on the bootstrap page that isn't Google's sign-in page (a proxy, an access policy, throttling) keeps the stored
+    /// session: the realtime channel reloads that page on every reconnect, and one refusal used to force a full sign-in.
+    @Test func aRefusedBootstrapKeepsTheSession() async throws {
+        let vault = MemoryVault()
+        let exchange = StubExchange([bootstrap, .init(status: 403, data: Data("<html>Forbidden</html>".utf8))])
+        let auth = WebSessionAuthorizer(vault: vault, session: AuthStubProtocol.session(exchange))
+        try await auth.signIn(cookies: [cookie], userAgent: "test-agent")
+        await #expect(throws: AuthFailure.bootstrapRejected(403)) { _ = try await auth.punctualRegistration(fresh: true) }
+        #expect(vault.read() != nil)
+    }
+    /// Google's sign-in page in place of the bootstrap page does end it.
+    @Test func aBootstrapAnsweredWithTheSignInPageEndsTheSession() async throws {
+        let vault = MemoryVault()
+        let exchange = StubExchange([bootstrap, .init(status: 401, data: Data(#"<script>{"qwAQke":"AccountsSignInUi"}</script>"#.utf8))])
+        let auth = WebSessionAuthorizer(vault: vault, session: AuthStubProtocol.session(exchange))
+        try await auth.signIn(cookies: [cookie], userAgent: "test-agent")
+        await #expect(throws: AuthFailure.signInRequired) { _ = try await auth.punctualRegistration(fresh: true) }
+        #expect(vault.read() == nil)
+    }
     @Test func transientHTTPFailurePreservesSession() async throws {
         let vault = MemoryVault()
         let exchange = StubExchange([bootstrap, .init(status: 503)])

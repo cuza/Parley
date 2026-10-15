@@ -486,7 +486,7 @@ final class MessageRowView: NSTableRowView {
                 menu.addItem(seen)
             }
             menu.addItem(ClosureMenuItem("Edit") { [actions] in actions.edit(message) })
-            menu.addItem(ClosureMenuItem("Delete") { [actions] in actions.delete(message) })
+            menu.addItem(ClosureMenuItem("Delete…") { [actions] in actions.delete(message) })   // asks first: it goes for everyone
         }
         return menu
     }

@@ -39,6 +39,8 @@ final class ChatStore {
     var threadsShown = false
     private(set) var threadSummaries: [ConversationID: [ThreadSummary]] = [:]
     var editing: [String: MessageID] = [:]   // per draft key: the sent message that composer is editing
+    /// Per draft key being edited: the draft the edit borrowed the composer from, given back when the edit ends.
+    private var heldDrafts: [String: (text: String, formatting: [TextStyleRange]?)] = [:]
     var quoting: [String: QuotedMessage] = [:]   // per draft key: the message the next send quotes (not cached across launches)
     var searchResults: [Message] = []
     /// The sidebar shortcut shown instead of a conversation; nil while a conversation shows.
@@ -148,13 +150,50 @@ final class ChatStore {
     var needsSignIn: Bool { connection == .signedOut && me.id.isEmpty }
     /// The session ended while the app was in use: a banner over the conversations, which stay.
     var sessionExpired: Bool { connection == .signedOut && !me.id.isEmpty }
-    /// Another account connected: nothing of the previous one may show, be sent, or be cached.
+    /// Another account connected: nothing of the previous one may show, be sent, or be cached. Clears every property in
+    /// `accountState`; a test holds each stored property to one of the two lists.
     private func forgetAccount() {
-        serverDrafts = [:]; scheduled = []; pinned = [:]; draftEdits = [:]; draftsListed = false; draftTimers.values.forEach { $0.cancel() }; draftTimers = [:]
-        conversations = []; hidden = []; homeThreads = []; messages = []; selectedID = nil; drafts = [:]; draftFormatting = [:]; draftAttachments = [:]
-        quoting = [:]; searchResults = []; shortcut = nil; shortcutLists = [:]; shortcutCursors = [:]; hasMore = []; members = [:]; memberLoads = []; customEmoji = []; customEmojiLoad = nil; loaded = []; threadID = nil; editing = [:]
-        typing = [:]; presence = [:]; statuses = [:]; readReceipts = [:]; receiptsOff = []; followed = []; presenceFetched = [:]; watching = nil
+        draftListing?.cancel()
+        for task in [customEmojiLoad, followCheck].compactMap({ $0 }) + Array(draftTimers.values) + Array(draftWrites.values) + Array(pageLoads.values) { task.cancel() }
+        draftListing = nil; customEmojiLoad = nil; followCheck = nil; draftTimers = [:]; draftWrites = [:]; pageLoads = [:]
+        serverDrafts = [:]; scheduled = []; pinned = [:]; draftEdits = [:]; draftsListed = false; spentDrafts = []; draftSends = [:]
+        conversations = []; hidden = []; homeThreads = []; messages = []; timelines = [:]; selectedID = nil; drafts = [:]; draftedScopes = []
+        draftFormatting = [:]; draftAttachments = [:]; quoting = [:]; editing = [:]; heldDrafts = [:]
+        searchResults = []; shortcut = nil; shortcutLists = [:]; shortcutCursors = [:]; hasMore = []; loaded = []; loading = []
+        threadID = nil; info = false; threadsShown = false; threadSummaries = [:]; highlightedID = nil; openTranscripts = []
+        members = [:]; memberLoads = []; permissions = [:]; roles = [:]; shared = [:]; sharedMore = []; customEmoji = []
+        slashCommands = [:]; slashQueries = [:]; reactors = [:]; notifiedReactions = []
+        typing = [:]; activities = [:]; presence = [:]; statuses = [:]; ownStatus = OwnStatus(); readReceipts = [:]; receiptsOff = []
+        followed = []; presenceFetched = [:]; watching = nil; typingSent = [:]; typingRefused = []; awaitingFollow = []
+        detached = []; windowEnds = [:]; newerLoads = []; listedOnce = false; backPlaces = []; forwardPlaces = []
+        dialog = nil; forwarding = nil; heldUnread = []; sections = []; blockedPeople = []; dndSchedules = nil
+        invitations = []; invitationsFetched = nil
     }
+    /// What `forgetAccount` clears when another account connects.
+    static let accountState: Set<String> = [
+        "draftListing", "customEmojiLoad", "followCheck", "draftTimers", "draftWrites", "pageLoads",
+        "serverDrafts", "scheduled", "pinned", "draftEdits", "draftsListed", "spentDrafts", "draftSends",
+        "conversations", "hidden", "homeThreads", "messages", "timelines", "selectedID", "drafts", "draftedScopes",
+        "draftFormatting", "draftAttachments", "quoting", "editing", "heldDrafts",
+        "searchResults", "shortcut", "shortcutLists", "shortcutCursors", "hasMore", "loaded", "loading",
+        "threadID", "info", "threadsShown", "threadSummaries", "highlightedID", "openTranscripts",
+        "members", "memberLoads", "permissions", "roles", "shared", "sharedMore", "customEmoji",
+        "slashCommands", "slashQueries", "reactors", "notifiedReactions",
+        "typing", "activities", "presence", "statuses", "ownStatus", "readReceipts", "receiptsOff",
+        "followed", "presenceFetched", "watching", "typingSent", "typingRefused", "awaitingFollow",
+        "detached", "windowEnds", "newerLoads", "listedOnce", "backPlaces", "forwardPlaces",
+        "dialog", "forwarding", "heldUnread", "sections", "blockedPeople", "dndSchedules",
+        "invitations", "invitationsFetched",
+    ]
+    /// What stays across accounts: the app's wiring, settings, timers and the connection, and requests the user made
+    /// before the switch (a link to open, content to share, a search to run).
+    static let appState: Set<String> = [
+        "backend", "cache", "cachedAccountID", "me", "connection", "onSessionLost", "error", "connectedSince", "lastEventAt",
+        "reconnects", "homeUnreadOnly", "homeThreadsOnly", "highlightDuration", "highlightFade", "eventTask", "cacheTask",
+        "searchGeneration", "sweepTask", "now", "isAppActive", "notifier", "notificationSettings", "draftPause", "draftIdle",
+        "waitingLinks", "resyncTask", "resyncAgain", "followAsked", "followRecheck", "toast", "toastDuration", "toastFade", "openURL", "defaults", "sent",
+        "download", "newChatRequests", "newSpaceRequests", "sharing", "searchRequest",
+    ]
     /// After the user signs out; cached conversations and drafts stay for the next sign-in.
     func signedOut() {
         me = Person(id: "", name: "")
@@ -221,7 +260,8 @@ final class ChatStore {
         do {
             let known = cachedAccountID ?? (me.id.isEmpty ? nil : me.id)
             me = try await backend.connect()
-            if let known, known != me.id { forgetAccount() }
+            // A cache from a build that didn't record its account may be anyone's.
+            if known.map({ $0 != me.id }) ?? !conversations.isEmpty { forgetAccount() }
             cachedAccountID = me.id
             try await refresh(reselect: true)
         } catch AuthFailure.signInRequired {
@@ -596,7 +636,7 @@ final class ChatStore {
         case .conversationUpserted(var room):   // changed elsewhere; a new one is the most recent
             hidden.removeAll { $0.id == room.id }
             // The open conversation stays read: its server read state can trail what is on screen (my own send, a membership change).
-            if room.id == selectedID, room.unread > 0, isAppActive(), !heldUnread.contains(room.id) {
+            if room.id == openConversation, room.unread > 0, isAppActive(), !heldUnread.contains(room.id) {
                 room.unread = 0
                 Task { await markRead(room.id) }
             }
@@ -610,7 +650,7 @@ final class ChatStore {
             messages.removeAll { $0.conversationID == id }
             notifier?.clear(conversation: id)
             if selectedID == id {
-                editing = editing.filter { !$0.key.hasPrefix(id + "/") }
+                editing = editing.filter { !$0.key.hasPrefix(id + "/") }; heldDrafts = heldDrafts.filter { !$0.key.hasPrefix(id + "/") }
                 selectedID = conversations.first?.id; threadID = nil
                 if let next = selectedID { Task { await select(next) } }
             }
@@ -624,7 +664,7 @@ final class ChatStore {
                   let notification = NotificationPolicy.reaction(
                     emoji, by: self.person(person, in: message.conversationID) ?? Person(id: person, name: name(of: person, in: message.conversationID)),
                     to: message, in: conversations.first { $0.id == message.conversationID }, me: me.id, openConversation: selectedID,
-                    openThread: threadID, appActive: isAppActive(), settings: notificationSettings()),
+                    openThread: threadID, timelineShown: shortcut == nil, appActive: isAppActive(), settings: notificationSettings()),
                   notifiedReactions.insert(notification.id).inserted else { return }
             notifier?.post(notification)
             return
@@ -657,7 +697,7 @@ final class ChatStore {
             ownStatus = status
             return
         case .resync:
-            Task { do { try await refresh() } catch { report(error) } }
+            resync()
         case .draftChanged(let draft):
             let scope = key(draft.conversationID, draft.threadID)
             if spentDrafts.contains(draft.id) { break }   // sent: an echo of an earlier save, not a draft
@@ -716,7 +756,7 @@ final class ChatStore {
         let call = NotificationPolicy.isIncomingCall(message, in: room, me: me.id, now: now())
         let notification = NotificationPolicy.notification(
             for: message, in: room, me: me.id, openConversation: selectedID,
-            openThread: threadID, appActive: !call && isAppActive(), settings: notificationSettings(),
+            openThread: threadID, timelineShown: shortcut == nil, appActive: !call && isAppActive(), settings: notificationSettings(),
             threadFollowed: message.threadID.map(followed.contains) ?? false)
             .map { call ? $0.incomingCall(join: message.attachments.first { $0.kind == .call }?.url) : $0 }
         if notification == nil {
@@ -731,6 +771,20 @@ final class ChatStore {
     }
     @ObservationIgnored private var followCheck: Task<Void, Never>?
     @ObservationIgnored private var awaitingFollow: [Message] = []
+    @ObservationIgnored private var resyncTask: Task<Void, Never>?
+    @ObservationIgnored private var resyncAgain = false
+    /// The server says Parley missed events: refresh. A resync during one runs once more after it, so a burst (a flapping
+    /// connection) is two refreshes, never several at once finishing out of order.
+    private func resync() {
+        guard resyncTask == nil else { resyncAgain = true; return }
+        resyncTask = Task {
+            repeat {
+                resyncAgain = false
+                do { try await refresh() } catch { report(error) }
+            } while resyncAgain
+            resyncTask = nil
+        }
+    }
     @ObservationIgnored private var followAsked = ContinuousClock.now
     /// Google lists a reply's thread a moment after pushing the reply, so the read right after a push can miss it.
     // ponytail: in a busy space with replies in threads Home doesn't list, this reads the world every 5 s; listen for the
@@ -749,10 +803,11 @@ final class ChatStore {
             while read.map({ $0 < followAsked + followRecheck }) ?? true {
                 if read != nil { try? await Task.sleep(until: max(.now, followAsked + followRecheck)) }
                 read = .now
-                guard let listed = try? await backend.conversations() else { continue }
+                // Google sends Home's threads with the conversation list; only the threads are taken. The list itself stays
+                // as Parley has it: a read that started before a hide, mute, pin or pushed message would undo it.
+                guard (try? await backend.conversations()) != nil else { continue }
                 let threads = await backend.homeThreads()
-                conversations = listed.filter { $0.hidden == nil }; hidden = listed.filter { $0.hidden != nil }; homeThreads = threads
-                sections = await backend.sidebarSections()
+                homeThreads = threads
                 followed.formUnion(threads.map(\.id))
                 let found = awaitingFollow.filter { $0.threadID.map(followed.contains) == true }
                 awaitingFollow.removeAll { message in found.contains { $0.id == message.id } }
@@ -1214,7 +1269,7 @@ final class ChatStore {
         let (text, formatting) = Self.trimmed(drafts[scope, default: ""], draftFormatting[scope] ?? [])
         if let editingID = editing[scope] {
             guard !text.isEmpty else { return }
-            do { try await backend.edit(editingID, text: text, formatting: formatting); editing[scope] = nil; setDraft("", conversation: conversation, thread: thread) }
+            do { try await backend.edit(editingID, text: text, formatting: formatting); finishEdit(scope) }
             catch { report(error) }
             return
         }
@@ -1333,13 +1388,23 @@ final class ChatStore {
     /// clears their text, which is the message's, not a draft. A thread in its own window keeps its edit.
     private func endMainWindowEdits() {
         guard let room = selectedID else { return }
-        for scope in [key(room, nil)] + (threadID.map { [key(room, $0)] } ?? []) where editing.removeValue(forKey: scope) != nil {
-            drafts[scope] = ""; draftFormatting[scope] = nil
-        }
+        for scope in [key(room, nil)] + (threadID.map { [key(room, $0)] } ?? []) { finishEdit(scope) }
+    }
+    /// Esc in an editing composer: the edit is dropped and the draft is back.
+    func endEdit(conversation: ConversationID, thread: ThreadID?) { finishEdit(key(conversation, thread)) }
+    /// Ends `scope`'s edit and gives back the draft it borrowed the composer from. The draft's sync state never changed
+    /// (an edit is no draft), so nothing is saved or deleted on Google.
+    private func finishEdit(_ scope: String) {
+        guard editing.removeValue(forKey: scope) != nil else { return }
+        let held = heldDrafts.removeValue(forKey: scope)
+        drafts[scope] = held?.text ?? ""; draftFormatting[scope] = held?.formatting
+        persist()
     }
     func edit(_ message: Message) {
         guard message.sender.id == me.id, message.delivery == .sent else { return }
-        editing[key(message.conversationID, message.threadID)] = message.id
+        let scope = key(message.conversationID, message.threadID)
+        if editing[scope] == nil { heldDrafts[scope] = (drafts[scope] ?? "", draftFormatting[scope]) }
+        editing[scope] = message.id
         quoting[key(message.conversationID, message.threadID)] = nil
         setDraft(message.text, formatting: message.formatting, conversation: message.conversationID, thread: message.threadID)
     }
@@ -1347,7 +1412,7 @@ final class ChatStore {
     /// Without a server update time it names the create time.
     func quote(_ message: Message) {
         guard message.delivery == .sent, !message.isSystem, !message.tombstone else { return }
-        if editing.removeValue(forKey: key(message.conversationID, message.threadID)) != nil { setDraft("", conversation: message.conversationID, thread: message.threadID) }
+        finishEdit(key(message.conversationID, message.threadID))
         quoting[key(message.conversationID, message.threadID)] = QuotedMessage(
             sender: message.sender.name, text: QuotedMessage.summary(text: TextStyleRange.plain(message.text, message.formatting), attachments: message.attachments), id: message.id,
             lastUpdateMicros: message.lastUpdateMicros ?? Int64((message.createdAt.timeIntervalSince1970 * 1_000_000).rounded()),
@@ -1832,9 +1897,12 @@ final class ChatStore {
     }
     private func snapshot() -> LaunchSnapshot {
         let grouped = Dictionary(grouping: messages.filter { $0.delivery != .pending }, by: { key($0.conversationID, $0.threadID) })
+        // A composer being edited holds the message's text; its draft is the one the edit put aside.
+        var drafts = drafts, formatting = draftFormatting
+        for (scope, held) in heldDrafts { drafts[scope] = held.text; formatting[scope] = held.formatting }
         return LaunchSnapshot(accountID: me.id.isEmpty ? cachedAccountID : me.id, conversations: conversations,
                               messages: grouped.values.flatMap { Array($0.sorted { $0.createdAt < $1.createdAt }.suffix(50)) },
-                              selectedID: selectedID, drafts: drafts, draftFormatting: draftFormatting, draftEdits: draftEdits, serverDrafts: serverDrafts,
+                              selectedID: selectedID, drafts: drafts, draftFormatting: formatting, draftEdits: draftEdits, serverDrafts: serverDrafts,
                               homeThreads: homeThreads)
     }
     private func save() async {

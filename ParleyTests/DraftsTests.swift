@@ -207,6 +207,31 @@ struct DraftSyncTests {
         try await settle()
         #expect(await fake.draftWrites.count == 2)
     }
+    /// Editing a sent message borrows the composer: ending the edit, whichever way, gives the draft back, here and on Google.
+    @Test func editingAMessageKeepsTheDraft() async throws {
+        let (store, fake) = await started()
+        store.setDraft("hey, about tomorrow", conversation: "alex", thread: nil)
+        try await until { store.serverDrafts[Self.alex] != nil }
+        let mine = Message(id: "m1", conversationID: "alex", sender: store.me, text: "old text")
+        store.edit(mine)
+        #expect(store.drafts[Self.alex] == "old text")
+        store.endEdit(conversation: "alex", thread: nil)   // Esc
+        #expect(store.drafts[Self.alex] == "hey, about tomorrow")
+        store.edit(mine)
+        store.setDraft("new text", conversation: "alex", thread: nil)
+        await store.send(conversation: "alex")   // the edit goes out
+        #expect(store.drafts[Self.alex] == "hey, about tomorrow")
+        store.edit(mine)
+        store.quote(mine)   // a quote ends the edit
+        #expect(store.drafts[Self.alex] == "hey, about tomorrow")
+        await store.select("alex")
+        store.edit(mine)
+        await store.select("maria")   // leaving ends the main window's edits
+        #expect(store.drafts[Self.alex] == "hey, about tomorrow")
+        try await settle()
+        #expect(store.serverDrafts[Self.alex]?.text == "hey, about tomorrow")
+        #expect(await !fake.draftWrites.contains("delete alex/timeline"))
+    }
     @Test func clearingTheComposerDeletesTheDraft() async throws {
         let (store, fake) = await started()
         store.setDraft("hello", conversation: "alex", thread: nil)

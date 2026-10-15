@@ -119,9 +119,12 @@ actor FakeBackend: ChatBackend {
         if signedOut { signedOut = false; throw AuthFailure.signInRequired }
         if cancelNextConnect { cancelNextConnect = false; throw CancellationError() }
         continuation.yield(.ownStatusChanged(ownStatus))
-        continuation.yield(.connectionChanged(.connected)); return Self.me
+        continuation.yield(.connectionChanged(.connected)); return account
     }
     func simulateSignedOut() { signedOut = true }
+    /// Who the next connect signs in as: another account on this Mac.
+    private var account = me
+    func simulateAccount(_ person: Person) { account = person }
     private var expireOnNextSend: AuthFailure?
     /// Google stops accepting the session mid-use, without the backend reporting it as an event first.
     func simulateSessionExpiredOnNextSend(_ failure: AuthFailure = .signInRequired) { expireOnNextSend = failure }
@@ -129,8 +132,10 @@ actor FakeBackend: ChatBackend {
     /// A start that was superseded or whose view went away, as the window closing mid-connect does.
     func simulateCancelledConnect() { cancelNextConnect = true }
     /// Each with its newest message's time as its activity, as the server's sort time.
+    private(set) var listReads = 0   // conversation list reads, for tests that count refreshes
     func conversations() -> [Conversation] {
-        rooms.map { room in
+        listReads += 1
+        return rooms.map { room in
             var room = room
             room.activity = room.activity ?? history.filter { $0.conversationID == room.id }.map(\.createdAt).max()
             return room
