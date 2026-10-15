@@ -12,6 +12,14 @@ struct GeminiPane: View {
             if let thread = store.threadID {
                 ThreadPane(store: store, room: room, thread: thread,
                            session: store.messages.first { $0.id == thread }.map(ThreadsPane.preview) ?? "Ask Gemini")
+                    .background {
+                        // Esc goes back to the home wherever focus is, even right after opening with none. While the
+                        // composer quotes or edits, Esc is the composer's, to drop the quote or end the edit first.
+                        let scope = store.key(room.id, thread)
+                        if store.quoting[scope] == nil, store.editing[scope] == nil {
+                            Button("") { store.threadID = nil }.keyboardShortcut(.cancelAction).opacity(0).accessibilityHidden(true)
+                        }
+                    }
             } else {
                 home
             }
@@ -47,6 +55,7 @@ struct GeminiPane: View {
                 }
                 .padding(.top, 48).padding(.bottom, 28)
                 sessions.frame(maxWidth: 620)
+                    .frame(maxWidth: .infinity)   // the scroll view spans the pane, so its edge under the toolbar does too
             }
             ComposerBar(store: store, conversation: room)
             HStack(spacing: 4) {

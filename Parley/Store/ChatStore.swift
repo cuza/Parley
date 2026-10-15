@@ -493,7 +493,9 @@ final class ChatStore {
     enum Place: Hashable { case conversation(ConversationID), shortcut(Shortcut) }
     private(set) var backPlaces: [Place] = []
     private(set) var forwardPlaces: [Place] = []
-    var canGoBack: Bool { !backPlaces.isEmpty }
+    var canGoBack: Bool { !backPlaces.isEmpty || inGeminiSession }
+    /// An Ask Gemini session fills the page, so Back closes it to Ask Gemini's home first.
+    private var inGeminiSession: Bool { threadID != nil && selected?.app == .gemini }
     var canGoForward: Bool { !forwardPlaces.isEmpty }
     private var place: Place? { shortcut.map(Place.shortcut) ?? selectedID.map(Place.conversation) }
     /// Opening a new place: the current one goes on the back list and the forward list ends, as in a browser.
@@ -503,6 +505,7 @@ final class ChatStore {
         if backPlaces.count > 100 { backPlaces.removeFirst() }
     }
     func goBack() async {
+        if inGeminiSession { threadID = nil; return }
         guard let to = backPlaces.popLast() else { return }
         if let place { forwardPlaces.append(place) }
         await open(to)

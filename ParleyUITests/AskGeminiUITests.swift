@@ -24,5 +24,21 @@ import XCTest
         let opened = XCTAttachment(screenshot: app.windows.firstMatch.screenshot()); opened.name = "session"; opened.lifetime = .keepAlways; add(opened)
         app.buttons["Close"].firstMatch.click()
         XCTAssertTrue(greeting.waitForExistence(timeout: 5), "closing the session comes back home")
+
+        session.click()
+        XCTAssertTrue(answer.waitForExistence(timeout: 5))
+        app.typeKey(.escape, modifierFlags: [])   // nothing clicked: no view in the session has focus
+        XCTAssertTrue(greeting.waitForExistence(timeout: 5), "Esc comes back home right after opening a session")
+
+        session.click()
+        XCTAssertTrue(answer.waitForExistence(timeout: 5))
+        answer.click()   // focus in the conversation, not the composer
+        app.typeKey(.escape, modifierFlags: [])
+        XCTAssertTrue(greeting.waitForExistence(timeout: 5), "Esc comes back home with focus in the conversation")
+
+        session.click()
+        XCTAssertTrue(answer.waitForExistence(timeout: 5))
+        app.typeKey("[", modifierFlags: .command)
+        XCTAssertTrue(greeting.waitForExistence(timeout: 5), "Back (⌘[) comes back to Ask Gemini's home, not the previous conversation")
     }
 }

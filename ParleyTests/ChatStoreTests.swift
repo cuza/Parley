@@ -236,6 +236,22 @@ struct ChatStoreTests {
         #expect(store.shortcut == .starred)
     }
 
+    /// An Ask Gemini session fills the page, so Back (⌘[) closes it to Ask Gemini's home before leaving Ask Gemini.
+    @Test func backClosesAnAskGeminiSessionFirst() async throws {
+        let store = ChatStore(backend: FakeBackend())
+        await store.start()
+        let other = try #require(store.conversations.first { $0.app != .gemini }).id
+        let gemini = try #require(store.conversations.first { $0.app == .gemini }).id
+        await store.select(other)
+        await store.select(gemini)
+        await store.openThread(try #require(store.messages.first { $0.id == "gs1" }))
+        #expect(store.canGoBack)
+        await store.goBack()
+        #expect(store.selectedID == gemini && store.threadID == nil)
+        await store.goBack()
+        #expect(store.selectedID == other)
+    }
+
     @Test func jumpingToAnUnknownConversationAddsIt() async {
         let store = ChatStore(backend: FakeBackend())
         await store.start()

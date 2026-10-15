@@ -1,4 +1,5 @@
-import Foundation
+import AppKit
+import SwiftUI
 import Testing
 @testable import Parley
 
@@ -12,5 +13,19 @@ struct GeminiPaneTests {
         #expect(GeminiPane.greeting(name: "Dave Moreno", at: Self.at(14)) == "Good afternoon, Dave")
         #expect(GeminiPane.greeting(name: "Dave Moreno", at: Self.at(20)) == "Good evening, Dave")
         #expect(GeminiPane.greeting(name: "", at: Self.at(20)) == "Good evening")
+    }
+    /// The home's scroll view spans the pane. A scroll view only as wide as the session list drew its edge under the
+    /// toolbar as a box that lit up on hover, on macOS 26 and later.
+    @MainActor @Test func theHomeScrollsAcrossThePane() async throws {
+        let store = ChatStore(backend: FakeBackend())
+        await store.start()
+        let room = try #require(store.conversations.first { $0.app == .gemini })
+        let host = NSHostingView(rootView: GeminiPane(store: store, room: room).frame(width: 900, height: 600))
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 900, height: 600), styleMask: [.titled], backing: .buffered, defer: false)
+        window.contentView = host
+        for _ in 0..<5 { host.layoutSubtreeIfNeeded(); window.displayIfNeeded(); try? await Task.sleep(for: .milliseconds(50)) }
+        func scrolls(_ view: NSView) -> [NSScrollView] { ((view as? NSScrollView).map { [$0] } ?? []) + view.subviews.flatMap(scrolls) }
+        let widths = scrolls(host).map(\.frame.width)
+        #expect(widths.contains { $0 >= 899 }, "scroll view widths: \(widths)")
     }
 }
