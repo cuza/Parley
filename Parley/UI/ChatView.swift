@@ -213,11 +213,11 @@ struct ChatView: View {
     }
     @ViewBuilder private var detail: some View {
             if fixedConversation == nil, store.shortcut == .home {
-                HomePane(store: store).safeAreaInset(edge: .top, spacing: 0) { expiredBanner }
+                HomePane(store: store).safeAreaInset(edge: .top, spacing: 0) { expiredBanner }.toolbar { searchItem }
             } else if fixedConversation == nil, store.shortcut == .drafts {
-                DraftList(store: store).safeAreaInset(edge: .top, spacing: 0) { expiredBanner }
+                DraftList(store: store).safeAreaInset(edge: .top, spacing: 0) { expiredBanner }.toolbar { searchItem }
             } else if fixedConversation == nil, let shortcut = store.shortcut {
-                ShortcutList(store: store, shortcut: shortcut).safeAreaInset(edge: .top, spacing: 0) { expiredBanner }
+                ShortcutList(store: store, shortcut: shortcut).safeAreaInset(edge: .top, spacing: 0) { expiredBanner }.toolbar { searchItem }
             } else if let room, room.app == .gemini {
                 GeminiPane(store: store, room: room).id(room.id).safeAreaInset(edge: .top, spacing: 0) { expiredBanner }
             } else if let room {
@@ -246,9 +246,11 @@ struct ChatView: View {
                         }
                     }
                 }
-                    .toolbar {
+                    // Customizable, as Mail's: View ▸ Customize Toolbar… or a right-click adds Info and Attach, removes items,
+                    // and shows their names (Icon and Text). The title stays put.
+                    .toolbar(id: "conversation") {
                         // On the left in the title's place and size, as Home and the other shortcuts show theirs.
-                        ToolbarItem(placement: .navigation) {
+                        ToolbarItem(id: "title", placement: .navigation) {
                             Button { store.toggleInfo() } label: { VStack(alignment: .leading, spacing: 2) {
                                 HStack(spacing: 6) {
                                     // The dot first, so it stays in one place whatever the name's length.
@@ -262,21 +264,30 @@ struct ChatView: View {
                             }.contentShape(Rectangle()) }
                             .buttonStyle(.plain).help("Conversation info (⇧⌘I)")
                         }
+                        .customizationBehavior(.disabled)
                         .titleWithoutGlass()
                         if #available(macOS 26, *) { ToolbarSpacer(.flexible) }   // search on the right, the name on the left
                         // Web's call button; a menu, as calls and huddles may join it.
-                        ToolbarItem(placement: .primaryAction) {
-                            Menu { Button("Send a Meet Link") { sendMeetLink(room.id) } } label: { Label("Video Call", systemImage: "video").labelStyle(.iconOnly) }
+                        ToolbarItem(id: "call", placement: .primaryAction) {
+                            Menu { Button("Send a Meet Link") { sendMeetLink(room.id) } } label: { Label("Video Call", systemImage: "video") }
                                 .menuIndicator(.visible).help("Video call")
                         }
                         if Self.offersThreads(room) {   // the conversation's threads, as Google Chat's Active threads
-                            ToolbarItem(placement: .primaryAction) {
-                                Button { Task { await store.toggleThreads() } } label: { Label("Threads", systemImage: "bubble.left.and.text.bubble.right").labelStyle(.iconOnly) }
+                            ToolbarItem(id: "threads", placement: .primaryAction) {
+                                Button { Task { await store.toggleThreads() } } label: { Label("Threads", systemImage: "bubble.left.and.text.bubble.right") }
                                     .help("Threads")
                             }
                         }
+                        ToolbarItem(id: "info", placement: .primaryAction, showsByDefault: false) {
+                            Button { store.toggleInfo() } label: { Label("Info", systemImage: "info.circle") }.help("Conversation info (⇧⌘I)")
+                        }
+                        ToolbarItem(id: "attach", placement: .primaryAction, showsByDefault: false) {
+                            Button { commands.attach?() } label: { Label("Attach", systemImage: "paperclip") }.help("Attach files (⇧⌘A)")
+                        }
                         if fixedConversation == nil {   // results open in the main window, so search lives only there
-                            ToolbarItem(placement: .primaryAction) { Button { find() } label: { Label("Search", systemImage: "magnifyingglass").labelStyle(.iconOnly) }.help("Search messages (⌘F)") }
+                            ToolbarItem(id: "search", placement: .primaryAction) {
+                                Button { find() } label: { Label("Search", systemImage: "magnifyingglass") }.help("Search messages (⌘F)")
+                            }
                         }
                     }
                     .focusedSceneValue(\.meetLinkConversation, room.id)
@@ -397,8 +408,12 @@ struct ChatView: View {
         }
         .onChange(of: store.unreadCount) { _, value in NSApplication.shared.dockTile.badgeLabel = value == 0 ? nil : String(value) }
     }
+    /// Search, on the right of the toolbar: conversations and the shortcuts alike, as ⌘F works in both.
+    private var searchItem: some ToolbarContent {
+        ToolbarItem(placement: .primaryAction) { Button { find() } label: { Label("Search", systemImage: "magnifyingglass").labelStyle(.iconOnly) }.help("Search messages (⌘F)") }
+    }
     @ViewBuilder private var expiredBanner: some View {
-        if store.sessionExpired, let signIn { SessionExpiredBanner(flow: signIn) }
+        if store.sessionExpired, let signIn { SessionExpiredBanner(flow: signIn) } else { OfflineBanner(connection: store.connection) }
     }
     /// A shortcut's sidebar row tag; conversation ids never start with it.
     private static func tag(_ shortcut: Shortcut) -> String { "shortcut:" + shortcut.rawValue }
@@ -690,9 +705,16 @@ struct ComposerBar: View {
     @State private var linking: LinkForm.Draft?   // the link form, with the selection it started from
     @State private var colorPicker = false
     @State private var recorder = VoiceRecorder()
-    private var typingLine: String? {
-        store.activityLine(conversation.id, thread: thread)
-            ?? ChatStore.typingLine(store.typists(conversation.id, thread: thread).map { store.name(of: $0, in: conversation.id) })
+    /// Who's typing here, or the app at work, in a thought bubble at the end of the conversation (the timeline makes room).
+    @ViewBuilder private var typingBubble: some View {
+        let known = { (id: PersonID) in store.person(id, in: conversation.id) ?? Person(id: id, name: store.name(of: id, in: conversation.id)) }
+        if let activity = store.activity(conversation.id, thread: thread) {
+            TypingBubble(typists: [known(activity.person)], activity: activity.label,
+                         dots: conversation.app == .gemini ? [Color(red: 0.31, green: 0.49, blue: 0.95), Color(red: 0.54, green: 0.39, blue: 0.91), Color(red: 0.82, green: 0.38, blue: 0.62)]
+                                                           : [.secondary, .secondary, .secondary])
+        } else if case let typists = store.typists(conversation.id, thread: thread), !typists.isEmpty {
+            TypingBubble(typists: typists.map(known), showsName: conversation.kind != .direct)   // a DM's picture says who
+        }
     }
     private var blockedPartner: PersonID? {
         guard thread == nil, conversation.kind == .direct, let partner = store.partner(in: conversation), store.blockedPeople.contains(partner) else { return nil }
@@ -736,10 +758,8 @@ struct ComposerBar: View {
     private var composer: some View {
         FloatingGlassGroup {
             VStack(alignment: .leading, spacing: 6) {
+                typingBubble   // under the timeline's avatars, which line up with the attach button
                 Group {
-                    if let typingLine {
-                        Text(typingLine).font(.caption).foregroundStyle(.secondary).lineLimit(1).floatingCapsule()
-                    }
                     if formatBar {
                         // Web's toolbar, in its order; the field's ComposerTextView is first responder and takes the actions.
                         HStack(spacing: 2) {
@@ -988,13 +1008,15 @@ struct ThreadPane: View {
     private func detach() { if let ref = store.detachThread(in: room.id) { openWindow(value: ref) } }
     var body: some View {
         VStack(spacing: 0) {
-            if !detached {
+            // An Ask Gemini session is a page of its own: its toolbar has the back button, so no pane header.
+            if !detached, session == nil {
                 HStack(spacing: 12) {
-                    Text(session ?? "Thread").font(.headline).lineLimit(1).truncationMode(.tail); Spacer()
+                    Text("Thread").font(.headline).lineLimit(1).truncationMode(.tail); Spacer()
                     ThreadFollowButton(store: store, thread: thread)
                     Button(action: detach) { Image(systemName: "macwindow.badge.plus") }
-                        .buttonStyle(.plain).help("Open in new window")
-                    Button { store.threadID = nil } label: { Image(systemName: "xmark") }.buttonStyle(.plain).help("Close")
+                        .buttonStyle(.borderless).help("Open in new window").accessibilityLabel("Open in New Window")
+                    Button { store.threadID = nil } label: { Image(systemName: "xmark") }
+                        .buttonStyle(.borderless).help("Close").accessibilityLabel("Close")
                 }.padding()
                 Divider()
             }
@@ -1493,6 +1515,12 @@ private struct DateRangeSheet: View {
 extension ToolbarContent {
     /// A title is not a control: no glass capsule around it (macOS 26 gives every toolbar item one), as Messages shows the name.
     @ToolbarContentBuilder func titleWithoutGlass() -> some ToolbarContent {
+        if #available(macOS 26, *) { sharedBackgroundVisibility(.hidden) } else { self }
+    }
+}
+extension CustomizableToolbarContent {
+    /// As above, for an item of a customizable toolbar.
+    @ToolbarContentBuilder func titleWithoutGlass() -> some CustomizableToolbarContent {
         if #available(macOS 26, *) { sharedBackgroundVisibility(.hidden) } else { self }
     }
 }

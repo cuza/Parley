@@ -22,8 +22,9 @@ import XCTest
         let question = app.textViews.matching(NSPredicate(format: "value == %@", "What's on my calendar tomorrow?")).firstMatch   // a bubble, not the title
         XCTAssertTrue(question.exists, "the question is the session's first message, as on the web")
         let opened = XCTAttachment(screenshot: app.windows.firstMatch.screenshot()); opened.name = "session"; opened.lifetime = .keepAlways; add(opened)
-        app.buttons["Close"].firstMatch.click()
-        XCTAssertTrue(greeting.waitForExistence(timeout: 5), "closing the session comes back home")
+        XCTAssertFalse(app.buttons["Close"].exists, "a session is a page of its own, not a side pane to close")
+        app.toolbars.buttons["Back"].firstMatch.click()
+        XCTAssertTrue(greeting.waitForExistence(timeout: 5), "the toolbar's back button comes back home")
 
         session.click()
         XCTAssertTrue(answer.waitForExistence(timeout: 5))

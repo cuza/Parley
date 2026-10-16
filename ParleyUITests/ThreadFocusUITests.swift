@@ -37,6 +37,8 @@ import XCTest
         XCTAssertTrue(replies.waitForExistence(timeout: 5))
         replies.click()
         XCTAssertTrue(app.staticTexts["Thread"].waitForExistence(timeout: 5))
+        let focused = app.textViews.matching(NSPredicate(format: "identifier == %@ AND hasKeyboardFocus == true", "composer")).firstMatch
+        XCTAssertTrue(focused.waitForExistence(timeout: 5), "the thread's composer has the keyboard")   // what ⌘O follows
         app.menuBars.menuBarItems["Conversation"].click()
         XCTAssertTrue(app.menuItems["Open Thread in New Window"].waitForExistence(timeout: 3), "the item names what it opens")
         app.typeKey(.escape, modifierFlags: [])

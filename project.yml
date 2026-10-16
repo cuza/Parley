@@ -14,8 +14,8 @@ settings:
     ENABLE_USER_SCRIPT_SANDBOXING: YES
     STRING_CATALOG_GENERATE_SYMBOLS: YES
     # The app's and the share extension's version, each alone on its line.
-    MARKETING_VERSION: "1.7.8"
-    CURRENT_PROJECT_VERSION: "69"
+    MARKETING_VERSION: "1.7.9"
+    CURRENT_PROJECT_VERSION: "70"
     PARLEY_URL_SCHEME: parley   # the share extension's hand-off link
     PARLEY_DISPLAY_NAME: Parley   # the app's and the share extension's name
   configs:
@@ -73,6 +73,7 @@ targets:
         # Debug runs as its own app: its own Spotlight index, Shortcuts, notifications and extensions, away from installs.
         Debug:
           PRODUCT_BUNDLE_IDENTIFIER: dev.cuza.Parley.debug
+          ASSETCATALOG_COMPILER_APPICON_NAME: AppIconDebug   # the icon with a DEBUG label, so Spotlight and the Dock tell them apart
   ParleyShare:
     type: app-extension
     platform: macOS

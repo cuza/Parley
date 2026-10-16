@@ -90,6 +90,39 @@ struct SessionExpiredBanner: View {
     }
 }
 
+/// Over the conversations after a few seconds without a connection, so it shows with the sidebar hidden and in conversation
+/// windows too; the sidebar's footer says it as well. A short drop shows nothing.
+struct OfflineBanner: View {
+    let connection: ConnectionState
+    var delay: Duration = .seconds(5)
+    @State private var shown = false
+    /// Signed out has a screen of its own.
+    static func isDown(_ connection: ConnectionState) -> Bool { connection != .connected && connection != .signedOut }
+    var body: some View {
+        VStack(spacing: 0) {
+            if shown, Self.isDown(connection) {
+                HStack(spacing: 8) {
+                    Image(systemName: "wifi.slash").foregroundStyle(.orange)
+                    Text(connection.rawValue).font(.headline)
+                    Text("New messages arrive once Parley reconnects.").font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                    Spacer()
+                }
+                .padding(.horizontal, 14).padding(.vertical, 8)
+                .background(.bar)
+                .overlay(alignment: .bottom) { Divider() }
+                .accessibilityElement(children: .combine)
+            }
+        }
+        // Keyed on down or up, not the state: retries flip offline and reconnecting, which mustn't restart the wait.
+        .task(id: Self.isDown(connection)) {
+            shown = false
+            guard Self.isDown(connection) else { return }
+            try? await Task.sleep(for: delay)
+            if !Task.isCancelled { shown = true }
+        }
+    }
+}
+
 /// Shows the sign-in sheet while the in-app sign-in runs; closing the sheet cancels the sign-in.
 struct WebSignInPresenter: ViewModifier {
     let flow: SignInFlow

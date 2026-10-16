@@ -70,8 +70,7 @@ struct NativeComposer: NSViewRepresentable {
         if view.slashCommands != slashCommands { view.slashCommands = slashCommands }
         if focus != context.coordinator.focus {
             context.coordinator.focus = focus
-            // A composer made with a focus (a thread's, as it opens) isn't in its window yet: it takes the keyboard once it is.
-            if focus != nil { DispatchQueue.main.async { view.window?.makeFirstResponder(view) } }
+            if focus != nil { view.takeKeyboard() }
         }
     }
     final class Coordinator: NSObject, NSTextViewDelegate {
@@ -625,6 +624,18 @@ final class ComposerTextView: NSTextView {
     override func setSelectedRanges(_ ranges: [NSValue], affinity: NSSelectionAffinity, stillSelecting: Bool) {
         super.setSelectedRanges(ranges, affinity: affinity, stillSelecting: stillSelecting)
         if !stillSelecting { updateMention() }
+    }
+    /// Set while the composer has been asked for the keyboard but isn't in a window to take it.
+    private var wantsKeyboard = false
+    /// Takes the keyboard now, or as soon as the composer is in its window: one made with a focus (a thread's, as it
+    /// opens) can join its window a few run-loop turns later.
+    func takeKeyboard() {
+        if let window { window.makeFirstResponder(self); wantsKeyboard = false } else { wantsKeyboard = true }
+    }
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        // After this change of window settles: making it first responder from inside the move doesn't stick.
+        if wantsKeyboard, window != nil { DispatchQueue.main.async { [weak self] in self?.takeKeyboard() } }
     }
     override func becomeFirstResponder() -> Bool {
         let became = super.becomeFirstResponder()

@@ -792,11 +792,8 @@ final class ChatStore {
             typing[scope] = kept.isEmpty ? nil : kept
         }
     }
-    /// "Ask Gemini · Collecting info…" while an agent works where this composer is; `name` for the agent's, else looked up.
-    func activityLine(_ conversation: ConversationID, thread: ThreadID?, name: String? = nil) -> String? {
-        guard let activity = activities[key(conversation, thread)] else { return nil }
-        return "\(name ?? self.name(of: activity.person, in: conversation)) · \(activity.label)…"
-    }
+    /// The app at work where this composer is (Ask Gemini "Collecting info"), for the typing bubble.
+    func activity(_ conversation: ConversationID, thread: ThreadID?) -> Activity? { activities[key(conversation, thread)] }
     func typists(_ conversation: ConversationID, thread: ThreadID? = nil) -> [String] {
         (typing[key(conversation, thread)] ?? [:]).keys.sorted()
     }
@@ -1145,6 +1142,13 @@ final class ChatStore {
         }
         draftWrites[scope] = task
         await task.value
+    }
+    /// Drafts' Delete: the composer empties and Google's copy goes now, without waiting for a pause in typing.
+    func deleteDraft(_ draft: ServerDraft) async {
+        setDraft("", conversation: draft.conversationID, thread: draft.threadID)
+        let scope = key(draft.conversationID, draft.threadID)
+        draftTimers[scope]?.cancel()
+        await syncDraft(scope)
     }
     /// Google's drafts, merged with this Mac's: a draft only Google has fills its composer; one only this Mac has is pushed,
     /// unless it was saved before and Google no longer has it (sent or deleted elsewhere); when both have one, the newer

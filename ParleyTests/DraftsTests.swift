@@ -249,6 +249,17 @@ struct DraftSyncTests {
         try await until { await fake.draftWrites.last == "delete alex/timeline" }
         #expect(store.serverDrafts[Self.alex] == nil)
     }
+    /// Drafts' Delete (its swipe or menu): the draft goes now, here and on Google's side, not after a pause in typing.
+    @Test func deletingFromTheDraftsListDropsItAtOnce() async throws {
+        let (store, fake) = await started()
+        store.setDraft("hello", conversation: "alex", thread: nil)
+        try await until { store.serverDrafts[Self.alex] != nil }
+        store.draftPause = .seconds(30)   // no typing timer to wait for
+        let draft = try #require(store.draftList().first { $0.conversationID == "alex" })
+        await store.deleteDraft(draft)
+        #expect(await fake.draftWrites.last == "delete alex/timeline")
+        #expect(store.serverDrafts[Self.alex] == nil && !store.draftList().contains { $0.conversationID == "alex" })
+    }
     @Test func aThreadsReplyBoxHasADraftOfItsOwn() async throws {
         let (store, fake) = await started()
         store.setDraft("on it", conversation: "design", thread: "d4")

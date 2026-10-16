@@ -32,6 +32,12 @@ struct GeminiPane: View {
         }
         .toolbar(removing: .title)   // "Ask Gemini" is the title; the window keeps "Parley" for its menus
         .toolbar {
+            if store.threadID != nil {   // a session is a page of its own: back to the home, as Esc and ⌘[ go
+                ToolbarItem(placement: .navigation) {
+                    Button { store.threadID = nil } label: { Label("Back", systemImage: "chevron.left").labelStyle(.iconOnly) }
+                        .help("Back to Ask Gemini")
+                }
+            }
             ToolbarItem(placement: .navigation) {
                 HStack(spacing: 8) {
                     Text("Ask Gemini").font(.title3.weight(.semibold))

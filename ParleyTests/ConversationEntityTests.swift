@@ -23,10 +23,14 @@ struct ConversationEntityTests {
         #expect(ConversationEntity.matching("design", in: rooms).map(\.id) == ["space/a"])
         #expect(ConversationEntity.matching("resume", in: rooms).map(\.id) == ["space/c"])   // as Finder matches: case and accents aside
     }
-    @Test func eachKindHasItsSubtitle() {
+    /// Its kind is a choice Shortcuts can filter on, shown as the subtitle, with a symbol for Spotlight's and Shortcuts' rows.
+    @Test func eachKindIsAChoiceWithItsNameAndSymbol() {
         var app = Self.room("dm/g", "Gemini", .direct); app.app = .gemini
-        #expect([Self.room("space/a", "A"), Self.room("dm/b", "B", .direct), Self.room("dm/c", "C", .group), app].map(ConversationEntity.kindName)
-                == ["Space", "Direct message", "Group chat", "App"])
+        let kinds = [Self.room("space/a", "A"), Self.room("dm/b", "B", .direct), Self.room("dm/c", "C", .group), app].map(ConversationEntity.Kind.init)
+        #expect(kinds == [.space, .direct, .group, .app])
+        #expect(kinds.map(\.name) == ["Space", "Direct message", "Group chat", "App"])
+        #expect(kinds.map(\.symbol) == ["number", "person.crop.circle", "person.2", "app"])
+        #expect(ConversationEntity(app).kind == .app)
     }
 }
 

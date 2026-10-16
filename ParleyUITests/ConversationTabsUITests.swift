@@ -36,8 +36,9 @@ import XCTest
         XCTAssertTrue(app.windows.element(boundBy: 2).waitForExistence(timeout: 5), "the tab became its own window")
         app.menuBars.menuBarItems["Window"].click()
         app.menuItems["Merge All Windows"].click()
-        sleep(1)
-        XCTAssertEqual(app.windows.count, 2, "merged back into one tabbed window, beside the main window")
+        // The merge animates; on a busy run it takes longer than a fixed pause.
+        let merged = XCTNSPredicateExpectation(predicate: NSPredicate(format: "count == 2"), object: app.windows)
+        XCTAssertEqual(XCTWaiter.wait(for: [merged], timeout: 5), .completed, "merged back into one tabbed window, beside the main window")
         // Settings ▸ Appearance has the switch, on by default.
         app.typeKey(",", modifierFlags: .command)
         app.toolbars.buttons["Appearance"].firstMatch.click()

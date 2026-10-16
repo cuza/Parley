@@ -89,6 +89,9 @@ struct ScheduledRow: View {
         .onTapGesture { open() }
         .onHover { hovering = $0 }
         .contextMenu { actions }
+        .swipeActions(edge: .trailing, allowsFullSwipe: false) {   // as a draft's: a tap on the button, never a full swipe
+            Button(role: .destructive) { Task { await store.unschedule(message) } } label: { Label("Delete", systemImage: "trash") }
+        }
         .accessibilityElement(children: .combine)
         .accessibilityAddTraits(.isButton)
         .accessibilityAction { open() }

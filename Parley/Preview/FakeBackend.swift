@@ -183,6 +183,13 @@ actor FakeBackend: ChatBackend {
                                  lastReply: replies.map(\.createdAt).max() ?? head.createdAt)
         }.sorted { $0.lastReply > $1.lastReply }
     }
+    /// Someone typing, or an app at work, as Google Chat pushes them; the demo's -uiTestingTyping repeats these.
+    func simulateTyping(_ person: PersonID, in conversation: ConversationID, thread: ThreadID? = nil) {
+        continuation.yield(.typingChanged(conversation, thread, person, isTyping: true))
+    }
+    func simulateActivity(_ person: PersonID, in conversation: ConversationID, label: String) {
+        continuation.yield(.activityChanged(conversation, nil, person, label: label))
+    }
     /// Someone else's message, pushed as Google Chat pushes one.
     func simulateIncoming(_ message: Message) {
         history.append(message)

@@ -6,8 +6,8 @@ struct ParleyApp: App {
     // The test host launches this app; keep it off the network and away from the real cache.
     // UI tests launch it with -uiTestingLongHistory: a long, paged fake history for scroll tests;
     // -uiTestingManyConversations: 320 more conversations, for sidebar tests.
-    // -uiTestingDemo: the demo workspace (README screenshots), with -uiTestingDark for dark mode and -uiTestingHome to
-    // open on Home, as a real launch does.
+    // -uiTestingDemo: the demo workspace (README screenshots), with -uiTestingDark for dark mode, -uiTestingHome to
+    // open on Home, as a real launch does, and -uiTestingTyping for someone typing.
     @State private var store: ChatStore
     @NSApplicationDelegateAdaptor private var appDelegate: AppDelegate
     @State private var signIn: SignInFlow
@@ -42,7 +42,20 @@ struct ParleyApp: App {
             for key in ["collapsedSidebarSections", SidebarLimit.enabledKey] { UserDefaults.standard.removeObject(forKey: key) }
             store = ChatStore(backend: FakeBackend(manyConversations: 320))
         } else if testHost || arguments.contains("-uiTestingDemo") {
-            store = ChatStore(backend: FakeBackend())
+            let fake = FakeBackend()
+            store = ChatStore(backend: fake)
+            // Maria keeps typing in Design studio, Maria and Alex in Launch crew, and Gemini keeps working, as their pushes repeat.
+            if arguments.contains("-uiTestingTyping") {
+                Task {
+                    while true {
+                        await fake.simulateTyping("maria", in: "design")
+                        await fake.simulateTyping("maria", in: "launch")
+                        await fake.simulateTyping("alex", in: "launch")
+                        await fake.simulateActivity("gemini", in: "gemini", label: "Collecting info")
+                        try? await Task.sleep(for: .seconds(3))
+                    }
+                }
+            }
             RemoteImage.preload(FakeBackend.demoIcons)
             if arguments.contains("-uiTestingDemo") {   // the README shots don't follow the Mac's appearance
                 NSApplication.shared.appearance = NSAppearance(named: arguments.contains("-uiTestingDark") ? .darkAqua : .aqua)
@@ -124,6 +137,7 @@ struct ParleyApp: App {
             .defaultSize(width: 1000, height: 650)
             .commands {
                 SidebarCommands()   // View ▸ Show/Hide Sidebar (⌃⌘S): the sidebar can always come back, whatever the toolbar shows
+                ToolbarCommands()   // View ▸ Show/Hide Toolbar and Customize Toolbar…, as Mail has them
                 CommandGroup(after: .appInfo) { CheckForUpdatesItem(updates: updates) }
                 CommandGroup(replacing: .newItem) {
                     Button("New Chat") { store.newChatRequests += 1 }.keyboardShortcut("n")

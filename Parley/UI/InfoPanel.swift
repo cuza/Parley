@@ -42,9 +42,17 @@ struct InfoPanel: View {
     private var allowed: ConversationPermissions { store.permissions[room.id] ?? .init() }
 
     var body: some View {
-        // The Divider keeps the Form below the toolbar: a scroll view reaching under it takes over the toolbar's frosted
-        // backdrop and leaves it clear across the window.
-        VStack(spacing: 0) { Divider(); form }
+        // A header as the thread pane has, with its close button. It also keeps the Form below the toolbar: a scroll view
+        // reaching under it takes over the toolbar's frosted backdrop and leaves it clear across the window.
+        VStack(spacing: 0) {
+            HStack(spacing: 12) {
+                Text("Info").font(.headline); Spacer()
+                Button { store.info = false } label: { Image(systemName: "xmark") }
+                    .buttonStyle(.borderless).help("Close").accessibilityLabel("Close")
+            }.padding()
+            Divider()
+            form
+        }
     }
 
     private var form: some View {

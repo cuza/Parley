@@ -162,6 +162,44 @@ struct HomeTests {
         #expect(!ShortcutList.clicked(["a", "b"], event: try mouse(.shift)))
         #expect(!ShortcutList.clicked([], event: try mouse([])))
     }
+    /// Mail's two-finger swipes: right for read state on a conversation's row, left to mute it or unfollow a thread.
+    @Test func rowsOfferMailsSwipeActions() async throws {
+        let (store, _) = await started(landing: .home)
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 700, height: 600), styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        defer { window.close() }
+        window.contentView = NSHostingView(rootView: ShortcutList(store: store, shortcut: .home).frame(width: 700, height: 600))
+        window.contentView?.layoutSubtreeIfNeeded()
+        let content = try #require(window.contentView)
+        let table = try #require(Self.table(in: content))
+        let rows = store.homeRows()
+        for row in 0..<table.numberOfRows { _ = table.rowView(atRow: row, makeIfNecessary: true) }
+        func titles(_ row: Int, _ edge: NSTableView.RowActionEdge) -> [String] {
+            (table.delegate?.tableView?(table, rowActionsForRow: row, edge: edge) ?? []).map(\.title)
+        }
+        let unread = try #require(rows.firstIndex { $0.thread == nil && $0.room.unread > 0 })
+        #expect(titles(unread, .leading) == ["Mark as Read"])
+        #expect(titles(unread, .trailing) == [rows[unread].room.muted ? "Unmute" : "Mute"])
+        let thread = try #require(rows.firstIndex { $0.thread != nil })
+        #expect(titles(thread, .leading).isEmpty && titles(thread, .trailing) == ["Unfollow"])
+    }
+    /// Drafts: a swipe left offers Delete on a draft and on a scheduled message, which only a tap on it does.
+    @Test func draftsOfferDeleteOnASwipe() async throws {
+        let (store, _) = await started(landing: .drafts)
+        await store.listScheduled()
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 700, height: 600), styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        defer { window.close() }
+        window.contentView = NSHostingView(rootView: DraftList(store: store).frame(width: 700, height: 600))
+        window.contentView?.layoutSubtreeIfNeeded()
+        let content = try #require(window.contentView)
+        let table = try #require(Self.table(in: content))
+        #expect(table.numberOfRows == store.scheduled.count + store.draftList().count && table.numberOfRows >= 2)
+        for row in 0..<table.numberOfRows {
+            _ = table.rowView(atRow: row, makeIfNecessary: true)
+            #expect((table.delegate?.tableView?(table, rowActionsForRow: row, edge: .trailing) ?? []).map(\.title) == ["Delete"])
+        }
+    }
     /// A long preview ends `columnGap` before the time and unread column, which keeps the row's trailing edge; the row's
     /// height is its text's, wrapped to two lines.
     @Test func aLongPreviewEndsBeforeTheTimeAndBadgeColumn() async throws {

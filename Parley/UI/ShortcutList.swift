@@ -46,6 +46,8 @@ struct ShortcutList: View {
                                 }
                             }
                             .accessibilityAction { open(row) }
+                            .swipeActions(edge: .leading) { readSwipe(row) }
+                            .swipeActions(edge: .trailing) { actionSwipe(row) }
                         }
                         .contextMenu(forSelectionType: String.self) { ids in
                             let chosen = rows.filter { ids.contains($0.id) }
@@ -69,6 +71,12 @@ struct ShortcutList: View {
             } else if !items.isEmpty {
                 List(items, selection: $selection) { message in
                     row(message)
+                        // Starred: a full swipe unstars, and the row leaves the list, as Mail's archive.
+                        .swipeActions(edge: .trailing, allowsFullSwipe: shortcut == .starred) {
+                            Button { Task { await store.setStarred(!message.starred, message) } } label: {
+                                Label(message.starred ? "Unstar" : "Star", systemImage: message.starred ? "star.slash" : "star")
+                            }.tint(.yellow)
+                        }
                         .accessibilityAction { Task { await store.showInChat(message) } }
                         .onAppear { if message.id == items.last?.id { Task { await store.loadShortcut(shortcut, more: true) } } }
                 }
@@ -109,6 +117,25 @@ struct ShortcutList: View {
     private func openInWindows(_ messages: [Message]) {
         var seen = Set<ConversationID>()
         for id in messages.map(\.conversationID) where seen.insert(id).inserted { openWindow(value: id) }
+    }
+    /// Swiping right, as in Mail: read or unread. A thread row has no read state of its own to set.
+    @ViewBuilder private func readSwipe(_ row: HomeRow) -> some View {
+        if row.thread == nil {
+            let unread = row.room.unread > 0
+            Button { Task { if unread { await store.markRead(row.room.id) } else { await store.markUnread(row.room.id) } } } label: {
+                Label(unread ? "Mark as Read" : "Mark as Unread", systemImage: unread ? "checkmark.message" : "message.badge")   // a chat bubble, not Mail's envelope
+            }.tint(.blue)
+        }
+    }
+    /// Swiping left: mute a conversation, or unfollow a thread.
+    @ViewBuilder private func actionSwipe(_ row: HomeRow) -> some View {
+        if let thread = row.thread {
+            Button { Task { await store.setFollowing(false, thread: thread.id) } } label: { Label("Unfollow", systemImage: "bell.slash") }.tint(.orange)
+        } else {
+            Button { Task { await store.setMuted(!row.room.muted, row.room.id) } } label: {
+                Label(row.room.muted ? "Unmute" : "Mute", systemImage: row.room.muted ? "bell" : "bell.slash")
+            }.tint(.indigo)
+        }
     }
     /// A Home row opens its conversation, or its thread beside Home.
     private func open(_ row: HomeRow) {
@@ -245,6 +272,11 @@ struct DraftList: View {
                     ForEach(drafts, id: \.self) { draft in
                         Button { Task { await store.open(conversation: draft.conversationID, thread: draft.threadID) } } label: { row(draft) }
                             .buttonStyle(.plain)
+                            // Deleting a draft can't be undone: a tap on the swipe's button, never a full swipe.
+                            .swipeActions(edge: .trailing, allowsFullSwipe: false) {
+                                Button(role: .destructive) { Task { await store.deleteDraft(draft) } } label: { Label("Delete", systemImage: "trash") }
+                            }
+                            .contextMenu { Button("Delete Draft", role: .destructive) { Task { await store.deleteDraft(draft) } } }
                     }
                 }
                 .accessibilityIdentifier("shortcut-drafts")

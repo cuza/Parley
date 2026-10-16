@@ -30,14 +30,14 @@ extension AuthTests {
 }
 
 @MainActor struct GeminiActivityStoreTests {
-    @Test func theComposerLineShowsTheStatusInTheChatAndTheThread() async throws {
+    @Test func theTypingBubbleShowsTheStatusInTheChatAndTheThread() async throws {
         let store = ChatStore(backend: FakeBackend())
         await store.start()
         store.apply(.activityChanged("dm/g", "dm/g/q1/q1", "gemini", label: "Collecting info"))
-        #expect(store.activityLine("dm/g", thread: nil, name: "Ask Gemini") == "Ask Gemini · Collecting info…")
-        #expect(store.activityLine("dm/g", thread: "dm/g/q1/q1", name: "Ask Gemini") == "Ask Gemini · Collecting info…")
+        #expect(store.activity("dm/g", thread: nil)?.label == "Collecting info" && store.activity("dm/g", thread: nil)?.person == "gemini")
+        #expect(store.activity("dm/g", thread: "dm/g/q1/q1")?.label == "Collecting info")
         store.apply(.activityChanged("dm/g", "dm/g/q1/q1", "gemini", label: nil))
-        #expect(store.activityLine("dm/g", thread: nil, name: "Ask Gemini") == nil)
+        #expect(store.activity("dm/g", thread: nil) == nil)
     }
 }
 

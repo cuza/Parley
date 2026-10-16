@@ -56,15 +56,16 @@ struct SiriPerson {
     let id: PersonID
     var person: IntentPerson
     let name: String
+    let symbol: String   // a person's, or a space's or group chat's as a recipient
     init(_ person: Person) {
-        id = person.id; name = person.name
+        id = person.id; name = person.name; symbol = "person.crop.circle"
         self.person = IntentPerson(identifier: .applicationDefined(person.id), name: .displayName(person.name),
                                    handle: person.email.map { IntentPerson.Handle(emailAddress: $0) })
     }
     /// A space or group chat offered to Siri as a recipient: the send template takes people only on this SDK, so "send a
     /// message to the design team" resolves to this, and the send goes to the conversation itself.
     init(recipient conversation: Conversation) {
-        id = conversation.id; name = conversation.name
+        id = conversation.id; name = conversation.name; symbol = ConversationEntity.Kind(conversation).symbol
         person = IntentPerson(identifier: .applicationDefined(conversation.id), name: .displayName(conversation.name),
                               handle: IntentPerson.Handle(applicationDefined: conversation.id))
     }
@@ -72,7 +73,7 @@ struct SiriPerson {
     static func recipients(_ conversations: [Conversation]) -> [SiriPerson] {
         conversations.filter { $0.kind != .direct && $0.hidden == nil }.map(SiriPerson.init(recipient:))
     }
-    var displayRepresentation: DisplayRepresentation { DisplayRepresentation(title: "\(name)") }
+    var displayRepresentation: DisplayRepresentation { DisplayRepresentation(title: "\(name)", image: .init(systemName: symbol)) }
     struct SiriPersonQuery: EntityStringQuery {
         @Dependency private var store: ChatStore
         @MainActor func entities(for identifiers: [PersonID]) async throws -> [SiriPerson] {
@@ -100,8 +101,10 @@ struct SiriConversation {
     var isRead: Bool
     var attributes: Set<SiriConversationAttribute>
     var dateLastActive: Date?
+    let symbol: String
     init(_ conversation: Conversation, me: PersonID) {
         id = conversation.id
+        symbol = ConversationEntity.Kind(conversation).symbol
         recipients = conversation.members.filter { $0.id != me }.map(SiriPerson.init)
         displayName = conversation.name
         previewText = ""
@@ -115,7 +118,7 @@ struct SiriConversation {
         self.init(conversation, me: store.me.id)
         previewText = AttributedString(store.timeline(conversation.id).last?.text ?? "")
     }
-    var displayRepresentation: DisplayRepresentation { DisplayRepresentation(title: "\(displayName)") }
+    var displayRepresentation: DisplayRepresentation { DisplayRepresentation(title: "\(displayName)", image: .init(systemName: symbol)) }
     struct SiriConversationQuery: EntityStringQuery {
         @Dependency private var store: ChatStore
         @MainActor func entities(for identifiers: [ConversationID]) async throws -> [SiriConversation] {
@@ -353,6 +356,7 @@ struct SiriDraftMessageIntent {
     var links: [URL]
     var scheduledDate: Date?
     static let openAppWhenRun = true
+    static var supportedModes: IntentModes { .foreground }   // what replaces openAppWhenRun from macOS 26
     @Dependency private var store: ChatStore
     @MainActor func perform() async throws -> some IntentResult {
         if store.needsSignIn { throw ParleyIntentError.signedOut }

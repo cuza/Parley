@@ -10,7 +10,7 @@ struct PersonEntity: AppEntity {
     init(_ person: Person) { id = person.id; name = person.name; email = person.email }
     var person: Person { Person(id: id, name: name, email: email) }
     var displayRepresentation: DisplayRepresentation {
-        email.map { DisplayRepresentation(title: "\(name)", subtitle: "\($0)") } ?? DisplayRepresentation(title: "\(name)")
+        DisplayRepresentation(title: "\(name)", subtitle: email.map { "\($0)" }, image: .init(systemName: "person.crop.circle"))
     }
     /// Everyone in my conversations, each once, in the order they first appear; never me.
     static func known(in conversations: [Conversation], me: PersonID) -> [Person] {
@@ -48,6 +48,7 @@ struct MessagePersonIntent: AppIntent {
     static let description = IntentDescription("Opens your direct message with someone in Parley, starting one if you have none.")
     static var parameterSummary: some ParameterSummary { Summary("Open the direct message with \(\.$person)") }
     static let openAppWhenRun = true
+    @available(macOS 26, *) static var supportedModes: IntentModes { .foreground }   // what replaces openAppWhenRun from macOS 26
     @Parameter(title: "Person") var person: PersonEntity
     @Dependency private var store: ChatStore
     @MainActor func perform() async throws -> some IntentResult {

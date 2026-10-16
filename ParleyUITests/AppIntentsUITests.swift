@@ -32,6 +32,30 @@ import XCTest
         let conversation: AnyAppEntity = try XCTUnwrap(annotations.first).entity.conversation
         XCTAssertEqual(try conversation.displayName as String, "Launch crew")
     }
+    /// The Conversation menu's Mark as Read, Pin and Mute, as Shortcuts actions on a conversation.
+    func testConversationActions() async throws {
+        let sidebar = app.descendants(matching: .any)["sidebar"].firstMatch
+        func row(_ name: String) -> XCUIElement { sidebar.descendants(matching: .any).matching(NSPredicate(format: "label BEGINSWITH %@", name)).firstMatch }
+        let entity = definitions.entities["ConversationEntity"]
+        XCTAssertTrue(row("Alex Rivera").label.contains("unread"))
+        _ = try await definitions.intents["MarkConversationReadIntent"].makeIntent(conversation: entity.makeReference(identifier: "alex")).run()
+        let unread = sidebar.descendants(matching: .any).matching(NSPredicate(format: "label BEGINSWITH %@ AND label CONTAINS %@", "Alex Rivera", "unread")).firstMatch
+        XCTAssertTrue(unread.waitForNonExistence(timeout: 5), "Mark as Read")
+
+        XCTAssertGreaterThan(row("General").frame.minY, row("Alex Rivera").frame.minY)
+        _ = try await definitions.intents["PinConversationIntent"].makeIntent(conversation: entity.makeReference(identifier: "general"), pinned: true).run()
+        let pinned = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in row("General").frame.minY < row("Alex Rivera").frame.minY }, object: nil)
+        XCTAssertEqual(XCTWaiter.wait(for: [pinned], timeout: 5), .completed, "Pin moves it into Pinned, above the direct messages")
+
+        row("Engineering").click()
+        app.menuBars.menuBarItems["Conversation"].click()
+        XCTAssertTrue(app.menuItems["Unmute"].exists)
+        app.typeKey(.escape, modifierFlags: [])
+        _ = try await definitions.intents["MuteConversationIntent"].makeIntent(conversation: entity.makeReference(identifier: "engineering"), muted: false).run()
+        app.menuBars.menuBarItems["Conversation"].click()
+        XCTAssertTrue(app.menuItems["Mute"].waitForExistence(timeout: 5), "Unmute")
+        app.typeKey(.escape, modifierFlags: [])
+    }
     /// "Start a message to Alex": the DM opens with the words in its composer, unsent.
     func testSiriDraftFillsTheComposer() async throws {
         let alex = try await definitions.entities["SiriPerson"].entities(matching: "Alex Rivera")
