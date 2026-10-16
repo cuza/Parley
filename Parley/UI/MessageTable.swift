@@ -36,6 +36,7 @@ struct MessageTable: NSViewRepresentable {
     static func makeScrollView(_ coordinator: Coordinator, identifier: String) -> NSScrollView {
         let table = TimelineTableView()
         table.swipeHandler = { [weak coordinator] event in coordinator?.handleSwipe(event) ?? false }
+        table.act = { [weak coordinator, weak table] key, row in if let table { coordinator?.act(key, on: row, in: table) } }
         table.files = coordinator.files
         coordinator.files.responder = table
         coordinator.files.messages = { [weak coordinator] in coordinator?.rows.map(\.message) ?? [] }
@@ -66,6 +67,7 @@ struct MessageTable: NSViewRepresentable {
         NotificationCenter.default.addObserver(coordinator, selector: #selector(Coordinator.tableResized), name: NSView.frameDidChangeNotification, object: table)
         NotificationCenter.default.addObserver(coordinator, selector: #selector(Coordinator.liveResizeEnded), name: NSWindow.didEndLiveResizeNotification, object: nil)
         NotificationCenter.default.addObserver(coordinator, selector: #selector(Coordinator.pictureSized), name: CardLayout.pictureSized, object: nil)
+        NotificationCenter.default.addObserver(coordinator, selector: #selector(Coordinator.textSizeChanged), name: TextSize.changed, object: nil)
         coordinator.scroll = scroll
         return scroll
     }
@@ -231,6 +233,14 @@ struct MessageTable: NSViewRepresentable {
             for i in indexes { layouts[rows[i]] = nil; _ = fresh(rows[i]) }
             keepingPlace { table.noteHeightOfRows(withIndexesChanged: indexes) }
             indexes.forEach(configureRow)
+        }
+        /// View ▸ Bigger or Smaller: every row is laid out again at the new size, keeping the place in the conversation.
+        @objc func textSizeChanged(_ note: Notification) {
+            guard let table, !rows.isEmpty else { return }
+            layouts.removeAll()
+            let all = IndexSet(rows.indices)
+            keepingPlace { table.noteHeightOfRows(withIndexesChanged: all) }
+            all.forEach(configureRow)
         }
         @objc func liveResizeEnded(_ note: Notification) {
             guard let window = scroll?.window, note.object as? NSWindow === window else { return }
@@ -455,7 +465,23 @@ struct MessageTable: NSViewRepresentable {
             configure(view, row)
             return view
         }
-        func tableView(_ tableView: NSTableView, shouldSelectRow row: Int) -> Bool { false }
+        /// A message can be selected, to act on it from the keyboard (see `TimelineTableView`).
+        func tableView(_ tableView: NSTableView, shouldSelectRow row: Int) -> Bool { rows.indices.contains(row) }
+        /// The selected message, by its key: Return replies (in its thread, in a space's timeline), R quotes it, E edits and
+        /// Delete deletes one of mine, ⌘C copies it. Writing (a quote, an edit) takes the keyboard back to the composer.
+        func act(_ key: TimelineTableView.Key, on row: Int, in table: TimelineTableView) {
+            guard rows.indices.contains(row), let parent else { return }
+            let message = rows[row].message, mine = message.sender.id == parent.meID
+            switch key {
+            case .reply where parent.kind == .space && parent.identifier == "timeline" && message.threadID == nil:
+                parent.actions.openThread(message)
+            case .reply, .quote: parent.actions.quote(message); table.leave()
+            case .edit: if mine { parent.actions.edit(message); table.leave() }
+            case .delete: if mine { parent.actions.delete(message) }
+            case .copy:
+                if let view = table.rowView(atRow: row, makeIfNecessary: false) as? MessageRowView { view.copyMessage() } else { parent.actions.copy(message) }
+            }
+        }
     }
 }
 
@@ -468,12 +494,51 @@ private extension Array where Element: Equatable {
 final class TimelineTableView: NSTableView {
     var swipeHandler: ((NSEvent) -> Bool)?
     weak var files: AttachmentFiles?
+    /// What a key does to the selected message; the coordinator decides (it knows whose message it is).
+    enum Key { case reply, quote, edit, delete, copy }
+    var act: ((Key, Int) -> Void)?
+    /// From the composer (⌘↑): the newest message, selected and in view.
+    func selectLast() {
+        guard numberOfRows > 0 else { return }
+        selectRowIndexes([numberOfRows - 1], byExtendingSelection: false)
+        scrollRowToVisible(numberOfRows - 1)
+    }
+    /// Back to the composer under this list (Esc, or after starting a quote or an edit).
+    func leave() {
+        deselectAll(nil)
+        window?.makeFirstResponder(ComposerTextView.nearest(to: self))
+    }
+    /// The list over `view` (the composer under it): in the same pane, side by side with others in the window.
+    static func nearest(to view: NSView) -> TimelineTableView? {
+        guard let content = view.window?.contentView else { return nil }
+        let x = view.convert(NSPoint(x: view.bounds.midX, y: 0), to: nil).x
+        func tables(_ v: NSView) -> [TimelineTableView] { ((v as? TimelineTableView).map { [$0] } ?? []) + v.subviews.flatMap(tables) }
+        return tables(content).first { table in
+            let frame = (table.enclosingScrollView ?? table).convert((table.enclosingScrollView ?? table).bounds, to: nil)
+            return frame.minX <= x && x <= frame.maxX
+        }
+    }
+    override func resignFirstResponder() -> Bool {
+        let resigned = super.resignFirstResponder()
+        if resigned { deselectAll(nil) }   // the selection is the keyboard's place in the list; it goes when the keyboard does
+        return resigned
+    }
+    @objc func copy(_ sender: Any?) { if selectedRow >= 0 { act?(.copy, selectedRow) } }
     override func scrollWheel(with event: NSEvent) {
         if swipeHandler?(event) != true { super.scrollWheel(with: event) }
     }
     override func keyDown(with event: NSEvent) {
         if event.charactersIgnoringModifiers == " ", files?.togglePreview() == true { return }
-        super.keyDown(with: event)
+        if event.keyCode == 53 { leave(); return }   // Esc
+        if selectedRow >= 0, event.modifierFlags.intersection([.command, .shift, .option, .control]).isEmpty {
+            let key: Key? = switch event.keyCode {
+            case 36, 76: .reply                       // Return, Enter
+            case 51, 117: .delete                     // Delete, Forward Delete
+            default: switch event.charactersIgnoringModifiers { case "r": .quote; case "e": .edit; default: nil }
+            }
+            if let key { act?(key, selectedRow); return }
+        }
+        super.keyDown(with: event)   // ↑ ↓ Home End Page Up/Down: the table's own
     }
     override func acceptsPreviewPanelControl(_ panel: QLPreviewPanel!) -> Bool { MainActor.assumeIsolated { files?.previewItems.isEmpty == false } }
     override func beginPreviewPanelControl(_ panel: QLPreviewPanel!) { MainActor.assumeIsolated { files?.beginControl(panel) } }

@@ -1,4 +1,5 @@
 import AppKit
+import SwiftUI
 import Testing
 @testable import Parley
 
@@ -27,5 +28,16 @@ import Testing
         ConversationTabs.join(second, among: [first, second], asTab: false)
         #expect(first.tabbedWindows == nil && second.tabbedWindows == nil)
         #expect(second.tabbingIdentifier == ConversationTabs.identifier)   // so Window ▸ Merge All Windows still joins them
+    }
+    /// SwiftUI sets a scene's window title back to the app's name after the window appears: the conversation's name
+    /// comes back, so its tab and the Window menu keep showing it.
+    @Test func aConversationWindowKeepsItsTitle() {
+        let window = Self.window()
+        defer { window.close() }
+        window.contentView = NSHostingView(rootView: Color.clear.background(WindowReader(ref: WindowRef(), title: "Maria Chen")))
+        window.contentView?.layoutSubtreeIfNeeded()
+        #expect(window.title == "Maria Chen")
+        window.title = "Parley"
+        #expect(window.title == "Maria Chen")
     }
 }

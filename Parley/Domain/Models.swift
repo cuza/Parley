@@ -592,6 +592,14 @@ enum Shortcut: String, CaseIterable, Sendable {
     var title: String { switch self { case .home: "Home"; case .mentions: "Mentions"; case .starred: "Starred"; case .drafts: "Drafts" } }
     var icon: String { switch self { case .home: "house"; case .mentions: "at"; case .starred: "star"; case .drafts: "doc" } }
 }
+/// Settings ▸ General's "At launch, open": Home, as Google Chat opens, or the conversation open at the last quit, as
+/// Mail and Messages reopen.
+enum LaunchLanding: String, CaseIterable {
+    case home, last
+    static let key = "launchLanding"
+    static var current: LaunchLanding { UserDefaults.standard.string(forKey: key).flatMap(Self.init) ?? .home }
+    var shortcut: Shortcut? { self == .home ? .home : nil }
+}
 /// A thread Home lists on a row of its own, beside its conversation's row: its first message and its newest reply.
 struct HomeThread: Identifiable, Hashable, Codable, Sendable {
     let id: ThreadID                  // the first message's id, as `Message.threadID` names it

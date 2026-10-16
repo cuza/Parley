@@ -66,16 +66,20 @@ struct SharedContentTests {
         store.toggleInfo()
         #expect(!store.info)
     }
-    @Test func commandIItalicizesInAComposerWithTextAndIsLeftForTheInfoPanelWhenEmpty() throws {
+    /// ⌘I is italic in the composer whatever it holds; ⇧⌘I, Conversation Info, passes through to the menu.
+    @Test func commandIItalicizesAndShiftCommandIIsLeftForTheInfoPanel() throws {
         let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 200, height: 50), styleMask: [.titled], backing: .buffered, defer: true)
         let composer = ComposerTextView(usingTextLayoutManager: false)
         window.contentView = composer
         window.makeFirstResponder(composer)
         let commandI = try #require(NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: .command, timestamp: 0, windowNumber: window.windowNumber,
                                                      context: nil, characters: "i", charactersIgnoringModifiers: "i", isARepeat: false, keyCode: 34))
-        #expect(!composer.performKeyEquivalent(with: commandI))
+        #expect(composer.performKeyEquivalent(with: commandI))   // empty: still italic
+        let shiftCommandI = try #require(NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [.command, .shift], timestamp: 0,
+                                                          windowNumber: window.windowNumber, context: nil, characters: "I",
+                                                          charactersIgnoringModifiers: "i", isARepeat: false, keyCode: 34))
         composer.string = "hello"
-        #expect(composer.performKeyEquivalent(with: commandI))
+        #expect(!composer.performKeyEquivalent(with: shiftCommandI))
     }
     @Test func membersComeFromTheBackendOnceAndFallBackToTheConversations() async {
         let fake = FakeBackend()

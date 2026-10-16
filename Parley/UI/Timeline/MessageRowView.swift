@@ -92,6 +92,17 @@ final class MessageRowView: NSTableRowView {
     private var pillBlur: NSVisualEffectView?
     /// A jump to this message: the whole row flashes, as Telegram's does, over the picture too.
     let flash = CALayer()
+    /// Selected from the keyboard: a soft accent wash behind the row, as a selected message in Mail.
+    let selectionHighlight = CALayer()
+    override var isSelected: Bool {
+        didSet {
+            CATransaction.begin(); CATransaction.setDisableActions(true)
+            effectiveAppearance.performAsCurrentDrawingAppearance {
+                selectionHighlight.backgroundColor = isSelected ? NSColor.controlAccentColor.withAlphaComponent(0.15).cgColor : nil
+            }
+            CATransaction.commit()
+        }
+    }
     /// Beside the last reaction pill while the pointer is over the row: opens the emoji picker (Slack's "add reaction").
     /// Made on the first hover: most rows are never hovered, and a button was most of what a new row cost.
     private(set) lazy var addReactionButton: NSButton = {
@@ -138,6 +149,8 @@ final class MessageRowView: NSTableRowView {
         flash.backgroundColor = NSColor.controlAccentColor.cgColor   // set again as it flashes, for the current accent
         flash.opacity = 0; flash.zPosition = 10
         layer?.addSublayer(flash)
+        selectionHighlight.zPosition = -1
+        layer?.addSublayer(selectionHighlight)
         for view: NSView in [dateLabel, avatarView, bubbleView, quoteView, quoteSenderLabel, quoteTextLabel, nameLabel, viaLabel, textView, repliesLink, sourcesLink, translationLink, thinkingLink, timeLabel, retryLink, serviceLabel, seenLabel] {
             view.autoresizingMask = []
             addSubview(view)
@@ -165,6 +178,11 @@ final class MessageRowView: NSTableRowView {
     /// height cache); otherwise it is computed at the next `layout()`.
     /// The row as VoiceOver reads it: the day when it starts one, who, the quote, the text, attachments, the time, and its
     /// state (edited, sending, not sent, seen by).
+    /// The whole message as rich text (⌘C on a selected row), or plain when it has no text view content.
+    func copyMessage() {
+        let rich = textView.attributedString()
+        if rich.length > 0 { Self.copy(rich) } else if let message = row?.message { actions.copy(message) }
+    }
     /// Where Copy writes; tests use their own.
     static var pasteboard = NSPasteboard.general
     /// The message as shown, as rich text (links, bold, lists) for Mail and Notes and plain text for the rest. The bubble's
@@ -377,7 +395,7 @@ final class MessageRowView: NSTableRowView {
         place(thinkingLink, layout.thinking)
         place(timeLabel, layout.service == nil ? layout.time : nil)
         if pictures && layout.service == nil { placePillBlur(layout.time) } else if let pillBlur { place(pillBlur, nil) }
-        CATransaction.begin(); CATransaction.setDisableActions(true); flash.frame = bounds; CATransaction.commit()
+        CATransaction.begin(); CATransaction.setDisableActions(true); flash.frame = bounds; selectionHighlight.frame = bounds; CATransaction.commit()
         place(retryLink, layout.retry)
         place(seenLabel, layout.seen)
         if hovering, let frame = addReactionFrame(layout) { place(addReactionButton, frame) }

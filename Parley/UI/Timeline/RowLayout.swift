@@ -383,17 +383,17 @@ struct RowLayout: Equatable, Sendable {
         styled(message.createdAt.formatted(date: .abbreviated, time: .omitted), .systemFont(ofSize: 11, weight: .medium), color, oneLine: true)
     }
     static func nameText(_ name: String, color: NSColor = .labelColor) -> NSAttributedString {
-        styled(name, .systemFont(ofSize: 13, weight: .semibold), color, oneLine: true)
+        styled(name, .systemFont(ofSize: 13 * TextSize.scale, weight: .semibold), color, oneLine: true)
     }
     static func viaText(_ app: String, color: NSColor = .secondaryLabelColor) -> NSAttributedString {
         styled(app, .systemFont(ofSize: 10, weight: .medium), color, oneLine: true)
     }
     static func quoteSenderText(_ quote: QuotedMessage, color: NSColor = .labelColor) -> NSAttributedString {
-        styled(quote.forwardedFrom.map { "↪ \(quote.sender) · from \($0)" } ?? quote.sender, .systemFont(ofSize: 12, weight: .semibold), color, oneLine: true)
+        styled(quote.forwardedFrom.map { "↪ \(quote.sender) · from \($0)" } ?? quote.sender, .systemFont(ofSize: 12 * TextSize.scale, weight: .semibold), color, oneLine: true)
     }
     /// The quoted text, its custom emoji drawn as pictures (as the pills draw theirs).
     static func quoteBodyText(_ quote: QuotedMessage, color: NSColor = .secondaryLabelColor) -> NSAttributedString {
-        let text = styled(quote.text, .systemFont(ofSize: 13), color)
+        let text = styled(quote.text, .systemFont(ofSize: 13 * TextSize.scale), color)
         guard let emoji = quote.emoji, !emoji.isEmpty else { return text }
         let body = NSMutableAttributedString(attributedString: text)
         for range in emoji.sorted(by: { $0.start > $1.start }) where range.start + range.length <= body.length {

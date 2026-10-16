@@ -97,6 +97,18 @@ struct HomeTests {
         #expect(time(at(12, 9, month: 9)) == "Sep 12")         // this year
         #expect(time(at(3, 9, month: 9, year: 2021)) == "Sep 2021")
     }
+    /// Settings can reopen the conversation open at the last quit instead of Home; it opens, and is read, at launch.
+    @Test func theLastConversationCanOpenAtLaunch() async throws {
+        #expect(LaunchLanding.home.shortcut == .home && LaunchLanding.last.shortcut == nil)
+        let fake = FakeBackend()
+        _ = try await fake.connect()
+        let last = try #require(try await fake.conversations().last { $0.hidden == nil })
+        let store = ChatStore(backend: fake)
+        store.selectedID = last.id   // as the launch cache restores it
+        store.shortcut = LaunchLanding.last.shortcut
+        await store.start()
+        #expect(store.shortcut == nil && store.selectedID == last.id)
+    }
     @Test func previewsKeepToOneParagraph() {
         #expect(ShortcutList.oneLine("Este es un mensaje de pruebas.\n\nSorry por el noise  🙏") == "Este es un mensaje de pruebas. Sorry por el noise 🙏")
     }
@@ -115,6 +127,40 @@ struct HomeTests {
         let table = try #require(Self.table(in: host))
         #expect(table.numberOfRows == store.homeRows().count)
         #expect(table.frame.width >= 650)
+    }
+    /// Home is a list you select in, as Mail's message list: several rows at a time, and Return opens the selected one.
+    @Test func rowsSelectAndReturnOpensTheSelectedOne() async throws {
+        let (store, _) = await started(landing: .home)
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 700, height: 600), styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        defer { window.close() }
+        window.contentView = NSHostingView(rootView: ShortcutList(store: store, shortcut: .home).frame(width: 700, height: 600))
+        window.contentView?.layoutSubtreeIfNeeded()
+        let content = try #require(window.contentView)
+        let table = try #require(Self.table(in: content))
+        #expect(table.allowsMultipleSelection)
+        let rows = store.homeRows()
+        let index = try #require(rows.firstIndex { $0.thread == nil })
+        table.selectRowIndexes([index], byExtendingSelection: false)
+        window.makeFirstResponder(table)
+        table.keyDown(with: try #require(NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [], timestamp: 0, windowNumber: window.windowNumber,
+                                                          context: nil, characters: "\r", charactersIgnoringModifiers: "\r", isARepeat: false, keyCode: 36)))
+        await eventually { store.shortcut == nil && store.selectedID == rows[index].room.id }
+        #expect(store.shortcut == nil && store.selectedID == rows[index].room.id)
+    }
+    /// A plain click opens the row it selects; the arrow keys and ⌘- or ⇧-click only select.
+    @Test func onlyAPlainClickOpensWhatItSelects() throws {
+        func mouse(_ flags: NSEvent.ModifierFlags) throws -> NSEvent {
+            try #require(NSEvent.mouseEvent(with: .leftMouseDown, location: .zero, modifierFlags: flags, timestamp: 0, windowNumber: 0,
+                                            context: nil, eventNumber: 0, clickCount: 1, pressure: 1))
+        }
+        let arrow = try #require(NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [], timestamp: 0, windowNumber: 0, context: nil,
+                                                  characters: "", charactersIgnoringModifiers: "", isARepeat: false, keyCode: 125))
+        #expect(ShortcutList.clicked(["a"], event: try mouse([])))
+        #expect(!ShortcutList.clicked(["a"], event: arrow))
+        #expect(!ShortcutList.clicked(["a"], event: try mouse(.command)))
+        #expect(!ShortcutList.clicked(["a", "b"], event: try mouse(.shift)))
+        #expect(!ShortcutList.clicked([], event: try mouse([])))
     }
     /// A long preview ends `columnGap` before the time and unread column, which keeps the row's trailing edge; the row's
     /// height is its text's, wrapped to two lines.

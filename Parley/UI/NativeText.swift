@@ -32,6 +32,7 @@ struct NativeComposer: NSViewRepresentable {
         view.usesFontPanel = false
         view.importsGraphics = false
         view.typingAttributes = ComposerTextView.visual([:])
+        NotificationCenter.default.addObserver(view, selector: #selector(ComposerTextView.textSizeChanged), name: TextSize.changed, object: nil)
         view.drawsBackground = false
         view.textContainerInset = NSSize(width: 8, height: 10)
         view.isAutomaticSpellingCorrectionEnabled = true
@@ -69,13 +70,14 @@ struct NativeComposer: NSViewRepresentable {
         if view.slashCommands != slashCommands { view.slashCommands = slashCommands }
         if focus != context.coordinator.focus {
             context.coordinator.focus = focus
-            if focus != nil { view.window?.makeFirstResponder(view) }
+            // A composer made with a focus (a thread's, as it opens) isn't in its window yet: it takes the keyboard once it is.
+            if focus != nil { DispatchQueue.main.async { view.window?.makeFirstResponder(view) } }
         }
     }
     final class Coordinator: NSObject, NSTextViewDelegate {
         var parent: NativeComposer
         var focus: String?
-        init(_ parent: NativeComposer) { self.parent = parent; focus = parent.focus }
+        init(_ parent: NativeComposer) { self.parent = parent }
         func textDidChange(_ notification: Notification) {
             if let view = notification.object as? ComposerTextView { parent.change(view.draftText, view.formatting) }
         }
@@ -122,8 +124,33 @@ struct NativeComposer: NSViewRepresentable {
 }
 /// Each composer style is a custom attribute and `visual` derives fonts, strikes and indents from them, so the
 /// attributes alone define `formatting`. Shortcuts: ⌘B bold, ⌘I italic, ⌘U underline, ⇧⌘X strikethrough, ⇧⌘C code
-/// (⌘E is "edit last message"), ⌥⇧⌘C code block, ⇧⌘I quote, ⇧⌘8 bulleted list, ⇧⌘K link (⌘K is
+/// (⌘E is "edit last message"), ⌥⇧⌘C code block, ⌘' quote, ⇧⌘8 bulleted list, ⇧⌘K link (⌘K is
 /// Jump to Conversation). The formatting bar and the right-click Format menu send the `format…` actions.
+extension ComposerTextView {
+    /// The composer under `view` (a list), in the same pane: where Esc in the list goes back to.
+    static func nearest(to view: NSView) -> ComposerTextView? {
+        let x = view.convert(NSPoint(x: view.bounds.midX, y: 0), to: nil).x
+        return all(in: view.window).first { composer in
+            let frame = composer.convert(composer.bounds, to: nil)
+            return frame.minX <= x && x <= frame.maxX
+        }
+    }
+}
+
+extension ComposerTextView {
+    /// A window's composers, in view order.
+    static func all(in window: NSWindow?) -> [ComposerTextView] {
+        func composers(_ v: NSView) -> [ComposerTextView] { ((v as? ComposerTextView).map { [$0] } ?? []) + v.subviews.flatMap(composers) }
+        return window?.contentView.map(composers) ?? []
+    }
+}
+
+/// The composer being typed in, for the Format menu: its items act on it, and are off when there is none.
+@MainActor @Observable final class ComposerFocus {
+    static let shared = ComposerFocus()
+    var composer: ComposerTextView?
+}
+
 final class ComposerTextView: NSTextView {
     var send: (() -> Void)?
     var heightChanged: ((CGFloat) -> Void)?
@@ -159,6 +186,10 @@ final class ComposerTextView: NSTextView {
         }
         // Return sends; ⇧Return and ⌥Return add a line, as in Messages.
         if event.keyCode == 36 && event.modifierFlags.intersection([.shift, .option]).isEmpty { send?(); return }
+        // ⌘↑: up into the messages, as Tab goes from Mail's search field to its list; the newest is selected.
+        if event.keyCode == 126, event.modifierFlags.contains(.command), let table = TimelineTableView.nearest(to: self) {
+            window?.makeFirstResponder(table); table.selectLast(); return
+        }
         if event.keyCode == 126 && string.isEmpty { editLast?(); return }
         if event.keyCode == 53 { cancel?(); return }
         super.keyDown(with: event)
@@ -170,11 +201,11 @@ final class ComposerTextView: NSTextView {
         guard !modifiers.contains(.option) else { return super.performKeyEquivalent(with: event) }
         let style: TextStyleRange.Style? = switch (modifiers.contains(.shift), event.keyCode == 28 ? "8" : event.charactersIgnoringModifiers?.lowercased()) {
         case (false, "b"): .bold
-        case (false, "i") where !string.isEmpty: .italic   // in an empty composer ⌘I opens the conversation info
+        case (false, "i"): .italic   // Conversation Info is ⇧⌘I
         case (false, "u"): .underline
         case (true, "x"): .strike
         case (true, "c"): .code
-        case (true, "i"): .quote
+        case (false, "'"): .quote   // Mail's quote key; ⇧⌘I is Conversation Info
         case (true, "8"): .listItem   // key code 28 is the 8 key, whatever shift makes of it
         default: nil
         }
@@ -284,7 +315,7 @@ final class ComposerTextView: NSTextView {
         menu.addItem(colors)
         menu.addItem(.separator())
         item("Bulleted List", #selector(formatList), "8", [.command, .shift])
-        item("Quote", #selector(formatQuote), "i", [.command, .shift])
+        item("Quote", #selector(formatQuote), "'")
         item("Link…", #selector(formatLink), "k", [.command, .shift])
         menu.addItem(.separator())
         item("Code", #selector(formatCode), "c", [.command, .shift])
@@ -448,10 +479,10 @@ final class ComposerTextView: NSTextView {
         typingAttributes = Self.visual(typing)
     }
     /// Display attributes for a run carrying composer style keys.
-    static func visual(_ attributes: [NSAttributedString.Key: Any]) -> [NSAttributedString.Key: Any] {
+    static func visual(_ attributes: [NSAttributedString.Key: Any], scale: CGFloat = TextSize.scale) -> [NSAttributedString.Key: Any] {
         var visual = attributes.filter { $0.key.rawValue.hasPrefix("Parley.composer.") }
         func has(_ style: TextStyleRange.Style) -> Bool { visual[key(style)] != nil }
-        var font: NSFont = has(.code) || has(.codeBlock) ? .monospacedSystemFont(ofSize: 13, weight: .regular) : .systemFont(ofSize: 14)
+        var font: NSFont = has(.code) || has(.codeBlock) ? .monospacedSystemFont(ofSize: 13 * scale, weight: .regular) : .systemFont(ofSize: 14 * scale)
         var traits: NSFontDescriptor.SymbolicTraits = []
         if has(.bold) { traits.insert(.bold) }
         if has(.italic) { traits.insert(.italic) }
@@ -473,6 +504,13 @@ final class ComposerTextView: NSTextView {
             visual[.paragraphStyle] = indent
         }
         return visual
+    }
+    /// View ▸ Bigger or Smaller: the draft and what's typed next take the new size.
+    @objc func textSizeChanged() {
+        guard let storage = textStorage else { return }
+        storage.beginEditing(); Self.restyle(storage, in: NSRange(location: 0, length: storage.length)); storage.endEditing()
+        typingAttributes = Self.visual(typingAttributes)
+        reportHeight()
     }
     private static func restyle(_ text: NSMutableAttributedString, in range: NSRange) {
         text.enumerateAttributes(in: range) { attributes, run, _ in text.setAttributes(visual(attributes), range: run) }
@@ -588,9 +626,14 @@ final class ComposerTextView: NSTextView {
         super.setSelectedRanges(ranges, affinity: affinity, stillSelecting: stillSelecting)
         if !stillSelecting { updateMention() }
     }
+    override func becomeFirstResponder() -> Bool {
+        let became = super.becomeFirstResponder()
+        if became { ComposerFocus.shared.composer = self }
+        return became
+    }
     override func resignFirstResponder() -> Bool {
         let resigned = super.resignFirstResponder()
-        if resigned { mentionPopup.close() }
+        if resigned { mentionPopup.close(); if ComposerFocus.shared.composer === self { ComposerFocus.shared.composer = nil } }
         return resigned
     }
     override func viewWillMove(toWindow newWindow: NSWindow?) {
@@ -695,7 +738,7 @@ final class ComposerTextView: NSTextView {
         super.draw(dirtyRect)
         guard let storage = textStorage, let manager = layoutManager else { return }
         let string = storage.string as NSString, origin = textContainerOrigin, padding = textContainer?.lineFragmentPadding ?? 0
-        let bullet: [NSAttributedString.Key: Any] = [.font: NSFont.systemFont(ofSize: 14), .foregroundColor: NSColor.secondaryLabelColor]
+        let bullet: [NSAttributedString.Key: Any] = [.font: NSFont.systemFont(ofSize: 14 * TextSize.scale), .foregroundColor: NSColor.secondaryLabelColor]
         storage.enumerateAttribute(Self.key(.listItem), in: NSRange(location: 0, length: storage.length)) { value, range, _ in
             guard value != nil else { return }
             string.enumerateSubstrings(in: range, options: [.byParagraphs, .substringNotRequired]) { _, _, line, _ in
@@ -746,16 +789,17 @@ struct NativeMessageText: NSViewRepresentable {
         return size
     }
     /// Restyles only real changes: SwiftUI updates rows often, and a reset clears the reader's selection and redoes link detection.
-    static func show(_ text: String, formatting: [TextStyleRange] = [], quote: QuotedMessage? = nil, own: Bool, jumbo: Int? = nil, in view: NSTextView) {
-        let key = MessageTextStyle.key(text, formatting, quote, own, jumbo: jumbo)
+    static func show(_ text: String, formatting: [TextStyleRange] = [], quote: QuotedMessage? = nil, own: Bool, jumbo: Int? = nil, in view: NSTextView,
+                     scale: CGFloat = TextSize.scale) {
+        let key = "\(scale)\u{2}" + MessageTextStyle.key(text, formatting, quote, own, jumbo: jumbo)   // a new text size shows again
         guard objc_getAssociatedObject(view, &shownKey) as? String != key else { return }
-        view.textStorage?.setAttributedString(MessageTextStyle.styled(text, formatting, quote, own: own, jumbo: jumbo))
+        view.textStorage?.setAttributedString(MessageTextStyle.styled(text, formatting, quote, own: own, jumbo: jumbo, scale: scale))
         objc_setAssociatedObject(view, &shownKey, key, .OBJC_ASSOCIATION_COPY_NONATOMIC)
     }
     /// Cached per styled content and width: the lazy stack re-measures rows on every scroll pass.
     /// Nonisolated, as `MessageTextStyle` is: card layouts are measured with the rows, off the main actor too.
     nonisolated static func size(of text: String, formatting: [TextStyleRange] = [], quote: QuotedMessage? = nil, width: CGFloat, lines: Int = 0) -> CGSize {
-        let key = "\(width)\u{0}\(lines)\u{0}\(MessageTextStyle.key(text, formatting, quote, false))" as NSString
+        let key = "\(width)\u{0}\(lines)\u{0}\(TextSize.scale)\u{0}\(MessageTextStyle.key(text, formatting, quote, false))" as NSString
         if let cached = sizes.object(forKey: key) { return cached.sizeValue }
         let used = MessageTextStyle.measure(MessageTextStyle.styled(text, formatting, quote, own: false), width: width, lines: lines).size
         let size = CGSize(width: min(width, max(20, used.width)), height: max(18, used.height))
@@ -764,6 +808,26 @@ struct NativeMessageText: NSViewRepresentable {
     }
     private static var shownKey: UInt8 = 0
     nonisolated(unsafe) private static let sizes = NSCache<NSString, NSValue>()   // NSCache is thread-safe
+}
+
+/// View ▸ Bigger and Smaller (⌘+ and ⌘−): how much larger or smaller than usual message text is drawn in the timeline
+/// and the composer, in Mail's steps, saved as a setting.
+enum TextSize {
+    static let key = "messageTextScale"
+    static let steps: [CGFloat] = [0.85, 1, 1.15, 1.3, 1.5, 1.75, 2]
+    static var scale: CGFloat { (UserDefaults.standard.object(forKey: key) as? Double).map { CGFloat($0) } ?? 1 }
+    /// Posted when the scale changes, so the timeline and composers lay their text out again.
+    static let changed = Notification.Name("Parley.textSizeChanged")
+    /// `by` steps from the step nearest `scale`, stopping at the ends.
+    static func next(from scale: CGFloat, by step: Int) -> CGFloat {
+        let nearest = steps.indices.min { abs(steps[$0] - scale) < abs(steps[$1] - scale) } ?? 1
+        return steps[min(max(nearest + step, 0), steps.count - 1)]
+    }
+    @MainActor static func set(_ value: CGFloat) {
+        guard value != scale else { return }
+        UserDefaults.standard.set(Double(value), forKey: key)
+        NotificationCenter.default.post(name: changed, object: nil)
+    }
 }
 
 /// Message text styling and TextKit 1 measurement, shared by `NativeMessageText` and the timeline's `RowLayout`
@@ -824,9 +888,11 @@ enum MessageTextStyle {
     }
     /// Message text with its `TextStyleRange`s applied (ranges past the end are skipped), list bullets, and the quoted message on top.
     /// Blocks use TextKit 1 `NSTextBlock`s (borders, padding, backgrounds), which both the view and `measure` lay out.
-    static func styled(_ text: String, _ formatting: [TextStyleRange] = [], _ quote: QuotedMessage? = nil, own: Bool, jumbo: Int? = nil) -> NSAttributedString {
-        let key = key(text, formatting, quote, own, jumbo: jumbo)
-        let font = jumbo.map(jumboFont) ?? font
+    /// `scale` is View ▸ Bigger and Smaller's (`TextSize`); large emoji keep their size.
+    static func styled(_ text: String, _ formatting: [TextStyleRange] = [], _ quote: QuotedMessage? = nil, own: Bool, jumbo: Int? = nil,
+                       scale: CGFloat = TextSize.scale) -> NSAttributedString {
+        let key = "\(scale)\u{2}" + key(text, formatting, quote, own, jumbo: jumbo)
+        let font = jumbo.map(jumboFont) ?? .systemFont(ofSize: 14 * scale), mono = NSFont.monospacedSystemFont(ofSize: 13 * scale, weight: .regular)
         if let cached = styledCache.object(forKey: key as NSString) { return cached }
         let ink = BubblePalette.ownInk
         let color: NSColor = own ? ink : .labelColor, secondary: NSColor = own ? BubblePalette.ownAccent.withAlphaComponent(0.8) : .secondaryLabelColor
@@ -846,8 +912,8 @@ enum MessageTextStyle {
             case .codeBlock:
                 styled.addAttribute(.font, value: mono, range: r)
                 styled.addAttributes([.paragraphStyle: indented(8, tail: 8), codeFillKey: tint], range: paragraph)
-            case .heading: styled.addAttribute(.font, value: NSFont.systemFont(ofSize: 17, weight: .semibold), range: r)
-            case .small: styled.addAttribute(.font, value: NSFont.systemFont(ofSize: 12), range: r)
+            case .heading: styled.addAttribute(.font, value: NSFont.systemFont(ofSize: 17 * scale, weight: .semibold), range: r)
+            case .small: styled.addAttribute(.font, value: NSFont.systemFont(ofSize: 12 * scale), range: r)
             case .nowrap:
                 let line = NSMutableParagraphStyle(); line.lineBreakMode = .byTruncatingTail
                 styled.addAttribute(.paragraphStyle, value: line, range: paragraph)
@@ -906,9 +972,9 @@ enum MessageTextStyle {
         if let quote {
             let style = indented(12)
             let header = NSMutableAttributedString(string: quote.sender + "\n", attributes: [
-                .font: NSFont.systemFont(ofSize: 12, weight: .semibold), .foregroundColor: secondary, .paragraphStyle: style, quoteBarKey: secondary])
+                .font: NSFont.systemFont(ofSize: 12 * scale, weight: .semibold), .foregroundColor: secondary, .paragraphStyle: style, quoteBarKey: secondary])
             let quoted = NSMutableAttributedString(string: quote.text + "\n", attributes: [
-                .font: NSFont.systemFont(ofSize: 13), .foregroundColor: secondary, .paragraphStyle: style, quoteBarKey: secondary])
+                .font: NSFont.systemFont(ofSize: 13 * scale), .foregroundColor: secondary, .paragraphStyle: style, quoteBarKey: secondary])
             for range in (quote.emoji ?? []).sorted(by: { $0.start > $1.start }) where range.start + range.length < quoted.length {   // as pictures
                 guard case .customEmoji(let emoji) = range.style else { continue }
                 let at = NSRange(location: range.start, length: range.length)
@@ -924,7 +990,7 @@ enum MessageTextStyle {
     /// so loading never moves the layout), or ":shortcode:" when it was deleted or has no image.
     static func customEmoji(_ emoji: CustomEmoji, attributes: [NSAttributedString.Key: Any]) -> NSAttributedString {
         guard !emoji.deleted, let picture = emoji.image else { return NSAttributedString(string: emoji.text, attributes: attributes) }
-        let font = attributes[.font] as? NSFont ?? self.font
+        let font = attributes[.font] as? NSFont ?? .systemFont(ofSize: 14 * TextSize.scale)
         let placeholder = (attributes[.foregroundColor] as? NSColor ?? .labelColor).withAlphaComponent(0.15)
         let side = ceil(font.ascender - font.descender)
         let image = NSImage(size: NSSize(width: side, height: side), flipped: false) { rect in
@@ -961,8 +1027,6 @@ enum MessageTextStyle {
     static let quoteBarKey = NSAttributedString.Key("Parley.message.quoteBar")
     /// On a code block's lines: the colour of the background drawn behind them.
     static let codeFillKey = NSAttributedString.Key("Parley.message.codeFill")
-    private static var font: NSFont { .systemFont(ofSize: 14) }   // computed: NSFont isn't Sendable, and AppKit caches fonts
-    private static var mono: NSFont { .monospacedSystemFont(ofSize: 13, weight: .regular) }
     private static let links = try! NSDataDetector(types: NSTextCheckingResult.CheckingType.link.rawValue)
     private nonisolated(unsafe) static let styledCache = NSCache<NSString, NSAttributedString>()   // NSCache is thread-safe
 }

@@ -113,14 +113,36 @@ struct ChatView: View {
         ChatCommands(
             find: fixedConversation == nil ? { find() } : nil,
             jump: { switcher = true },
-            info: {   // a composer with text keeps ⌘I for italic
-                if let composer = NSApp.keyWindow?.firstResponder as? ComposerTextView, !composer.string.isEmpty { composer.formatItalic(nil) }
-                else if room != nil { store.toggleInfo() }
-            },
+            info: { if room != nil { store.toggleInfo() } },
             editLast: { if let room, let last = store.timeline(room.id).last(where: { $0.sender.id == store.me.id }) { store.edit(last) } },
             unread: { forward in
                 if let room = Conversation.nextUnread(after: store.selectedID, in: store.conversations, forward: forward) { Task { await store.select(room.id) } }
-            })
+            },
+            room: shown,
+            threads: shown.flatMap { Self.offersThreads($0) ? { Task { await store.toggleThreads() } } : nil },
+            openInWindow: shown.flatMap { room in fixedConversation == nil ? { openWindow(value: room.id) } : nil },
+            newSection: shown.map { room in { sectionName = ""; naming = SectionNaming(moving: room.id) } },
+            leave: shown.flatMap { room in room.kind != .direct ? { leaving = room } : nil },
+            block: shown.flatMap { room in
+                if room.kind == .space { return { blocking = .space(room.id, name: room.name) } }
+                guard room.kind == .direct, room.app == nil, let partner = store.partner(in: room) else { return nil }
+                return { blocking = .person(partner, name: room.name) }
+            },
+            attach: shown.map { room in { Self.chooseFiles { urls in
+                // Into the composer being typed in (a thread's, say), else the conversation's own.
+                if let composer = ComposerFocus.shared.composer, let attach = composer.attach { attach(urls) }
+                else { store.attach(urls, conversation: room.id, thread: nil) }
+            } } })
+    }
+    /// The conversation on screen, for the menus: none while Home or another shortcut is.
+    private var shown: Conversation? { fixedConversation != nil || store.shortcut == nil ? room : nil }
+    /// File ▸ Attach Files… and the paperclip: the open panel, as Mail's.
+    static func chooseFiles(_ chosen: @escaping ([URL]) -> Void) {
+        let panel = NSOpenPanel()
+        panel.allowsMultipleSelection = true
+        panel.canChooseDirectories = false
+        panel.prompt = "Attach"
+        panel.begin { response in if response == .OK { chosen(panel.urls) } }
     }
     private var handoff: URL? { Self.handoffURL(room, shortcut: fixedConversation == nil ? store.shortcut : nil) }
     /// What Handoff offers: the conversation on screen; Home and the other shortcuts have no web page of their own.
@@ -238,7 +260,7 @@ struct ChatView: View {
                                     Text(status).font(.caption).foregroundStyle(.secondary).lineLimit(1)
                                 }
                             }.contentShape(Rectangle()) }
-                            .buttonStyle(.plain).help("Conversation info (⌘I)")
+                            .buttonStyle(.plain).help("Conversation info (⇧⌘I)")
                         }
                         .titleWithoutGlass()
                         if #available(macOS 26, *) { ToolbarSpacer(.flexible) }   // search on the right, the name on the left
@@ -410,7 +432,7 @@ struct ChatView: View {
                 if title == "Shortcuts" && fixedConversation == nil {
                     ForEach(Shortcut.allCases, id: \.self) { shortcut in
                         HStack {
-                            Label(shortcut.title, systemImage: shortcut.icon).font(.system(size: 13))
+                            Label(shortcut.title, systemImage: shortcut.icon)
                             if shortcut == .drafts, case let count = store.draftCount + store.scheduled.count, count > 0 {   // as web shows it
                                 Spacer(minLength: 0)
                                 Text("\(count)").font(.system(size: 11)).foregroundStyle(.secondary).accessibilityLabel("\(count) drafts")
@@ -424,11 +446,15 @@ struct ChatView: View {
                             .overlay(alignment: .bottomTrailing) {
                                 if let partner = store.partner(in: room) { PresenceDot(presence: store.presence[partner], size: 7).offset(x: 2, y: 2) }
                             }
-                        Text(room.name).font(.system(size: 13, weight: room.unread > 0 ? .semibold : .regular)).lineLimit(1).truncationMode(.tail).help(room.name)
+                        Text(room.name).fontWeight(room.unread > 0 ? .semibold : .regular).lineLimit(1).truncationMode(.tail).help(room.name)
                         Spacer(minLength: 0)
                         if room.muted { Image(systemName: "bell.slash").font(.caption2).foregroundStyle(.secondary) }
                         if room.unread > 0 { Text("\(room.unread)").font(.system(size: 11, weight: .semibold, design: .rounded)).padding(.horizontal, 6).padding(.vertical, 2).background(Color.accentColor, in: Capsule()).foregroundStyle(.white).monospacedDigit().fixedSize() }
                     }.tag(room.id)
+                        // A double-click opens it in a window of its own, as in Messages; ⌘-click too, as Safari's new tab
+                        // (conversation windows join as tabs). The sidebar selects one row at a time, so ⌘-click is free.
+                        .simultaneousGesture(TapGesture(count: 2).onEnded { openWindow(value: room.id) })
+                        .highPriorityGesture(TapGesture().modifiers(.command).onEnded { openWindow(value: room.id) })
                         .contextMenu {
                             if room.unread > 0 { Button("Mark as Read") { Task { await store.markRead(room.id) } } }
                             else { Button("Mark as Unread") { Task { await store.markUnread(room.id) } } }
@@ -460,7 +486,7 @@ struct ChatView: View {
                     Button { expandedSections = Self.lines(expandedSections, title, contains: !open) } label: {
                         HStack(spacing: 8) {   // laid out as a room row, so the icon and text line up with the avatars and names
                             ShowAllIcon(open: open).frame(width: 20, height: 20)
-                            Text(open ? "Show less" : "Show all").font(.system(size: 13)).foregroundStyle(.secondary)
+                            Text(open ? "Show less" : "Show all").foregroundStyle(.secondary)
                         }
                     }.buttonStyle(.plain).selectionDisabled()   // a click on the row toggles it, never selects it
                 }
@@ -469,7 +495,7 @@ struct ChatView: View {
                     Button { store.newChatRequests += 1 } label: {
                         HStack(spacing: 8) {
                             Image(systemName: "envelope.badge").foregroundStyle(Color.accentColor).frame(width: 20, height: 20)
-                            Text(Self.invitationsTitle(count)).font(.system(size: 13))
+                            Text(Self.invitationsTitle(count))
                         }
                     }.buttonStyle(.plain).selectionDisabled()
                 }
@@ -690,13 +716,7 @@ struct ComposerBar: View {
     private var scope: String { store.key(conversation.id, thread) }
     private var pendingFiles: [Attachment] { store.draftAttachments[scope] ?? [] }
     private func attach(_ urls: [URL]) { store.attach(urls, conversation: conversation.id, thread: thread) }
-    private func chooseFiles() {
-        let panel = NSOpenPanel()
-        panel.allowsMultipleSelection = true
-        panel.canChooseDirectories = false
-        panel.prompt = "Attach"
-        panel.begin { response in if response == .OK { attach(panel.urls) } }
-    }
+    private func chooseFiles() { ChatView.chooseFiles { attach($0) } }
     /// A pending attachment above the field: a thumbnail for images, the file's icon otherwise, and a remove button.
     private func chip(_ file: Attachment) -> some View {
         HStack(spacing: 6) {
@@ -744,7 +764,7 @@ struct ComposerBar: View {
                             Divider().frame(height: 16)
                             formatButton("list.bullet", "Bulleted list (⇧⌘8)", #selector(ComposerTextView.formatList(_:)))
                             Divider().frame(height: 16)
-                            formatButton("text.quote", "Quote (⇧⌘I)", #selector(ComposerTextView.formatQuote(_:)))
+                            formatButton("text.quote", "Quote (⌘')", #selector(ComposerTextView.formatQuote(_:)))
                             formatButton("link", "Link (⇧⌘K)", #selector(ComposerTextView.formatLink(_:)))
                             Divider().frame(height: 16)
                             formatButton("chevron.left.forwardslash.chevron.right", "Code (⇧⌘C)", #selector(ComposerTextView.formatCode(_:)))
@@ -883,7 +903,12 @@ struct ComposerBar: View {
             }, cancel: {   // Esc: drops the quote first, then ends an edit and closes the thread
                 if store.quoting[scope] != nil { store.quoting[scope] = nil }
                 else if store.editing[scope] != nil { endEdit() }
-                else if !detached { store.threadID = nil; store.info = false }   // a thread window leaves the main window's panes alone
+                else if !detached {   // a thread window leaves the main window's panes alone
+                    let closing = composerHandle.view, window = closing?.window
+                    store.threadID = nil; store.info = false
+                    // Out of a thread: the conversation's composer has the keyboard again.
+                    if thread != nil { DispatchQueue.main.async { if let main = ComposerTextView.all(in: window).first(where: { $0 !== closing }) { window?.makeFirstResponder(main) } } }
+                }
             }, attach: attach,
                members: store.mentionCandidates(conversation.id), spaces: store.conversations, needMembers: { Task { await store.loadMembers(conversation.id) } },
                customEmoji: store.customEmoji, needCustomEmoji: { Task { await store.loadCustomEmoji() } },
@@ -891,7 +916,8 @@ struct ComposerBar: View {
                needSlashCommands: { query in Task { await store.loadSlashCommands(conversation.id, query: query) } },
                runCommand: { command in Task { await store.run(command, in: conversation.id) } },
                loadImage: { try await store.attachmentData($0, thumbnail: $1) },
-               focus: store.quoting[scope]?.id, handle: composerHandle, height: { if fieldHeight != $0 { fieldHeight = $0 } })
+               // A thread's composer takes the keyboard as it opens.
+               focus: store.quoting[scope]?.id ?? thread, handle: composerHandle, height: { if fieldHeight != $0 { fieldHeight = $0 } })
             .frame(minWidth: 60).frame(height: min(130, max(Self.control, fieldHeight)))
             .overlay(alignment: .topLeading) {
                 if draft.isEmpty {   // aligned with the text view's inset and line padding
@@ -958,13 +984,15 @@ struct ThreadPane: View {
     @Environment(\.openWindow) private var openWindow
     @State private var parentExpanded = false   // the first message beyond its first four lines
     @State private var emojiLoads = 0   // custom emoji pictures arrived: the header redraws
+    /// The pane's thread in a window of its own; the pane closes.
+    private func detach() { if let ref = store.detachThread(in: room.id) { openWindow(value: ref) } }
     var body: some View {
         VStack(spacing: 0) {
             if !detached {
                 HStack(spacing: 12) {
                     Text(session ?? "Thread").font(.headline).lineLimit(1).truncationMode(.tail); Spacer()
                     ThreadFollowButton(store: store, thread: thread)
-                    Button { if let ref = store.detachThread(in: room.id) { openWindow(value: ref) } } label: { Image(systemName: "macwindow.badge.plus") }
+                    Button(action: detach) { Image(systemName: "macwindow.badge.plus") }
                         .buttonStyle(.plain).help("Open in new window")
                     Button { store.threadID = nil } label: { Image(systemName: "xmark") }.buttonStyle(.plain).help("Close")
                 }.padding()
@@ -994,6 +1022,8 @@ struct ThreadPane: View {
             }
             TimelineView(store: store, conversation: room, thread: thread, detached: detached, withHead: session != nil).id(thread)
         }
+        // ⌘O while the pane has the keyboard pops the thread out, as its button does.
+        .focusedValue(\.openFocusedInWindow, detached ? nil : FocusedOpen(title: "Open Thread in New Window", open: detach))
     }
     /// Its custom emoji's pictures, which the text draws from `ImageCache` once they are there.
     private func loadEmoji(in message: Message) async {
@@ -1178,8 +1208,26 @@ struct ChatCommands {
     var info: () -> Void
     var editLast: () -> Void
     var unread: (_ forward: Bool) -> Void
+    /// The conversation on screen, which the Conversation menu acts on; nil on Home and the other shortcuts.
+    var room: Conversation? = nil
+    var threads: (() -> Void)? = nil        // nil where the conversation has no threads
+    var openInWindow: (() -> Void)? = nil
+    var newSection: (() -> Void)? = nil
+    var leave: (() -> Void)? = nil          // asks first
+    var block: (() -> Void)? = nil          // asks first
+    var attach: (() -> Void)? = nil
 }
-extension FocusedValues { @Entry var chatCommands: ChatCommands? }
+extension FocusedValues {
+    @Entry var chatCommands: ChatCommands?
+    /// Conversation ▸ Open in New Window for what has the keyboard, over the conversation on screen: the rows selected in
+    /// Home, Mentions or Starred, or the thread pane.
+    @Entry var openFocusedInWindow: FocusedOpen?
+}
+/// What Open in New Window opens for the view with the keyboard, and the menu item's title for it.
+struct FocusedOpen {
+    var title = "Open in New Window"
+    var open: () -> Void
+}
 
 /// Message search (⌘F).
 struct FinderPanel: View {
@@ -1453,7 +1501,7 @@ extension ToolbarContent {
 final class WindowRef { weak var window: NSWindow? }
 final class WidthRef { var value: CGFloat = 0 }
 /// Records its view's window in `ref` once it is in one, hands it to `appeared`, and keeps its title at `title` when set.
-private struct WindowReader: NSViewRepresentable {
+struct WindowReader: NSViewRepresentable {
     let ref: WindowRef
     var title: String? = nil
     var appeared: ((NSWindow) -> Void)? = nil
@@ -1466,12 +1514,19 @@ private struct WindowReader: NSViewRepresentable {
         let ref: WindowRef
         let appeared: ((NSWindow) -> Void)?
         var title: String?
+        private var watch: NSKeyValueObservation?
         init(ref: WindowRef, appeared: ((NSWindow) -> Void)?) { self.ref = ref; self.appeared = appeared; super.init(frame: .zero) }
         required init?(coder: NSCoder) { fatalError() }
         override func viewDidMoveToWindow() {
             super.viewDidMoveToWindow(); ref.window = window
+            watch = nil
             guard let window else { return }
             if let title { window.title = title }   // before it joins a tab group, so the tab shows the name
+            // SwiftUI sets the scene's window title back to the app's name after this, at a moment that varies: put
+            // the name back each time, so the tab and the Window menu show it.
+            watch = window.observe(\.title) { [weak self] window, _ in
+                MainActor.assumeIsolated { if let title = self?.title, window.title != title { window.title = title } }
+            }
             appeared?(window)
         }
     }

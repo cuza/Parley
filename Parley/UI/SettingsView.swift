@@ -176,6 +176,7 @@ private struct AppearanceSettings: View {
     @AppStorage(BubblePalette.colorKey(dark: false)) private var bubbleColor = ""
     @AppStorage(BubblePalette.colorKey(dark: true)) private var darkBubbleColor = ""
     @AppStorage(ConversationTabs.key) private var windowsAsTabs = true
+    @AppStorage(TextSize.key) private var textScale = 1.0   // follows View ▸ Bigger and Smaller too
     /// One appearance's wallpaper and bubble colour.
     private func look(_ title: String, wallpaper: Binding<Wallpaper>, bubble: Binding<String>) -> some View {
         LabeledContent(title) {
@@ -218,6 +219,20 @@ private struct AppearanceSettings: View {
                 Footer("Plain lists every message on the left with names and avatars, like Telegram's list mode.")
             }
             Section {
+                // One stop per step of View ▸ Bigger and Smaller, as Messages' text size slider.
+                Slider(value: Binding(get: { Double(TextSize.steps.firstIndex(of: TextSize.next(from: textScale, by: 0)) ?? 1) },
+                                      set: { TextSize.set(TextSize.steps[Int($0.rounded())]) }),
+                       in: 0...Double(TextSize.steps.count - 1), step: 1) {
+                    Text("Text size")
+                } minimumValueLabel: {
+                    Text("A").font(.caption).accessibilityLabel("Smaller")
+                } maximumValueLabel: {
+                    Text("A").font(.title2).accessibilityLabel("Bigger")
+                }
+            } footer: {
+                Footer("View ▸ Bigger (⌘+) and Smaller (⌘−) change it too.")
+            }
+            Section {
                 Toggle("Open conversation windows as tabs", isOn: $windowsAsTabs)
             } header: { Text("Windows") } footer: {
                 Footer("A conversation opened in a new window joins the conversation window already open as a tab. Window ▸ Merge All Windows joins them either way.")
@@ -228,6 +243,7 @@ private struct AppearanceSettings: View {
 
 /// "Open Parley at login", read from macOS each time Settings shows it, since it can change in System Settings too.
 private struct LoginItemSection: View {
+    @AppStorage(LaunchLanding.key) private var landing = LaunchLanding.home
     @State private var on = false
     @State private var needsApproval = false
     @State private var failure: String?
@@ -246,6 +262,10 @@ private struct LoginItemSection: View {
                         NSWorkspace.shared.open(URL(string: "x-apple.systempreferences:com.apple.LoginItems-Settings.extension")!)
                     }
                 } label: { Text("macOS needs your approval in Login Items.").foregroundStyle(.orange) }
+            }
+            Picker("At launch, open", selection: $landing) {
+                Text("Home").tag(LaunchLanding.home)
+                Text("The last conversation").tag(LaunchLanding.last)
             }
         } footer: {
             if let failure { Footer(failure, color: .red) }

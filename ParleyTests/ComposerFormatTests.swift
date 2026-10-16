@@ -125,6 +125,10 @@ struct FormatAnnotationTests {
         #expect(!asked)
         #expect(try press("k", [.command, .shift]))   // Add Link is ⇧⌘K
         #expect(asked)
+        #expect(try press("'", .command))   // Quote is ⌘', as Mail's
+        #expect(try !press("i", [.command, .shift]))   // ⇧⌘I is Conversation Info
+        view.load("", [])
+        #expect(try press("i", .command))   // ⌘I is italic, even in an empty composer
     }
     @Test func rightClickOffersAFormatMenu() throws {
         let (view, _) = composer("abc")
@@ -136,5 +140,19 @@ struct FormatAnnotationTests {
             #expect(titles.contains(title), "\(title)")
         }
         #expect(format.items.first { $0.title == "Underline" }?.keyEquivalent == "u")
+    }
+}
+
+/// The Format menu acts on the composer being typed in, and is off when none is.
+@MainActor struct ComposerFocusTests {
+    @Test func theFocusedComposerIsTracked() {
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 300, height: 100), styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        let composer = ComposerTextView(frame: NSRect(x: 0, y: 0, width: 300, height: 40)), other = NSTextField(frame: NSRect(x: 0, y: 50, width: 300, height: 24))
+        window.contentView?.addSubview(composer); window.contentView?.addSubview(other)
+        window.makeFirstResponder(composer)
+        #expect(ComposerFocus.shared.composer === composer)
+        window.makeFirstResponder(other)
+        #expect(ComposerFocus.shared.composer == nil)
     }
 }

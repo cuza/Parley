@@ -5,6 +5,12 @@ import SwiftUI
 struct ShortcutList: View {
     @Bindable var store: ChatStore
     let shortcut: Shortcut
+    /// Rows chosen with the arrow keys, ⌘-click or ⇧-click, as in Mail's message list. Return or a double-click opens
+    /// one, and the context menu acts on all of them.
+    @State private var selection = Set<String>()
+    /// Choosing rows takes the keyboard from the sidebar, so the arrow keys and Return then act on the list.
+    @FocusState private var listFocused: Bool
+    @Environment(\.openWindow) private var openWindow
     var body: some View {
         // Home reads its rows, not the shortcut's messages (a scan of every message on each update).
         let items = shortcut == .home ? [] : store.shortcutMessages(shortcut)
@@ -17,7 +23,7 @@ struct ShortcutList: View {
                         Toggle(isOn: $store.homeThreadsOnly) { Label("Threads", systemImage: "bubble.left.and.text.bubble.right") }.toggleStyle(.button).controlSize(.small)
                         Spacer()
                     }
-                    .font(.system(size: 12)).padding(.horizontal, 14).padding(.vertical, 6)
+                    .font(.callout).padding(.horizontal, 14).padding(.vertical, 6)
                     if rows.isEmpty {
                         let filtered = store.homeUnreadOnly || store.homeThreadsOnly
                         ContentUnavailableView {
@@ -29,30 +35,59 @@ struct ShortcutList: View {
                         }
                             .frame(maxWidth: .infinity, maxHeight: .infinity)   // fills the pane, so the filter bar stays at the top
                     } else {
-                        List(rows) { row in
-                            if let thread = row.thread {
-                                Button { Task { await store.openHomeThread(thread) } } label: { threadRow(row.room, thread) }
-                                    .buttonStyle(.plain)
-                                    .contextMenu { Button("Unfollow Thread") { Task { await store.setFollowing(false, thread: thread.id) } } }
-                                    .listRowBackground(store.threadID == thread.id ? Color.accentColor.opacity(0.15) : nil)
-                            } else {
-                                Button { Task { await store.select(row.room.id) } } label: { homeRow(row.room, row.last) }
-                                    .buttonStyle(.plain)
-                                    .contextMenu { if row.room.unread > 0 { Button("Mark as Read") { Task { await store.markRead(row.room.id) } } } }
-                                    .task(id: store.me.id) { await store.loadPreview(row.room.id) }   // again once the account is known
+                        List(rows, selection: $selection) { row in
+                            Group {
+                                if let thread = row.thread {
+                                    threadRow(row.room, thread)
+                                        .listRowBackground(store.threadID == thread.id && !selection.contains(row.id) ? Color.accentColor.opacity(0.15) : nil)
+                                } else {
+                                    homeRow(row.room, row.last)
+                                        .task(id: store.me.id) { await store.loadPreview(row.room.id) }   // again once the account is known
+                                }
                             }
+                            .accessibilityAction { open(row) }
+                        }
+                        .contextMenu(forSelectionType: String.self) { ids in
+                            let chosen = rows.filter { ids.contains($0.id) }
+                            let unread = chosen.filter { $0.thread == nil && $0.room.unread > 0 }, threads = chosen.compactMap(\.thread)
+                            if !chosen.isEmpty { Button("Open in New Window") { openInWindows(chosen) }; Divider() }
+                            if !unread.isEmpty { Button("Mark as Read") { Task { for row in unread { await store.markRead(row.room.id) } } } }
+                            if !threads.isEmpty { Button(threads.count == 1 ? "Unfollow Thread" : "Unfollow Threads") { Task { for thread in threads { await store.setFollowing(false, thread: thread.id) } } } }
+                        } primaryAction: { ids in
+                            if let row = rows.first(where: { ids.contains($0.id) }) { open(row) }
+                        }
+                        .focusedValue(\.openFocusedInWindow, selection.isEmpty ? nil : FocusedOpen { openInWindows(rows.filter { selection.contains($0.id) }) })
+                        .focused($listFocused)
+                        .background(FreeKeyboardWatcher { listFocused = true })
+                        .onChange(of: selection) {
+                            if !selection.isEmpty { listFocused = true }
+                            if Self.clicked(selection), let row = rows.first(where: { selection.contains($0.id) }) { open(row) }
                         }
                         .accessibilityIdentifier("shortcut-home")
                     }
                 }
             } else if !items.isEmpty {
-                List(items) { message in
-                    Button { Task { await store.showInChat(message) } } label: { row(message) }
-                        .buttonStyle(.plain)
-                        .contextMenu {
-                            Button(message.starred ? "Unstar" : "Star") { Task { await store.setStarred(!message.starred, message) } }
-                        }
+                List(items, selection: $selection) { message in
+                    row(message)
+                        .accessibilityAction { Task { await store.showInChat(message) } }
                         .onAppear { if message.id == items.last?.id { Task { await store.loadShortcut(shortcut, more: true) } } }
+                }
+                .contextMenu(forSelectionType: String.self) { ids in
+                    let chosen = items.filter { ids.contains($0.id) }, starred = chosen.allSatisfy(\.starred)
+                    if !chosen.isEmpty { Button("Open in New Window") { openInWindows(chosen) }; Divider() }
+                    if !chosen.isEmpty { Button(starred ? "Unstar" : "Star") { Task { for message in chosen { await store.setStarred(!starred, message) } } } }
+                } primaryAction: { ids in
+                    if let message = items.first(where: { ids.contains($0.id) }) { Task { await store.showInChat(message) } }
+                }
+                .focusedValue(\.openFocusedInWindow, selection.isEmpty ? nil : FocusedOpen { openInWindows(items.filter { selection.contains($0.id) }) })
+                .focused($listFocused)
+                .background(FreeKeyboardWatcher { listFocused = true })
+                .onChange(of: selection) {
+                    if !selection.isEmpty { listFocused = true }
+                    if Self.clicked(selection), let message = items.first(where: { selection.contains($0.id) }) { Task { await store.showInChat(message) } }
+                }
+                .onCopyCommand {
+                    items.filter { selection.contains($0.id) }.map { NSItemProvider(object: TextStyleRange.plain($0.text, $0.formatting) as NSString) }
                 }
                 .accessibilityIdentifier("shortcut-\(shortcut.rawValue)")
             } else if store.loading.contains("shortcut/\(shortcut.rawValue)") {
@@ -64,6 +99,32 @@ struct ShortcutList: View {
         }
         .navigationTitle(shortcut.title)
     }
+    /// Open in New Window: each conversation in a window of its own (they join as tabs), a thread row in a thread window.
+    private func openInWindows(_ rows: [HomeRow]) {
+        for row in rows {
+            if let thread = row.thread { openWindow(value: ThreadRef(conversation: row.room.id, thread: thread.id)) } else { openWindow(value: row.room.id) }
+        }
+    }
+    /// A Mention or Starred message's conversation, each once.
+    private func openInWindows(_ messages: [Message]) {
+        var seen = Set<ConversationID>()
+        for id in messages.map(\.conversationID) where seen.insert(id).inserted { openWindow(value: id) }
+    }
+    /// A Home row opens its conversation, or its thread beside Home.
+    private func open(_ row: HomeRow) {
+        Task { if let thread = row.thread { await store.openHomeThread(thread) } else { await store.select(row.room.id) } }
+    }
+    /// Nothing has the keyboard: the window itself is first responder, and keys would beep.
+    static func keyboardIsFree(_ window: NSWindow? = NSApp.keyWindow) -> Bool {
+        guard let window else { return true }
+        return window.firstResponder == nil || window.firstResponder === window
+    }
+    /// A plain click still opens a row, as before these lists had a selection; the arrow keys and ⌘- or ⇧-click only
+    /// select.
+    static func clicked(_ selection: Set<String>, event: NSEvent? = NSApp.currentEvent) -> Bool {
+        guard selection.count == 1, let event, event.type == .leftMouseDown || event.type == .leftMouseUp else { return false }
+        return event.modifierFlags.isDisjoint(with: [.command, .shift])
+    }
     /// Name and newest message, as "You: …" or "Sender: …", beside a column of time over unread count. The text ends
     /// `columnGap` before that column, which keeps its own trailing edge.
     func homeRow(_ room: Conversation, _ last: Message?) -> some View {
@@ -72,14 +133,14 @@ struct ShortcutList: View {
             HStack(alignment: .top, spacing: Self.columnGap) {
                 VStack(alignment: .leading, spacing: 3) {
                     HStack(spacing: 4) {
-                        Text(room.name).font(.system(size: 13, weight: room.unread > 0 ? .semibold : .regular)).lineLimit(1)
+                        Text(room.name).font(.body.weight(room.unread > 0 ? .semibold : .regular)).lineLimit(1)
                         if room.muted { Image(systemName: "bell.slash").font(.caption2).foregroundStyle(.secondary) }
                         Spacer(minLength: 0)
                     }
                     Group {
                         if let last { line(last) } else { Text(" ") }
                     }
-                    .font(.system(size: 13, weight: room.unread > 0 ? .medium : .regular)).lineLimit(2).frame(maxWidth: .infinity, alignment: .leading)
+                    .font(.body.weight(room.unread > 0 ? .medium : .regular)).lineLimit(2).frame(maxWidth: .infinity, alignment: .leading)
                     .reportFrame("preview")
                 }
                 VStack(alignment: .trailing, spacing: 3) {
@@ -114,14 +175,14 @@ struct ShortcutList: View {
             HStack(alignment: .top, spacing: Self.columnGap) {
                 VStack(alignment: .leading, spacing: 3) {
                     HStack(spacing: 4) {
-                        Text(room.name).font(.system(size: 13, weight: thread.unread ? .semibold : .regular)).lineLimit(1)
-                        Text("· Thread").font(.system(size: 12)).foregroundStyle(.secondary).fixedSize()
+                        Text(room.name).font(.body.weight(thread.unread ? .semibold : .regular)).lineLimit(1)
+                        Text("· Thread").font(.callout).foregroundStyle(.secondary).fixedSize()
                         Spacer(minLength: 0)
                     }
-                    line(thread.head).font(.system(size: 13)).lineLimit(1).frame(maxWidth: .infinity, alignment: .leading)
+                    line(thread.head).font(.body).lineLimit(1).frame(maxWidth: .infinity, alignment: .leading)
                     HStack(alignment: .firstTextBaseline, spacing: 4) {
                         Text("└").foregroundStyle(.tertiary).accessibilityHidden(true)
-                        line(thread.latest).font(.system(size: 13, weight: thread.unread ? .medium : .regular)).lineLimit(2)
+                        line(thread.latest).font(.body.weight(thread.unread ? .medium : .regular)).lineLimit(2)
                     }.frame(maxWidth: .infinity, alignment: .leading)
                 }
                 VStack(alignment: .trailing, spacing: 5) {   // the time over the unread dot, as a conversation's row has it
@@ -154,15 +215,15 @@ struct ShortcutList: View {
             Avatar(name: message.sender.name, size: 32, url: message.sender.avatarURL)
             VStack(alignment: .leading, spacing: 3) {
                 HStack(spacing: 4) {
-                    Text(message.sender.name).font(.system(size: 13, weight: .semibold)).lineLimit(1)
+                    Text(message.sender.name).font(.body.weight(.semibold)).lineLimit(1)
                     Text("· \(store.conversations.first { $0.id == message.conversationID }?.name ?? "Conversation")")
-                        .font(.system(size: 13)).foregroundStyle(.secondary).lineLimit(1)
+                        .font(.body).foregroundStyle(.secondary).lineLimit(1)
                     Spacer(minLength: 8)
                     if message.starred { Image(systemName: "star.fill").font(.caption2).foregroundStyle(.yellow).accessibilityLabel("Starred") }
                     Text(message.createdAt.formatted(date: .abbreviated, time: .shortened)).font(.caption).foregroundStyle(.secondary).fixedSize()
                 }
                 Text(QuotedMessage.summary(text: TextStyleRange.plain(message.text, message.formatting), attachments: message.attachments))
-                    .font(.system(size: 13)).lineLimit(3).frame(maxWidth: .infinity, alignment: .leading)
+                    .font(.body).lineLimit(3).frame(maxWidth: .infinity, alignment: .leading)
             }
         }
         .padding(.vertical, 4).contentShape(Rectangle())
@@ -197,12 +258,12 @@ struct DraftList: View {
             Avatar(name: room?.name ?? "", space: room?.kind == .space, size: 32, url: room?.avatarURL, emoji: room?.emoji)
             VStack(alignment: .leading, spacing: 3) {
                 HStack(spacing: 4) {
-                    Text(room?.name ?? "Conversation").font(.system(size: 13, weight: .semibold)).lineLimit(1)
-                    if draft.threadID != nil { Text("· Thread").font(.system(size: 12)).foregroundStyle(.secondary).fixedSize() }
+                    Text(room?.name ?? "Conversation").font(.body.weight(.semibold)).lineLimit(1)
+                    if draft.threadID != nil { Text("· Thread").font(.callout).foregroundStyle(.secondary).fixedSize() }
                     Spacer(minLength: 8)
                     if draft.updatedAt != .distantPast { Text(ShortcutList.time(draft.updatedAt)).font(.caption).foregroundStyle(.secondary).fixedSize() }
                 }
-                Text(TextStyleRange.plain(draft.text, draft.formatting)).font(.system(size: 13)).lineLimit(2).frame(maxWidth: .infinity, alignment: .leading)
+                Text(TextStyleRange.plain(draft.text, draft.formatting)).font(.body).lineLimit(2).frame(maxWidth: .infinity, alignment: .leading)
             }
         }
         .padding(.vertical, 4).contentShape(Rectangle())
@@ -218,5 +279,25 @@ struct RowFrames: PreferenceKey {
 extension View {
     func reportFrame(_ id: String) -> some View {
         background(GeometryReader { Color.clear.preference(key: RowFrames.self, value: [id: $0.frame(in: .named("homeRow"))]) })
+    }
+}
+
+/// Hands the keyboard to a list whenever its window's keyboard has nowhere to go: at launch, and when the composer that
+/// had it leaves with its conversation, which can be a few run-loop turns after the list appears. A click in the sidebar
+/// keeps the keyboard there, as in Mail; Tab moves on to the list.
+struct FreeKeyboardWatcher: NSViewRepresentable {
+    var free: () -> Void
+    func makeNSView(context: Context) -> Watcher { Watcher() }
+    func updateNSView(_ view: Watcher, context: Context) { view.free = free }
+    final class Watcher: NSView {
+        var free: (() -> Void)?
+        private var watch: NSKeyValueObservation?
+        override func viewDidMoveToWindow() {
+            super.viewDidMoveToWindow()
+            watch = window?.observe(\.firstResponder, options: [.initial, .new]) { [weak self] window, _ in
+                // Not inside the change: focus moves after it.
+                DispatchQueue.main.async { if ShortcutList.keyboardIsFree(window) { self?.free?() } }
+            }
+        }
     }
 }

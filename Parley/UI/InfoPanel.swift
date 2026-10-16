@@ -16,7 +16,7 @@ struct NotificationLevelPicker: View {
     }
 }
 
-/// The conversation's info, in the inspector (⌘I or the title), as Messages and Telegram show it: who or what it is,
+/// The conversation's info, in the inspector (⇧⌘I or the title), as Messages and Telegram show it: who or what it is,
 /// mute, pin and search, the members of a space or group, and the media, files and links its loaded messages share.
 struct InfoPanel: View {
     @Bindable var store: ChatStore

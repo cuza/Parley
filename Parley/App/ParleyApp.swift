@@ -6,7 +6,8 @@ struct ParleyApp: App {
     // The test host launches this app; keep it off the network and away from the real cache.
     // UI tests launch it with -uiTestingLongHistory: a long, paged fake history for scroll tests;
     // -uiTestingManyConversations: 320 more conversations, for sidebar tests.
-    // -uiTestingDemo: the demo workspace (README screenshots), with -uiTestingDark for dark mode.
+    // -uiTestingDemo: the demo workspace (README screenshots), with -uiTestingDark for dark mode and -uiTestingHome to
+    // open on Home, as a real launch does.
     @State private var store: ChatStore
     @NSApplicationDelegateAdaptor private var appDelegate: AppDelegate
     @State private var signIn: SignInFlow
@@ -14,6 +15,9 @@ struct ParleyApp: App {
     private let webSignIn: WebViewSignIn
     private let updates: Updates
     private let spotlight: ConversationSpotlight?   // the signed-in account's conversations; none for demo and test runs
+    /// Conversation and thread windows come back at launch, except in test runs: a window left by an earlier test would
+    /// cover the main window the next test clicks in.
+    private let restoresWindows: SceneRestorationBehavior
     init() {
         AppearanceMode.apply()
         let authorizer = WebSessionAuthorizer()
@@ -26,6 +30,7 @@ struct ParleyApp: App {
         #else
         let arguments: [String] = [], testHost = false
         #endif
+        restoresWindows = testHost || arguments.contains(where: { $0.hasPrefix("-uiTesting") }) ? .disabled : .automatic
         // Tests and the demo workspaces keep no pictures on disk: they'd share the Debug build's folder.
         if testHost
             || arguments.contains(where: { $0.hasPrefix("-uiTesting") }) { ImageCache.directory = nil; CardLayout.sizesFile = nil }
@@ -42,10 +47,11 @@ struct ParleyApp: App {
             if arguments.contains("-uiTestingDemo") {   // the README shots don't follow the Mac's appearance
                 NSApplication.shared.appearance = NSAppearance(named: arguments.contains("-uiTestingDark") ? .darkAqua : .aqua)
             }
+            if arguments.contains("-uiTestingHome") { store.shortcut = .home }   // as a real launch opens
         } else {
             live = true
             store = ChatStore(backend: DynamiteBackend(authorizer: authorizer), cache: .dynamite)
-            store.shortcut = .home   // Google Chat opens on Home; the UI-testing workspaces keep opening a conversation
+            store.shortcut = LaunchLanding.current.shortcut   // the UI-testing workspaces keep opening a conversation
             _ = SystemNotifier(store: store)   // the store keeps it; registering now catches the click that launched the app
         }
         _store = State(initialValue: store)
@@ -131,10 +137,12 @@ struct ParleyApp: App {
             if let id = id { ChatView(store: store, fixedConversation: id).environment(signIn) }
         }
             .defaultSize(width: 520, height: 680)
+            .restorationBehavior(restoresWindows)
         WindowGroup(for: ThreadRef.self) { $ref in
             if let ref { ThreadWindow(store: store, ref: ref).environment(signIn) }
         }
             .defaultSize(width: 420, height: 640)
+            .restorationBehavior(restoresWindows)
         Settings { SettingsView(store: store).environment(signIn) }
         // Opened from Settings ▸ Advanced and Help ▸ Report a Problem, not the Window menu.
         Window("Connection Diagnostics", id: "connection-diagnostics") {
@@ -149,13 +157,23 @@ struct ParleyApp: App {
 struct ChatMenuCommands: Commands {
     let store: ChatStore
     @FocusedValue(\.chatCommands) private var chat
+    @FocusedValue(\.openFocusedInWindow) private var openFocused
     var body: some Commands {
         CommandGroup(after: .textEditing) {
             Button("Search Messages…") { chat?.find?() }.keyboardShortcut("f").disabled(chat?.find == nil)
             Button("Edit Last Message") { chat?.editLast() }.keyboardShortcut("e").disabled(chat == nil)
         }
         CommandGroup(after: .sidebar) {
-            Button("Conversation Info") { chat?.info() }.keyboardShortcut("i").disabled(chat == nil)
+            Button("Conversation Info") { chat?.info() }.keyboardShortcut("i", modifiers: [.command, .shift]).disabled(chat == nil)
+            Divider()
+            // As Mail's: message text in the timeline and composer, saved as a setting.
+            Button("Actual Size") { TextSize.set(1) }.keyboardShortcut("0")
+            Button("Bigger") { TextSize.set(TextSize.next(from: TextSize.scale, by: 1)) }.keyboardShortcut("+")
+            Button("Smaller") { TextSize.set(TextSize.next(from: TextSize.scale, by: -1)) }.keyboardShortcut("-")
+        }
+        CommandGroup(after: .newItem) {
+            Divider()
+            Button("Attach Files…") { chat?.attach?() }.keyboardShortcut("a", modifiers: [.command, .shift]).disabled(chat?.attach == nil)
         }
         CommandMenu("Go") {
             Button("Back") { Task { await store.goBack() } }.keyboardShortcut("[").disabled(!store.canGoBack)
@@ -165,6 +183,80 @@ struct ChatMenuCommands: Commands {
             // ⌥⌘, not ⌥: ⌥↑/⌥↓ move by paragraph in every text field.
             Button("Next Unread") { chat?.unread(true) }.keyboardShortcut(.downArrow, modifiers: [.option, .command]).disabled(chat == nil)
             Button("Previous Unread") { chat?.unread(false) }.keyboardShortcut(.upArrow, modifiers: [.option, .command]).disabled(chat == nil)
+        }
+        ConversationMenu(store: store, chat: chat, openFocused: openFocused)
+        FormatMenu(composer: ComposerFocus.shared.composer)
+    }
+}
+
+/// Conversation: what the sidebar's menu does to a conversation, for the one on screen, as Mail's Mailbox and Message
+/// menus act on what is open. Leave and Block ask first, in the window.
+struct ConversationMenu: Commands {
+    let store: ChatStore
+    let chat: ChatCommands?
+    var openFocused: FocusedOpen? = nil   // what has the keyboard: rows selected in Home, Mentions or Starred, or the thread pane
+    var body: some Commands {
+        CommandMenu("Conversation") {
+            let room = chat?.room
+            Button(room.map { $0.unread > 0 } == true ? "Mark as Read" : "Mark as Unread") {
+                guard let room else { return }
+                Task { if room.unread > 0 { await store.markRead(room.id) } else { await store.markUnread(room.id) } }
+            }.keyboardShortcut("u", modifiers: [.command, .shift]).disabled(room == nil)
+            Button("Mark All as Read") { Task { await store.markAllRead() } }
+                .keyboardShortcut("u", modifiers: [.command, .shift, .option]).disabled(store.unreadCount == 0)
+            Divider()
+            Button(room?.pinned == true ? "Unpin" : "Pin") { if let room { Task { await store.setPinned(!room.pinned, room.id) } } }.disabled(room == nil)
+            Button(room?.muted == true ? "Unmute" : "Mute") { if let room { Task { await store.setMuted(!room.muted, room.id) } } }.disabled(room == nil)
+            if let room { NotificationLevelPicker(store: store, room: room) } else { Menu("Notifications") {}.disabled(true) }
+            Divider()
+            Button(store.threadsShown && store.threadID == nil ? "Hide Threads" : "Show Threads") { chat?.threads?() }
+                .keyboardShortcut("t", modifiers: [.command, .shift]).disabled(chat?.threads == nil)
+            let open = openFocused?.open ?? chat?.openInWindow
+            Button(openFocused?.title ?? "Open in New Window") { open?() }.keyboardShortcut("o").disabled(open == nil)
+            Button("Copy Link") { if let room { ChatLink.copy(ChatLink.url(room.id)) } }.disabled(room == nil)
+            Divider()
+            Menu("Move To") {
+                if let room {
+                    if room.section != nil { Button(room.kind == .space ? "Spaces" : room.app != nil ? "Apps" : "Direct messages") { Task { await store.moveConversation(room.id, to: nil) } } }
+                    ForEach(store.sections.filter { $0.kind == .custom && $0.key != room.section }) { section in
+                        Button(section.name) { Task { await store.moveConversation(room.id, to: section.key) } }
+                    }
+                    Divider()
+                    Button("New Section…") { chat?.newSection?() }
+                }
+            }.disabled(room == nil || room?.app == .gemini)
+            Button("Hide") { if let room { Task { await store.hide(room.id) } } }.disabled(room == nil)
+            Button("Leave…") { chat?.leave?() }.disabled(chat?.leave == nil)
+            Button("Block…") { chat?.block?() }.disabled(chat?.block == nil)
+        }
+    }
+}
+
+/// Format: the composer's formatting, as Mail's Format menu, with the keys the composer already takes. Off unless a
+/// composer is being typed in.
+struct FormatMenu: Commands {
+    let composer: ComposerTextView?
+    var body: some Commands {
+        CommandMenu("Format") {
+            Group {
+                Button("Bold") { composer?.formatBold(nil) }.keyboardShortcut("b")
+                Button("Italic") { composer?.formatItalic(nil) }.keyboardShortcut("i")
+                Button("Underline") { composer?.formatUnderline(nil) }.keyboardShortcut("u")
+                Button("Strikethrough") { composer?.formatStrike(nil) }.keyboardShortcut("x", modifiers: [.command, .shift])
+                Menu("Text Color") {
+                    Button("Default") { composer?.color(nil) }
+                    ForEach(TextColor.allCases, id: \.self) { color in Button(color.name) { composer?.color(color) } }
+                }
+                Divider()
+                Button("Bulleted List") { composer?.formatList(nil) }.keyboardShortcut("8", modifiers: [.command, .shift])
+                Button("Quote") { composer?.formatQuote(nil) }.keyboardShortcut("'")
+                Button("Link…") { composer?.formatLink(nil) }.keyboardShortcut("k", modifiers: [.command, .shift])
+                Divider()
+                Button("Code") { composer?.formatCode(nil) }.keyboardShortcut("c", modifiers: [.command, .shift])
+                Button("Code Block") { composer?.formatCodeBlock(nil) }.keyboardShortcut("c", modifiers: [.command, .shift, .option])
+                Divider()
+                Button("Clear Formatting") { composer?.formatClear(nil) }
+            }.disabled(composer == nil)
         }
     }
 }
