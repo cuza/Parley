@@ -67,6 +67,7 @@ struct ParleyApp: App {
             store.shortcut = LaunchLanding.current.shortcut   // the UI-testing workspaces keep opening a conversation
             _ = SystemNotifier(store: store)   // the store keeps it; registering now catches the click that launched the app
         }
+        store.onBadge = { NSApplication.shared.dockTile.badgeLabel = $0 }
         _store = State(initialValue: store)
         spotlight = live ? ConversationSpotlight() : nil
         if live, #available(macOS 27, *) {
@@ -223,7 +224,7 @@ struct ConversationMenu: Commands {
             Button(room?.muted == true ? "Unmute" : "Mute") { if let room { Task { await store.setMuted(!room.muted, room.id) } } }.disabled(room == nil)
             if let room { NotificationLevelPicker(store: store, room: room) } else { Menu("Notifications") {}.disabled(true) }
             Divider()
-            Button(store.threadsShown && store.threadID == nil ? "Hide Threads" : "Show Threads") { chat?.threads?() }
+            Button(chat?.threadsShown == true ? "Hide Threads" : "Show Threads") { chat?.threads?() }
                 .keyboardShortcut("t", modifiers: [.command, .shift]).disabled(chat?.threads == nil)
             let open = openFocused?.open ?? chat?.openInWindow
             Button(openFocused?.title ?? "Open in New Window") { open?() }.keyboardShortcut("o").disabled(open == nil)

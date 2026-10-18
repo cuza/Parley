@@ -305,7 +305,7 @@ enum NotificationPolicy {
     @discardableResult
     static func requestAuthorization() async -> UNAuthorizationStatus {
         let center = UNUserNotificationCenter.current()
-        do { _ = try await center.requestAuthorization(options: [.alert, .sound]) }
+        do { _ = try await center.requestAuthorization(options: [.alert, .sound, .badge]) }
         catch { log.error("notification authorization failed: \(ConnectionDiagnostics.redact(error.localizedDescription), privacy: .public)") }
         return await center.notificationSettings().authorizationStatus
     }

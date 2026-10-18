@@ -46,4 +46,27 @@ import XCTest
         sleep(1)
         XCTAssertEqual(tabs(app), 3, "⌘O opens the selected row too")
     }
+    /// A conversation window has its own thread and info panes: opening one there leaves the main window as it was,
+    /// even when both show the same conversation.
+    func testAConversationWindowOpensPanesOfItsOwn() throws {
+        let app = XCUIApplication()
+        app.launchArguments = ["-uiTestingDemo"]
+        app.launch()
+        let main = app.windows["main"]
+        XCTAssertTrue(main.textViews["composer"].waitForExistence(timeout: 5))
+        app.menuBars.menuBarItems["Conversation"].click()
+        app.menuItems["Open in New Window"].firstMatch.click()
+        let window = app.windows.matching(NSPredicate(format: "identifier != %@", "main")).firstMatch
+        XCTAssertTrue(window.waitForExistence(timeout: 5), "a conversation window")
+        let replies = window.descendants(matching: .any)
+            .matching(NSPredicate(format: "label CONTAINS %@ AND elementType != %d", "2 replies", XCUIElement.ElementType.scrollView.rawValue)).firstMatch
+        XCTAssertTrue(replies.waitForExistence(timeout: 10), "the window's timeline loads")   // a new window loads its page first
+        replies.click()
+        XCTAssertTrue(window.staticTexts["Thread"].waitForExistence(timeout: 5), "the thread opens in the window")
+        XCTAssertFalse(main.staticTexts["Thread"].exists, "and not in the main window")
+
+        app.typeKey("i", modifierFlags: [.command, .shift])
+        XCTAssertTrue(window.staticTexts["Info"].waitForExistence(timeout: 5), "Info opens in the window")
+        XCTAssertFalse(main.staticTexts["Info"].exists, "and not in the main window")
+    }
 }

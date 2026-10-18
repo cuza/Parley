@@ -7,7 +7,7 @@ private let log = Logger(subsystem: "dev.cuza.Parley", category: "store")
 
 @MainActor @Observable
 final class ChatStore {
-    var conversations: [Conversation] = []
+    var conversations: [Conversation] = [] { didSet { updateBadge() } }
     /// Hidden from my sidebar (`Conversation.hidden`), for Settings ▸ Hidden conversations.
     var hidden: [Conversation] = []
     var messages: [Message] = [] { didSet { timelines = [:] } }
@@ -37,6 +37,23 @@ final class ChatStore {
     var info = false   // the conversation info panel, which shares the inspector with the thread
     /// A space's Threads list in the side pane; an open thread shows over it, and closing the thread goes back to it.
     var threadsShown = false
+    /// Each conversation window's own side pane, by its conversation; the main window's is `info`, `threadID` and `threadsShown`.
+    private(set) var windowPanes: [ConversationID: SidePane] = [:]
+    /// The side pane of a window: nil for the main window, else the conversation a conversation window shows.
+    func pane(_ window: ConversationID?) -> SidePane {
+        guard let window else { return SidePane(info: info, thread: threadID, threads: threadsShown) }
+        return windowPanes[window] ?? SidePane()
+    }
+    func setPane(_ window: ConversationID?, _ change: (inout SidePane) -> Void) {
+        var pane = pane(window); change(&pane)
+        guard let window else {
+            if info != pane.info { info = pane.info }
+            if threadID != pane.thread { threadID = pane.thread }
+            if threadsShown != pane.threads { threadsShown = pane.threads }
+            return
+        }
+        if windowPanes[window, default: SidePane()] != pane { windowPanes[window] = pane }
+    }
     private(set) var threadSummaries: [ConversationID: [ThreadSummary]] = [:]
     var editing: [String: MessageID] = [:]   // per draft key: the sent message that composer is editing
     /// Per draft key being edited: the draft the edit borrowed the composer from, given back when the edit ends.
@@ -160,7 +177,7 @@ final class ChatStore {
         conversations = []; hidden = []; homeThreads = []; messages = []; timelines = [:]; selectedID = nil; drafts = [:]; draftedScopes = []
         draftFormatting = [:]; draftAttachments = [:]; quoting = [:]; editing = [:]; heldDrafts = [:]
         searchResults = []; shortcut = nil; shortcutLists = [:]; shortcutCursors = [:]; hasMore = []; loaded = []; loading = []
-        threadID = nil; info = false; threadsShown = false; threadSummaries = [:]; highlightedID = nil; openTranscripts = []
+        threadID = nil; info = false; threadsShown = false; windowPanes = [:]; threadSummaries = [:]; highlightedID = nil; openTranscripts = []
         members = [:]; memberLoads = []; permissions = [:]; roles = [:]; shared = [:]; sharedMore = []; customEmoji = []
         slashCommands = [:]; slashQueries = [:]; reactors = [:]; notifiedReactions = []
         typing = [:]; activities = [:]; presence = [:]; statuses = [:]; ownStatus = OwnStatus(); readReceipts = [:]; receiptsOff = []
@@ -177,7 +194,7 @@ final class ChatStore {
         "conversations", "hidden", "homeThreads", "messages", "timelines", "selectedID", "drafts", "draftedScopes",
         "draftFormatting", "draftAttachments", "quoting", "editing", "heldDrafts",
         "searchResults", "shortcut", "shortcutLists", "shortcutCursors", "hasMore", "loaded", "loading",
-        "threadID", "info", "threadsShown", "threadSummaries", "highlightedID", "openTranscripts",
+        "threadID", "info", "threadsShown", "windowPanes", "threadSummaries", "highlightedID", "openTranscripts",
         "members", "memberLoads", "permissions", "roles", "shared", "sharedMore", "customEmoji",
         "slashCommands", "slashQueries", "reactors", "notifiedReactions",
         "typing", "activities", "presence", "statuses", "ownStatus", "readReceipts", "receiptsOff",
@@ -189,7 +206,7 @@ final class ChatStore {
     /// What stays across accounts: the app's wiring, settings, timers and the connection, and requests the user made
     /// before the switch (a link to open, content to share, a search to run).
     static let appState: Set<String> = [
-        "backend", "cache", "cachedAccountID", "me", "connection", "onSessionLost", "error", "connectedSince", "lastEventAt",
+        "backend", "cache", "cachedAccountID", "me", "connection", "onSessionLost", "onBadge", "shownBadge", "error", "connectedSince", "lastEventAt",
         "reconnects", "homeUnreadOnly", "homeThreadsOnly", "highlightDuration", "highlightFade", "eventTask", "cacheTask",
         "searchGeneration", "sweepTask", "now", "isAppActive", "notifier", "notificationSettings", "draftPause", "draftIdle",
         "waitingLinks", "followAsked", "followRecheck", "toast", "toastDuration", "toastFade", "openURL", "defaults", "sent",
@@ -245,6 +262,13 @@ final class ChatStore {
     /// The conversation whose timeline is on screen: none while a shortcut is (Home keeps `selectedID` for its thread pane).
     private var openConversation: ConversationID? { shortcut == nil ? selectedID : nil }
     var unreadCount: Int { conversations.filter { !$0.muted }.reduce(0) { $0 + $1.unread } }
+    /// Shows the Dock badge, the unread count. The store calls it, not a window, so it keeps up with every window closed.
+    @ObservationIgnored var onBadge: (String?) -> Void = { _ in } { didSet { shownBadge = .none; updateBadge() } }
+    @ObservationIgnored private var shownBadge: String?? = .none
+    private func updateBadge() {
+        let label = unreadCount == 0 ? nil : String(unreadCount)
+        if shownBadge != .some(label) { shownBadge = label; onBadge(label) }
+    }
     /// The Dock menu's conversations: the unread ones the badge counts (not muted), most recent first, at most 10.
     var dockConversations: [Conversation] {
         Array(conversations.filter { $0.unread > 0 && !$0.muted }.sorted { ($0.activity ?? .distantPast) > ($1.activity ?? .distantPast) }.prefix(10))
@@ -458,10 +482,10 @@ final class ChatStore {
         await load(id, thread: thread, older: true)
     }
     /// A click on a quote: highlights the quoted message. One not loaded brings the page around it, as web Chat does.
-    func showQuoted(_ id: MessageID, in conversation: ConversationID) async {
+    func showQuoted(_ id: MessageID, in conversation: ConversationID, window: ConversationID? = nil) async {
         if !messages.contains(where: { $0.id == id }) { await loadAround(id, in: conversation) }
         guard let quoted = messages.first(where: { $0.id == id }) else { return }
-        if let thread = quoted.threadID, thread != threadID { await openThread(quoted) }
+        if let thread = quoted.threadID, thread != pane(window).thread { await openThread(quoted, window: window) }
         highlightedID = id
     }
     /// "Show in Chat" on a shared item: its message highlighted, in its thread when it is a reply.
@@ -506,28 +530,29 @@ final class ChatStore {
     }
     /// The Threads button: shows the list when it isn't on screen (hidden, under an open thread, or replaced by the info
     /// panel), and closes it when it is.
-    func toggleThreads() async {
-        let onScreen = threadsShown && threadID == nil && !info
-        await showThreads(!onScreen)
+    func toggleThreads(window: ConversationID? = nil) async {
+        let pane = pane(window)
+        await showThreads(!(pane.threads && pane.thread == nil && !pane.info), window: window)
     }
-    func showThreads(_ shown: Bool) async {
-        threadsShown = shown
-        guard shown, let id = selectedID else { return }
-        info = false; threadID = nil
+    func showThreads(_ shown: Bool, window: ConversationID? = nil) async {
+        setPane(window) { $0.threads = shown }
+        guard shown, let id = window ?? selectedID else { return }
+        setPane(window) { $0.info = false; $0.thread = nil }
         await loadThreads(id)
     }
     func loadThreads(_ id: ConversationID) async {
         do { threadSummaries[id] = try await backend.threads(in: id) } catch { report(error) }
     }
-    func openThread(_ message: Message) async {
-        await openThread(message.threadID ?? message.id, in: message.conversationID)
+    /// Opens a message's thread in a window's side pane: nil for the main window, else a conversation window's conversation.
+    func openThread(_ message: Message, window: ConversationID? = nil) async {
+        await openThread(message.threadID ?? message.id, in: message.conversationID, window: window)
     }
-    private func openThread(_ thread: ThreadID, in conversation: ConversationID, recording: Bool = true) async {
-        if recording, conversations.first(where: { $0.id == conversation })?.app == .gemini { visit(.session(conversation, thread)) }
-        threadID = thread; info = false
+    private func openThread(_ thread: ThreadID, in conversation: ConversationID, recording: Bool = true, window: ConversationID? = nil) async {
+        if window == nil, recording, conversations.first(where: { $0.id == conversation })?.app == .gemini { visit(.session(conversation, thread)) }
+        setPane(window) { $0.thread = thread; $0.info = false }
         loaded.remove(key(conversation, thread))
         await load(conversation, thread: thread)
-        guard threadID == thread, selectedID == conversation else { return }
+        guard pane(window).thread == thread, window != nil || selectedID == conversation else { return }
         await readThread(thread)
     }
     /// An open thread is read up to its newest reply, on the server too, so it reads as read on the web and phone.
@@ -656,7 +681,8 @@ final class ChatStore {
                 if message.sender.id != me.id, !(shortcut == .home && threadID == thread) { homeThreads[i].unread = true }
             }
             // A new reply in the thread open on screen is read as it arrives.
-            if isNew, let thread = message.threadID, thread == threadID, message.conversationID == selectedID, isAppActive() {
+            if isNew, let thread = message.threadID, isAppActive(),
+               (thread == threadID && message.conversationID == selectedID) || windowPanes[message.conversationID]?.thread == thread {
                 coalesce("readThread/" + thread) { await self.readThread(thread) }
             }
             if isNew, message.sender.id != me.id {   // a message ends its sender's typing, and they're evidently here

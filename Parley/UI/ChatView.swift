@@ -92,6 +92,9 @@ struct ChatView: View {
     /// Posts a new Meet meeting in the conversation and opens it, as Google Chat's "Send a Meet link" does.
     private func sendMeetLink(_ id: ConversationID) { Task { if let url = await store.sendMeetLink(in: id) { openURL(url) } } }
     @Environment(SignInFlow.self) private var signIn: SignInFlow?
+    /// This window's side pane: a conversation window has its own, so a thread opened there stays there.
+    private var pane: SidePane { store.pane(fixedConversation) }
+    private var paneOpen: Bool { pane.info || pane.thread != nil }
     private var room: Conversation? { store.conversations.first { $0.id == (fixedConversation ?? store.selectedID) } }
     /// ⌘F: search what's open, the conversation as the "said in" filter, or everywhere from Home and the other shortcuts.
     private func find() { finding = .init(scope: store.shortcut == nil ? room : nil) }
@@ -113,13 +116,14 @@ struct ChatView: View {
         ChatCommands(
             find: fixedConversation == nil ? { find() } : nil,
             jump: { switcher = true },
-            info: { if room != nil { store.toggleInfo() } },
+            info: { if room != nil { store.toggleInfo(window: fixedConversation) } },
             editLast: { if let room, let last = store.timeline(room.id).last(where: { $0.sender.id == store.me.id }) { store.edit(last) } },
             unread: { forward in
                 if let room = Conversation.nextUnread(after: store.selectedID, in: store.conversations, forward: forward) { Task { await store.select(room.id) } }
             },
             room: shown,
-            threads: shown.flatMap { Self.offersThreads($0) ? { Task { await store.toggleThreads() } } : nil },
+            threads: shown.flatMap { Self.offersThreads($0) ? { Task { await store.toggleThreads(window: fixedConversation) } } : nil },
+            threadsShown: pane.threads && pane.thread == nil,
             openInWindow: shown.flatMap { room in fixedConversation == nil ? { openWindow(value: room.id) } : nil },
             newSection: shown.map { room in { sectionName = ""; naming = SectionNaming(moving: room.id) } },
             leave: shown.flatMap { room in room.kind != .direct ? { leaving = room } : nil },
@@ -182,7 +186,7 @@ struct ChatView: View {
         window.setFrame(frame, display: true, animate: animate)
     }
     private func fitSidebar() {
-        let next = Self.sidebar(width: width.value, paneOpen: store.info || store.threadID != nil, sidebarWidth: sidebarWidth,
+        let next = Self.sidebar(width: width.value, paneOpen: paneOpen, sidebarWidth: sidebarWidth,
                                 visible: columns != .detailOnly, autoHidden: sidebarAutoHidden)
         if (columns != .detailOnly) != next.visible { columns = next.visible ? .all : .detailOnly }
         if sidebarAutoHidden != next.autoHidden { sidebarAutoHidden = next.autoHidden }
@@ -224,16 +228,16 @@ struct ChatView: View {
                 // Scroll state belongs to one conversation; the toolbar stays outside so it is not duplicated on switch.
                 // The thread and info panel is our own pane: SwiftUI's .inspector inside a NavigationSplitView
                 // re-measures its columns without settling on macOS 27 and AppKit aborts the app.
-                SidePaneSplit(open: store.info || store.threadID != nil || (store.threadsShown && Self.offersThreads(room))) {
+                SidePaneSplit(open: paneOpen || (pane.threads && Self.offersThreads(room))) {
                     VStack(spacing: 0) { TimelineView(store: store, conversation: room).id(room.id) }
                         .safeAreaInset(edge: .top, spacing: 0) { expiredBanner }
                 } pane: {
                     Group {
-                        if store.info {
+                        if pane.info {
                             InfoPanel(store: store, room: room, search: fixedConversation == nil ? { finding = .init(scope: room) } : nil)
-                        } else if let thread = store.threadID {
+                        } else if let thread = pane.thread {
                             ThreadPane(store: store, room: room, thread: thread)
-                        } else if store.threadsShown, Self.offersThreads(room) {
+                        } else if pane.threads, Self.offersThreads(room) {
                             ThreadsPane(store: store, room: room)
                         }
                     }
@@ -241,8 +245,8 @@ struct ChatView: View {
                     // quotes or edits, Esc is the composer's, to drop the quote or end the edit first.
                     .background {
                         let scope = store.key(room.id, nil)
-                        if store.info, store.quoting[scope] == nil, store.editing[scope] == nil {
-                            Button("") { store.info = false }.keyboardShortcut(.cancelAction).opacity(0).accessibilityHidden(true)
+                        if pane.info, store.quoting[scope] == nil, store.editing[scope] == nil {
+                            Button("") { store.setPane(fixedConversation) { $0.info = false } }.keyboardShortcut(.cancelAction).opacity(0).accessibilityHidden(true)
                         }
                     }
                 }
@@ -251,7 +255,7 @@ struct ChatView: View {
                     .toolbar(id: "conversation") {
                         // On the left in the title's place and size, as Home and the other shortcuts show theirs.
                         ToolbarItem(id: "title", placement: .navigation) {
-                            Button { store.toggleInfo() } label: { VStack(alignment: .leading, spacing: 2) {
+                            Button { store.toggleInfo(window: fixedConversation) } label: { VStack(alignment: .leading, spacing: 2) {
                                 HStack(spacing: 6) {
                                     // The dot first, so it stays in one place whatever the name's length.
                                     if let partner = store.partner(in: room) { PresenceDot(presence: store.presence[partner]) }
@@ -274,12 +278,12 @@ struct ChatView: View {
                         }
                         if Self.offersThreads(room) {   // the conversation's threads, as Google Chat's Active threads
                             ToolbarItem(id: "threads", placement: .primaryAction) {
-                                Button { Task { await store.toggleThreads() } } label: { Label("Threads", systemImage: "bubble.left.and.text.bubble.right") }
+                                Button { Task { await store.toggleThreads(window: fixedConversation) } } label: { Label("Threads", systemImage: "bubble.left.and.text.bubble.right") }
                                     .help("Threads")
                             }
                         }
                         ToolbarItem(id: "info", placement: .primaryAction, showsByDefault: false) {
-                            Button { store.toggleInfo() } label: { Label("Info", systemImage: "info.circle") }.help("Conversation info (⇧⌘I)")
+                            Button { store.toggleInfo(window: fixedConversation) } label: { Label("Info", systemImage: "info.circle") }.help("Conversation info (⇧⌘I)")
                         }
                         ToolbarItem(id: "attach", placement: .primaryAction, showsByDefault: false) {
                             Button { commands.attach?() } label: { Label("Attach", systemImage: "paperclip") }.help("Attach files (⇧⌘A)")
@@ -302,19 +306,19 @@ struct ChatView: View {
             if fixedConversation != nil { NavigationStack { detail } }
             // The detail's minimum stops a dragged sidebar from squeezing the timeline and pane off the window's edge.
             else { NavigationSplitView(columnVisibility: $columns) { sidebar } detail: {
-                detail.navigationSplitViewColumnWidth(min: Self.minWidth(paneOpen: store.info || store.threadID != nil, sidebar: 0), ideal: 700)
+                detail.navigationSplitViewColumnWidth(min: Self.minWidth(paneOpen: paneOpen, sidebar: 0), ideal: 700)
             } }
         }
-        .frame(minWidth: Self.minWidth(paneOpen: store.info || store.threadID != nil, sidebar: 0), minHeight: 480)
-        .onChange(of: store.info || store.threadID != nil) { _, open in
+        .frame(minWidth: Self.minWidth(paneOpen: paneOpen, sidebar: 0), minHeight: 480)
+        .onChange(of: paneOpen) { _, open in
             if open { Self.makeRoom(Self.widthForPane(window: width.value, sidebar: Self.shownSidebar(fixedConversation: fixedConversation, columns: columns, measured: sidebarWidth)), in: hostWindow.window) }
         }
         .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { width.value = $0; fitSidebar() }
         .background(WindowReader(ref: hostWindow, title: windowTitle, appeared: tabbed))
-        .onChange(of: store.info || store.threadID != nil) { fitSidebar() }
+        .onChange(of: paneOpen) { fitSidebar() }
         .onChange(of: columns) { _, shown in
             // Shown by the user in a window too narrow for it: widen the window rather than clip.
-            if shown != .detailOnly { sidebarAutoHidden = false; Self.makeRoom(Self.minWidth(paneOpen: store.info || store.threadID != nil, sidebar: sidebarWidth), in: hostWindow.window) }
+            if shown != .detailOnly { sidebarAutoHidden = false; Self.makeRoom(Self.minWidth(paneOpen: paneOpen, sidebar: sidebarWidth), in: hostWindow.window) }
         }
         .sheet(isPresented: $switcher) { ConversationPalette(store: store) }
         .sheet(isPresented: $composing) { ConversationPalette(store: store, newChat: true) }
@@ -392,6 +396,7 @@ struct ChatView: View {
         .animation(.default, value: store.toast)
         // VoiceOver hears a note as it shows; it fades before anyone could find it.
         .onChange(of: store.toast) { _, toast in if let toast { AccessibilityNotification.Announcement(toast).post() } }
+        .environment(\.paneWindow, fixedConversation)
         .alert("Couldn’t finish that", isPresented: Binding(get: { store.error != nil }, set: { if !$0 { store.error = nil } })) { Button("OK") { store.error = nil } } message: { Text(store.error ?? "") }
         .task(id: fixedConversation.flatMap(store.hasConversation)) {
             if let fixedConversation {   // a restored window: loads, or closes when the conversation isn't this account's
@@ -406,7 +411,6 @@ struct ChatView: View {
                 await store.start()
             }
         }
-        .onChange(of: store.unreadCount) { _, value in NSApplication.shared.dockTile.badgeLabel = value == 0 ? nil : String(value) }
     }
     /// Search, on the right of the toolbar: conversations and the shortcuts alike, as ⌘F works in both.
     private var searchItem: some ToolbarContent {
@@ -568,6 +572,7 @@ struct TimelineRow: Identifiable, Hashable {
 
 struct TimelineView: View {
     @Bindable var store: ChatStore
+    @Environment(\.paneWindow) private var paneWindow   // which window's side pane this view acts on
     let conversation: Conversation
     var thread: String? = nil
     var detached = false   // a thread in its own window
@@ -602,13 +607,13 @@ struct TimelineView: View {
                           reactCustom: { emoji, message in Task { await store.react(emoji.text, custom: emoji, to: message) } },
                           customEmoji: { await store.loadCustomEmoji(); return store.customEmoji },
                           reactors: { reaction, message in await store.reactorsLine(reaction, on: message.id) },
-                          openThread: { message in Task { await store.openThread(message) } },
+                          openThread: { message in Task { await store.openThread(message, window: paneWindow) } },
                           quote: { store.quote($0) },
                           forward: { store.forwarding = $0 },
                           // A forward's message lives in the conversation it came from: open it there.
                           showQuoted: { id in Task {
                               if !id.hasPrefix(conversation.id + "/"), let url = ChatLink.url(message: id), let link = ChatLink(url) { _ = await store.open(link) }
-                              else { await store.showQuoted(id, in: conversation.id) }
+                              else { await store.showQuoted(id, in: conversation.id, window: paneWindow) }
                           } },
                           message: { person in Task { do { try await store.message([person]) } catch { store.report(error) } } },
                           person: { store.person($0, in: conversation.id) },
@@ -695,6 +700,7 @@ struct TimelineView: View {
 /// only it: inside the timeline view, every keystroke re-ran the timeline's update.
 struct ComposerBar: View {
     @Bindable var store: ChatStore
+    @Environment(\.paneWindow) private var paneWindow   // which window's side pane this view acts on
     let conversation: Conversation
     var thread: String? = nil
     var detached = false   // a thread in its own window
@@ -880,7 +886,7 @@ struct ComposerBar: View {
             guard let id = quote.id else { return }
             Task {
                 if !id.hasPrefix(conversation.id + "/"), let url = ChatLink.url(message: id), let link = ChatLink(url) { _ = await store.open(link) }
-                else { await store.showQuoted(id, in: conversation.id) }
+                else { await store.showQuoted(id, in: conversation.id, window: paneWindow) }
             }
         }
     }
@@ -889,7 +895,7 @@ struct ComposerBar: View {
         accessoryHeader(title: "Edit message", text: QuotedMessage.summary(text: TextStyleRange.plain(message.text, message.formatting), attachments: message.attachments),
                         media: message.attachments.first { $0.kind == .image || $0.kind == .video }, closeHelp: "Cancel editing",
                         close: endEdit) {
-            Task { await store.showQuoted(message.id, in: conversation.id) }
+            Task { await store.showQuoted(message.id, in: conversation.id, window: paneWindow) }
         }
     }
     private func accessoryHeader(title: String, text: String, media: Attachment?, closeHelp: String, close: @escaping () -> Void, show: @escaping () -> Void) -> some View {
@@ -925,7 +931,7 @@ struct ComposerBar: View {
                 else if store.editing[scope] != nil { endEdit() }
                 else if !detached {   // a thread window leaves the main window's panes alone
                     let closing = composerHandle.view, window = closing?.window
-                    store.threadID = nil; store.info = false
+                    store.setPane(paneWindow) { $0.thread = nil; $0.info = false }
                     // Out of a thread: the conversation's composer has the keyboard again.
                     if thread != nil { DispatchQueue.main.async { if let main = ComposerTextView.all(in: window).first(where: { $0 !== closing }) { window?.makeFirstResponder(main) } } }
                 }
@@ -997,6 +1003,7 @@ struct ThreadFollowButton: View {
 /// The thread pane: the thread's first message over its replies and composer, beside a conversation or Home.
 struct ThreadPane: View {
     @Bindable var store: ChatStore
+    @Environment(\.paneWindow) private var paneWindow   // which window's side pane this view acts on
     let room: Conversation
     let thread: ThreadID
     var detached = false   // in its own window, which has its own close button
@@ -1015,7 +1022,7 @@ struct ThreadPane: View {
                     ThreadFollowButton(store: store, thread: thread)
                     Button(action: detach) { Image(systemName: "macwindow.badge.plus") }
                         .buttonStyle(.borderless).help("Open in new window").accessibilityLabel("Open in New Window")
-                    Button { store.threadID = nil } label: { Image(systemName: "xmark") }
+                    Button { store.setPane(paneWindow) { $0.thread = nil } } label: { Image(systemName: "xmark") }
                         .buttonStyle(.borderless).help("Close").accessibilityLabel("Close")
                 }.padding()
                 Divider()
@@ -1233,11 +1240,16 @@ struct ChatCommands {
     /// The conversation on screen, which the Conversation menu acts on; nil on Home and the other shortcuts.
     var room: Conversation? = nil
     var threads: (() -> Void)? = nil        // nil where the conversation has no threads
+    var threadsShown = false                // the Threads list is on screen, for the item's title
     var openInWindow: (() -> Void)? = nil
     var newSection: (() -> Void)? = nil
     var leave: (() -> Void)? = nil          // asks first
     var block: (() -> Void)? = nil          // asks first
     var attach: (() -> Void)? = nil
+}
+extension EnvironmentValues {
+    /// The window a view is in, for its side pane: nil in the main window, else the conversation a conversation window shows.
+    @Entry var paneWindow: ConversationID?
 }
 extension FocusedValues {
     @Entry var chatCommands: ChatCommands?

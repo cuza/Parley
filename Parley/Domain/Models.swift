@@ -853,3 +853,10 @@ extension ChatBackend {
         try await searchMessages(query, filters: SearchFilters(), cursor: cursor)
     }
 }
+
+/// A window's side pane: the info panel, an open thread, or the conversation's Threads list under the thread.
+struct SidePane: Equatable {
+    var info = false
+    var thread: ThreadID?
+    var threads = false
+}

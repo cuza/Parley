@@ -34,4 +34,27 @@ import Testing
         #expect(store.conversations.allSatisfy { $0.unread == 0 })
         #expect(Set(await fake.markedRead).isSuperset(of: ["alex", "notebook"]))
     }
+    /// The store sets the badge, not a window, so it keeps up with every window closed.
+    @Test func theBadgeFollowsTheUnreadCountWithoutAWindow() async {
+        let store = ChatStore(backend: FakeBackend())
+        var shown: [String?] = []
+        store.onBadge = { shown.append($0) }
+        #expect(shown == [nil])
+        await store.start()
+        #expect(store.unreadCount > 0 && shown.last == String(store.unreadCount))
+        await store.markAllRead()
+        #expect(shown.last == .some(nil))
+        #expect(zip(shown, shown.dropFirst()).allSatisfy { $0 != $1 })   // only changes reach the Dock
+    }
+    /// Unread messages saved from last time show at launch, before anything changes.
+    @Test func theBadgeShowsUnreadThatWasThereBeforeTheDock() async {
+        let store = ChatStore(backend: FakeBackend())
+        await store.start()
+        var shown: [String?] = []
+        store.onBadge = { shown.append($0) }
+        #expect(store.unreadCount > 0 && shown == [String(store.unreadCount)])
+        await store.markAllRead()
+        #expect(shown.last == .some(nil))
+        #expect(zip(shown, shown.dropFirst()).allSatisfy { $0 != $1 })   // only changes reach the Dock
+    }
 }

@@ -74,6 +74,22 @@ extension AuthTests {
         await store.toggleThreads()   // the info panel was showing: the list replaces it
         #expect(store.threadsShown && !store.info)
     }
+    /// A conversation window has a side pane of its own: what opens there leaves the main window's pane as it was, even
+    /// with the same conversation in both.
+    @Test func aConversationWindowHasItsOwnPane() async throws {
+        let store = ChatStore(backend: FakeBackend())
+        await store.start()
+        await store.select("design")
+        await store.showThreads(true, window: "design")
+        let head = try #require(store.threadSummaries["design"]?.first).head
+        await store.openThread(head, window: "design")
+        #expect(store.pane("design") == SidePane(thread: "d4", threads: true))
+        #expect(store.pane(nil) == SidePane() && store.threadID == nil, "the main window's pane stays closed")
+        store.toggleInfo(window: "design")
+        #expect(store.pane("design").info && !store.info)
+        store.toggleInfo()
+        #expect(store.info && store.pane("design").info, "and the main window's info opens on its own")
+    }
     /// With nothing to list, the header and filters stay at the top of the pane; they used to sink to its middle.
     @Test func theHeaderStaysAtTheTopWhenNothingMatches() async throws {
         let store = ChatStore(backend: FakeBackend())

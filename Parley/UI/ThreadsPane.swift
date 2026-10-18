@@ -4,6 +4,7 @@ import SwiftUI
 /// narrow the list together. A click opens the thread over the list; closing it comes back here.
 struct ThreadsPane: View {
     @Bindable var store: ChatStore
+    @Environment(\.paneWindow) private var paneWindow   // which window's side pane this view acts on
     let room: Conversation
     @AppStorage("threadsFilters") private var saved = ""   // the chosen filters, kept between launches
     private var filters: Set<ThreadSummary.Filter> { Set(saved.split(separator: ",").compactMap { ThreadSummary.Filter(rawValue: String($0)) }) }
@@ -16,7 +17,7 @@ struct ThreadsPane: View {
         VStack(spacing: 0) {
             HStack(spacing: 12) {
                 Text("Threads").font(.headline); Spacer()
-                Button { Task { await store.showThreads(false) } } label: { Image(systemName: "xmark") }.buttonStyle(.plain).help("Close")
+                Button { Task { await store.showThreads(false, window: paneWindow) } } label: { Image(systemName: "xmark") }.buttonStyle(.plain).help("Close")
             }.padding()
             HStack(spacing: 6) {
                 ForEach(ThreadSummary.Filter.allCases, id: \.self) { filter in
@@ -46,7 +47,7 @@ struct ThreadsPane: View {
                 }
             } else {
                 List(shown) { thread in
-                    Button { Task { await store.openThread(thread.head) } } label: { row(thread) }.buttonStyle(.plain)
+                    Button { Task { await store.openThread(thread.head, window: paneWindow) } } label: { row(thread) }.buttonStyle(.plain)
                 }.listStyle(.plain)
             }
         } else {

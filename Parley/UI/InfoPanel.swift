@@ -20,6 +20,7 @@ struct NotificationLevelPicker: View {
 /// mute, pin and search, the members of a space or group, and the media, files and links its loaded messages share.
 struct InfoPanel: View {
     @Bindable var store: ChatStore
+    @Environment(\.paneWindow) private var paneWindow   // which window's side pane this view acts on
     let room: Conversation
     let search: (() -> Void)?   // nil in a conversation's own window: search opens results in the main window
     @State private var tab = SharedCategory.media
@@ -47,7 +48,7 @@ struct InfoPanel: View {
         VStack(spacing: 0) {
             HStack(spacing: 12) {
                 Text("Info").font(.headline); Spacer()
-                Button { store.info = false } label: { Image(systemName: "xmark") }
+                Button { store.setPane(paneWindow) { $0.info = false } } label: { Image(systemName: "xmark") }
                     .buttonStyle(.borderless).help("Close").accessibilityLabel("Close")
             }.padding()
             Divider()
@@ -77,7 +78,7 @@ struct InfoPanel: View {
         }
         .formStyle(.grouped)
         .background(QuickLookAnchor(files: files))
-        .onExitCommand { store.info = false }
+        .onExitCommand { store.setPane(paneWindow) { $0.info = false } }
         .alert("Rename “\(room.name)”", isPresented: $renaming) {
             TextField("Name", text: $newName)
             Button("Rename") { Task { await store.rename(room.id, to: newName) } }
@@ -88,7 +89,7 @@ struct InfoPanel: View {
         .sheet(isPresented: $editingDetails) { SpaceDetailsSheet(store: store, room: room) }
         // Google Chat's wording: deleting removes every message for all members.
         .alert("Delete “\(room.name)”?", isPresented: $deleting) {
-            Button("Delete", role: .destructive) { store.info = false; Task { await store.deleteSpace(room.id) } }
+            Button("Delete", role: .destructive) { store.setPane(paneWindow) { $0.info = false }; Task { await store.deleteSpace(room.id) } }
             Button("Cancel", role: .cancel) {}
         } message: { Text("The space and all its messages and tasks are deleted for every member.") }
         .task(id: room.id) {
