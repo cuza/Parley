@@ -355,8 +355,44 @@ private struct CardImage: View {
     }
 }
 extension NSImage {
-    /// More than one frame: a GIF that moves.
-    var animated: Bool { representations.contains { (($0 as? NSBitmapImageRep)?.value(forProperty: .frameCount) as? Int ?? 1) > 1 } }
+    /// More than one frame: a GIF (or animated PNG) that moves.
+    var animated: Bool { animatedRep != nil }
+    private var animatedRep: NSBitmapImageRep? {
+        representations.lazy.compactMap { $0 as? NSBitmapImageRep }.first { ($0.value(forProperty: .frameCount) as? Int ?? 1) > 1 }
+    }
+    /// Draws the frame showing at `time` (seconds on a shared clock, so every copy of an emoji moves together), or the
+    /// first one with Reduce Motion on. For pictures drawn inside text (custom emoji in a message or a reaction pill),
+    /// which NSImageView can't animate; the view redraws while one shows.
+    @MainActor func drawFrame(in rect: NSRect, at time: TimeInterval = Date.now.timeIntervalSinceReferenceDate) {
+        guard let rep = animatedRep else { draw(in: rect); return }
+        let frame = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion ? 0 : Self.frame(durations: Self.durations(rep), at: time)
+        rep.setProperty(.currentFrame, withValue: frame)
+        rep.draw(in: rect)
+    }
+    /// Which frame shows `time` seconds into a loop of these durations.
+    nonisolated static func frame(durations: [TimeInterval], at time: TimeInterval) -> Int {
+        let loop = durations.reduce(0, +)
+        guard loop > 0 else { return 0 }
+        var left = time.truncatingRemainder(dividingBy: loop)
+        for (index, duration) in durations.enumerated() {
+            if left < duration { return index }
+            left -= duration
+        }
+        return durations.count - 1
+    }
+    /// As browsers play GIFs: a frame of under 20 ms (often 0, "as fast as possible") shows for 100 ms.
+    nonisolated static func playable(_ durations: [TimeInterval]) -> [TimeInterval] { durations.map { $0 < 0.02 ? 0.1 : $0 } }
+    @MainActor private static let frameDurations = NSMapTable<NSBitmapImageRep, NSArray>.weakToStrongObjects()
+    @MainActor private static func durations(_ rep: NSBitmapImageRep) -> [TimeInterval] {
+        if let known = frameDurations.object(forKey: rep) as? [TimeInterval] { return known }
+        let count = rep.value(forProperty: .frameCount) as? Int ?? 1
+        let durations = playable((0..<count).map { frame in
+            rep.setProperty(.currentFrame, withValue: frame)
+            return (rep.value(forProperty: .currentFrameDuration) as? Double) ?? 0.1
+        })
+        frameDurations.setObject(durations as NSArray, forKey: rep)
+        return durations
+    }
 }
 
 /// Sizes `CardView` draws at, known before any picture loads; `RowLayout` reserves the same.

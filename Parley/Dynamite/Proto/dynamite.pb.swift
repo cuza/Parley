@@ -727,6 +727,123 @@ nonisolated struct Dynamite_ListCustomEmojisResponse: Sendable {
 
   var customEmojis: [Dynamite_CustomEmoji] = []
 
+  /// goes to sync_custom_emojis: list_custom_emojis refuses a page token (HTTP 400)
+  var nextPageToken: String {
+    get {_nextPageToken ?? String()}
+    set {_nextPageToken = newValue}
+  }
+  /// Returns true if `nextPageToken` has been explicitly set.
+  var hasNextPageToken: Bool {self._nextPageToken != nil}
+  /// Clears the value of `nextPageToken`. Subsequent reads from it will return its default value.
+  mutating func clearNextPageToken() {self._nextPageToken = nil}
+
+  var watermark: Dynamite_EmojiWatermark {
+    get {_watermark ?? Dynamite_EmojiWatermark()}
+    set {_watermark = newValue}
+  }
+  /// Returns true if `watermark` has been explicitly set.
+  var hasWatermark: Bool {self._watermark != nil}
+  /// Clears the value of `watermark`. Subsequent reads from it will return its default value.
+  mutating func clearWatermark() {self._watermark = nil}
+
+  var unknownFields = SwiftProtobuf.UnknownStorage()
+
+  init() {}
+
+  fileprivate var _nextPageToken: String? = nil
+  fileprivate var _watermark: Dynamite_EmojiWatermark? = nil
+}
+
+nonisolated struct Dynamite_EmojiWatermark: Sendable {
+  // SwiftProtobuf.Message conformance is added in an extension below. See the
+  // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
+  // methods supported on all messages.
+
+  var value: Int64 {
+    get {_value ?? 0}
+    set {_value = newValue}
+  }
+  /// Returns true if `value` has been explicitly set.
+  var hasValue: Bool {self._value != nil}
+  /// Clears the value of `value`. Subsequent reads from it will return its default value.
+  mutating func clearValue() {self._value = nil}
+
+  var unknownFields = SwiftProtobuf.UnknownStorage()
+
+  init() {}
+
+  fileprivate var _value: Int64? = nil
+}
+
+/// The rest of the list after list_custom_emojis's first page, as Google Chat's Android app reads it: its watermark and
+/// next page token, 504 a page, until no token comes back.
+nonisolated struct Dynamite_SyncCustomEmojisRequest: Sendable {
+  // SwiftProtobuf.Message conformance is added in an extension below. See the
+  // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
+  // methods supported on all messages.
+
+  var watermark: Dynamite_EmojiWatermark {
+    get {_watermark ?? Dynamite_EmojiWatermark()}
+    set {_watermark = newValue}
+  }
+  /// Returns true if `watermark` has been explicitly set.
+  var hasWatermark: Bool {self._watermark != nil}
+  /// Clears the value of `watermark`. Subsequent reads from it will return its default value.
+  mutating func clearWatermark() {self._watermark = nil}
+
+  var pageSize: Int32 {
+    get {_pageSize ?? 0}
+    set {_pageSize = newValue}
+  }
+  /// Returns true if `pageSize` has been explicitly set.
+  var hasPageSize: Bool {self._pageSize != nil}
+  /// Clears the value of `pageSize`. Subsequent reads from it will return its default value.
+  mutating func clearPageSize() {self._pageSize = nil}
+
+  var pageToken: String {
+    get {_pageToken ?? String()}
+    set {_pageToken = newValue}
+  }
+  /// Returns true if `pageToken` has been explicitly set.
+  var hasPageToken: Bool {self._pageToken != nil}
+  /// Clears the value of `pageToken`. Subsequent reads from it will return its default value.
+  mutating func clearPageToken() {self._pageToken = nil}
+
+  var requestHeader: Dynamite_RequestHeader {
+    get {_requestHeader ?? Dynamite_RequestHeader()}
+    set {_requestHeader = newValue}
+  }
+  /// Returns true if `requestHeader` has been explicitly set.
+  var hasRequestHeader: Bool {self._requestHeader != nil}
+  /// Clears the value of `requestHeader`. Subsequent reads from it will return its default value.
+  mutating func clearRequestHeader() {self._requestHeader = nil}
+
+  var unknownFields = SwiftProtobuf.UnknownStorage()
+
+  init() {}
+
+  fileprivate var _watermark: Dynamite_EmojiWatermark? = nil
+  fileprivate var _pageSize: Int32? = nil
+  fileprivate var _pageToken: String? = nil
+  fileprivate var _requestHeader: Dynamite_RequestHeader? = nil
+}
+
+nonisolated struct Dynamite_SyncCustomEmojisResponse: Sendable {
+  // SwiftProtobuf.Message conformance is added in an extension below. See the
+  // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
+  // methods supported on all messages.
+
+  var customEmojis: [Dynamite_CustomEmoji] = []
+
+  var watermark: Dynamite_EmojiWatermark {
+    get {_watermark ?? Dynamite_EmojiWatermark()}
+    set {_watermark = newValue}
+  }
+  /// Returns true if `watermark` has been explicitly set.
+  var hasWatermark: Bool {self._watermark != nil}
+  /// Clears the value of `watermark`. Subsequent reads from it will return its default value.
+  mutating func clearWatermark() {self._watermark = nil}
+
   var nextPageToken: String {
     get {_nextPageToken ?? String()}
     set {_nextPageToken = newValue}
@@ -740,6 +857,7 @@ nonisolated struct Dynamite_ListCustomEmojisResponse: Sendable {
 
   init() {}
 
+  fileprivate var _watermark: Dynamite_EmojiWatermark? = nil
   fileprivate var _nextPageToken: String? = nil
 }
 
@@ -15281,7 +15399,7 @@ nonisolated extension Dynamite_ListCustomEmojisRequest.Filter.States: SwiftProto
 
 nonisolated extension Dynamite_ListCustomEmojisResponse: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
   static let protoMessageName: String = _protobuf_package + ".ListCustomEmojisResponse"
-  static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{3}custom_emojis\0\u{3}next_page_token\0")
+  static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{3}custom_emojis\0\u{3}next_page_token\0\u{1}watermark\0")
 
   mutating func decodeMessage<D: SwiftProtobuf.Decoder>(decoder: inout D) throws {
     while let fieldNumber = try decoder.nextFieldNumber() {
@@ -15291,6 +15409,7 @@ nonisolated extension Dynamite_ListCustomEmojisResponse: SwiftProtobuf.Message, 
       switch fieldNumber {
       case 1: try { try decoder.decodeRepeatedMessageField(value: &self.customEmojis) }()
       case 2: try { try decoder.decodeSingularStringField(value: &self._nextPageToken) }()
+      case 3: try { try decoder.decodeSingularMessageField(value: &self._watermark) }()
       default: break
       }
     }
@@ -15307,11 +15426,142 @@ nonisolated extension Dynamite_ListCustomEmojisResponse: SwiftProtobuf.Message, 
     try { if let v = self._nextPageToken {
       try visitor.visitSingularStringField(value: v, fieldNumber: 2)
     } }()
+    try { if let v = self._watermark {
+      try visitor.visitSingularMessageField(value: v, fieldNumber: 3)
+    } }()
     try unknownFields.traverse(visitor: &visitor)
   }
 
   static func ==(lhs: Dynamite_ListCustomEmojisResponse, rhs: Dynamite_ListCustomEmojisResponse) -> Bool {
     if lhs.customEmojis != rhs.customEmojis {return false}
+    if lhs._nextPageToken != rhs._nextPageToken {return false}
+    if lhs._watermark != rhs._watermark {return false}
+    if lhs.unknownFields != rhs.unknownFields {return false}
+    return true
+  }
+}
+
+nonisolated extension Dynamite_EmojiWatermark: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
+  static let protoMessageName: String = _protobuf_package + ".EmojiWatermark"
+  static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{1}value\0")
+
+  mutating func decodeMessage<D: SwiftProtobuf.Decoder>(decoder: inout D) throws {
+    while let fieldNumber = try decoder.nextFieldNumber() {
+      // The use of inline closures is to circumvent an issue where the compiler
+      // allocates stack space for every case branch when no optimizations are
+      // enabled. https://github.com/apple/swift-protobuf/issues/1034
+      switch fieldNumber {
+      case 1: try { try decoder.decodeSingularInt64Field(value: &self._value) }()
+      default: break
+      }
+    }
+  }
+
+  func traverse<V: SwiftProtobuf.Visitor>(visitor: inout V) throws {
+    // The use of inline closures is to circumvent an issue where the compiler
+    // allocates stack space for every if/case branch local when no optimizations
+    // are enabled. https://github.com/apple/swift-protobuf/issues/1034 and
+    // https://github.com/apple/swift-protobuf/issues/1182
+    try { if let v = self._value {
+      try visitor.visitSingularInt64Field(value: v, fieldNumber: 1)
+    } }()
+    try unknownFields.traverse(visitor: &visitor)
+  }
+
+  static func ==(lhs: Dynamite_EmojiWatermark, rhs: Dynamite_EmojiWatermark) -> Bool {
+    if lhs._value != rhs._value {return false}
+    if lhs.unknownFields != rhs.unknownFields {return false}
+    return true
+  }
+}
+
+nonisolated extension Dynamite_SyncCustomEmojisRequest: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
+  static let protoMessageName: String = _protobuf_package + ".SyncCustomEmojisRequest"
+  static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{1}watermark\0\u{3}page_size\0\u{3}page_token\0\u{4}a\u{1}request_header\0")
+
+  mutating func decodeMessage<D: SwiftProtobuf.Decoder>(decoder: inout D) throws {
+    while let fieldNumber = try decoder.nextFieldNumber() {
+      // The use of inline closures is to circumvent an issue where the compiler
+      // allocates stack space for every case branch when no optimizations are
+      // enabled. https://github.com/apple/swift-protobuf/issues/1034
+      switch fieldNumber {
+      case 1: try { try decoder.decodeSingularMessageField(value: &self._watermark) }()
+      case 2: try { try decoder.decodeSingularInt32Field(value: &self._pageSize) }()
+      case 3: try { try decoder.decodeSingularStringField(value: &self._pageToken) }()
+      case 100: try { try decoder.decodeSingularMessageField(value: &self._requestHeader) }()
+      default: break
+      }
+    }
+  }
+
+  func traverse<V: SwiftProtobuf.Visitor>(visitor: inout V) throws {
+    // The use of inline closures is to circumvent an issue where the compiler
+    // allocates stack space for every if/case branch local when no optimizations
+    // are enabled. https://github.com/apple/swift-protobuf/issues/1034 and
+    // https://github.com/apple/swift-protobuf/issues/1182
+    try { if let v = self._watermark {
+      try visitor.visitSingularMessageField(value: v, fieldNumber: 1)
+    } }()
+    try { if let v = self._pageSize {
+      try visitor.visitSingularInt32Field(value: v, fieldNumber: 2)
+    } }()
+    try { if let v = self._pageToken {
+      try visitor.visitSingularStringField(value: v, fieldNumber: 3)
+    } }()
+    try { if let v = self._requestHeader {
+      try visitor.visitSingularMessageField(value: v, fieldNumber: 100)
+    } }()
+    try unknownFields.traverse(visitor: &visitor)
+  }
+
+  static func ==(lhs: Dynamite_SyncCustomEmojisRequest, rhs: Dynamite_SyncCustomEmojisRequest) -> Bool {
+    if lhs._watermark != rhs._watermark {return false}
+    if lhs._pageSize != rhs._pageSize {return false}
+    if lhs._pageToken != rhs._pageToken {return false}
+    if lhs._requestHeader != rhs._requestHeader {return false}
+    if lhs.unknownFields != rhs.unknownFields {return false}
+    return true
+  }
+}
+
+nonisolated extension Dynamite_SyncCustomEmojisResponse: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
+  static let protoMessageName: String = _protobuf_package + ".SyncCustomEmojisResponse"
+  static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{3}custom_emojis\0\u{1}watermark\0\u{3}next_page_token\0")
+
+  mutating func decodeMessage<D: SwiftProtobuf.Decoder>(decoder: inout D) throws {
+    while let fieldNumber = try decoder.nextFieldNumber() {
+      // The use of inline closures is to circumvent an issue where the compiler
+      // allocates stack space for every case branch when no optimizations are
+      // enabled. https://github.com/apple/swift-protobuf/issues/1034
+      switch fieldNumber {
+      case 1: try { try decoder.decodeRepeatedMessageField(value: &self.customEmojis) }()
+      case 2: try { try decoder.decodeSingularMessageField(value: &self._watermark) }()
+      case 3: try { try decoder.decodeSingularStringField(value: &self._nextPageToken) }()
+      default: break
+      }
+    }
+  }
+
+  func traverse<V: SwiftProtobuf.Visitor>(visitor: inout V) throws {
+    // The use of inline closures is to circumvent an issue where the compiler
+    // allocates stack space for every if/case branch local when no optimizations
+    // are enabled. https://github.com/apple/swift-protobuf/issues/1034 and
+    // https://github.com/apple/swift-protobuf/issues/1182
+    if !self.customEmojis.isEmpty {
+      try visitor.visitRepeatedMessageField(value: self.customEmojis, fieldNumber: 1)
+    }
+    try { if let v = self._watermark {
+      try visitor.visitSingularMessageField(value: v, fieldNumber: 2)
+    } }()
+    try { if let v = self._nextPageToken {
+      try visitor.visitSingularStringField(value: v, fieldNumber: 3)
+    } }()
+    try unknownFields.traverse(visitor: &visitor)
+  }
+
+  static func ==(lhs: Dynamite_SyncCustomEmojisResponse, rhs: Dynamite_SyncCustomEmojisResponse) -> Bool {
+    if lhs.customEmojis != rhs.customEmojis {return false}
+    if lhs._watermark != rhs._watermark {return false}
     if lhs._nextPageToken != rhs._nextPageToken {return false}
     if lhs.unknownFields != rhs.unknownFields {return false}
     return true

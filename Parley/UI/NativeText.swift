@@ -1005,12 +1005,16 @@ enum MessageTextStyle {
         let placeholder = (attributes[.foregroundColor] as? NSColor ?? .labelColor).withAlphaComponent(0.15)
         let side = ceil(font.ascender - font.descender)
         let image = NSImage(size: NSSize(width: side, height: side), flipped: false) { rect in
-            // Drawn on the main thread by the text view or label; `MessageRowView` redraws once the picture arrives.
-            if Thread.isMainThread, let loaded = MainActor.assumeIsolated({ ImageCache.cached(picture) }), loaded.size.width > 0, loaded.size.height > 0 {
+            // Drawn on the main thread by the text view or label; `MessageRowView` redraws once the picture arrives, and
+            // while an animated one shows, so this picks its frame for the time.
+            let drawn = Thread.isMainThread && MainActor.assumeIsolated { () -> Bool in
+                guard let loaded = ImageCache.cached(picture), loaded.size.width > 0, loaded.size.height > 0 else { return false }
                 let scale = min(rect.width / loaded.size.width, rect.height / loaded.size.height)
                 let size = NSSize(width: loaded.size.width * scale, height: loaded.size.height * scale)
-                loaded.draw(in: NSRect(x: rect.midX - size.width / 2, y: rect.midY - size.height / 2, width: size.width, height: size.height))
-            } else {
+                loaded.drawFrame(in: NSRect(x: rect.midX - size.width / 2, y: rect.midY - size.height / 2, width: size.width, height: size.height))
+                return true
+            }
+            if !drawn {
                 placeholder.setFill()
                 NSBezierPath(roundedRect: rect.insetBy(dx: 1, dy: 1), xRadius: 3, yRadius: 3).fill()
             }

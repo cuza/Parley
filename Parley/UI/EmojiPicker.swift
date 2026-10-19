@@ -320,7 +320,7 @@ struct CustomEmojiImage: View {
     @State private var image: NSImage?
     var body: some View {
         Group {
-            if let image { Image(nsImage: image).resizable().scaledToFit() }
+            if let image { if image.animated { AnimatedImage(image: image) } else { Image(nsImage: image).resizable().scaledToFit() } }
             else { RoundedRectangle(cornerRadius: 4).fill(.quaternary) }
         }
         .frame(width: size, height: size)

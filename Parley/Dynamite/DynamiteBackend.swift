@@ -1640,35 +1640,51 @@ actor DynamiteBackend: ChatBackend {
         return people.map { self.people[$0.id] ?? $0 }
     }
 
-    /// `list_custom_emojis` as Google Chat sends it: 100 a page, the first with filters for enabled (and system-disabled)
-    /// emoji, later pages only the token. Only enabled ones can be sent.
-    /// A page that fails after others loaded keeps what they brought; a first page that fails throws, so it's asked again.
-    /// Each read logs what it found, in numbers only (`CustomEmojiTally`), for "custom emoji don't show" reports.
-    // ponytail: stops after 20 pages (2,000 emoji); raise it if an organisation has more.
+    /// The organisation's emoji as Google Chat's Android app reads them: the first page from `list_custom_emojis` (100,
+    /// with filters for enabled and system-disabled ones), the rest from `sync_custom_emojis` with that page's watermark and
+    /// next page token (504 a page), since list_custom_emojis answers a page token with HTTP 400. Only enabled ones can be
+    /// sent; a later copy of one replaces it. A page that fails after the first keeps what came before; a first page that
+    /// fails throws, so it's asked again. Each read logs what it found, in numbers only (`CustomEmojiTally`).
+    // ponytail: stops after 20 pages (about 10,000 emoji); raise it if an organisation has more.
     func customEmojis() async throws -> [CustomEmoji] {
-        var emoji: [CustomEmoji] = [], token: String?, tally = CustomEmojiTally()
-        for page in 0..<20 {
-            let request = Dynamite_ListCustomEmojisRequest.with { r in
-                r.requestHeader = DynamiteClient.header
-                r.pageSize = 100
-                if let token { r.pageToken = token } else { r.filters = Self.customEmojiFilters }
+        var order: [String] = [], byID: [String: CustomEmoji] = [:], tally = CustomEmojiTally()
+        func keep(_ page: [Dynamite_CustomEmoji]) {
+            tally.add(page)
+            for proto in page {
+                let id = proto.uuid.isEmpty ? proto.shortcode : proto.uuid
+                guard proto.state == .enabled, let emoji = DynamiteMapper.customEmoji(proto) else { byID[id] = nil; continue }
+                if byID.updateValue(emoji, forKey: id) == nil { order.append(id) }
             }
-            let response: Dynamite_ListCustomEmojisResponse
-            do { response = try await rpc("list_custom_emojis", request) } catch {
-                log.notice("\(tally.line(end: "page \(page + 1) failed: \(CustomEmojiTally.kind(of: error))"), privacy: .public)")
-                if page == 0 { throw error }
-                return emoji
-            }
-            tally.add(response.customEmojis)
-            emoji += response.customEmojis.filter { $0.state == .enabled }.compactMap(DynamiteMapper.customEmoji)
-            guard !response.nextPageToken.isEmpty, response.nextPageToken != token else {
-                log.notice("\(tally.line(end: response.nextPageToken.isEmpty ? "done" : "a page token came back twice"), privacy: .public)")
-                return emoji
-            }
-            token = response.nextPageToken
         }
-        log.notice("\(tally.line(end: "stopped at the page limit"), privacy: .public)")
-        return emoji
+        func done(_ end: String) -> [CustomEmoji] {
+            log.notice("\(tally.line(end: end), privacy: .public)")
+            return order.compactMap { byID[$0] }
+        }
+        let first: Dynamite_ListCustomEmojisResponse
+        do {
+            first = try await rpc("list_custom_emojis", Dynamite_ListCustomEmojisRequest.with { r in
+                r.requestHeader = DynamiteClient.header; r.pageSize = 100; r.filters = Self.customEmojiFilters
+            })
+        } catch {
+            _ = done("page 1 failed: \(CustomEmojiTally.kind(of: error))")
+            throw error
+        }
+        keep(first.customEmojis)
+        var token = first.nextPageToken, watermark = first.watermark
+        for page in 2...20 {
+            guard !token.isEmpty else { return done("done") }
+            let response: Dynamite_SyncCustomEmojisResponse
+            do {
+                response = try await rpc("sync_custom_emojis", Dynamite_SyncCustomEmojisRequest.with { r in
+                    r.requestHeader = DynamiteClient.header; r.watermark = watermark; r.pageSize = 504; r.pageToken = token
+                })
+            } catch { return done("page \(page) failed: \(CustomEmojiTally.kind(of: error))") }
+            keep(response.customEmojis)
+            guard response.nextPageToken != token else { return done("a page token came back twice") }
+            token = response.nextPageToken
+            if response.hasWatermark { watermark = response.watermark }
+        }
+        return done(token.isEmpty ? "done" : "stopped at the page limit")
     }
     static let customEmojiFilters: [Dynamite_ListCustomEmojisRequest.Filter] = [
         .with { $0.kind = 2; $0.states.states = [.enabled, .systemDisabled]; $0.operation = 1 },
