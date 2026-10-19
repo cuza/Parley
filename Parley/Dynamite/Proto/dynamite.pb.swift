@@ -731,6 +731,109 @@ nonisolated struct Dynamite_ListCustomEmojisRequest: Sendable {
   fileprivate var _requestHeader: Dynamite_RequestHeader? = nil
 }
 
+/// search_emojis_v2: what ":" suggestions search, as Google Chat's web asks it (the query keeps its colon).
+nonisolated struct Dynamite_SearchEmojisRequest: Sendable {
+  // SwiftProtobuf.Message conformance is added in an extension below. See the
+  // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
+  // methods supported on all messages.
+
+  var query: String {
+    get {_query ?? String()}
+    set {_query = newValue}
+  }
+  /// Returns true if `query` has been explicitly set.
+  var hasQuery: Bool {self._query != nil}
+  /// Clears the value of `query`. Subsequent reads from it will return its default value.
+  mutating func clearQuery() {self._query = nil}
+
+  var types: [Dynamite_SearchEmojisRequest.EmojiType] = []
+
+  var limit: Int32 {
+    get {_limit ?? 0}
+    set {_limit = newValue}
+  }
+  /// Returns true if `limit` has been explicitly set.
+  var hasLimit: Bool {self._limit != nil}
+  /// Clears the value of `limit`. Subsequent reads from it will return its default value.
+  mutating func clearLimit() {self._limit = nil}
+
+  var requestHeader: Dynamite_RequestHeader {
+    get {_requestHeader ?? Dynamite_RequestHeader()}
+    set {_requestHeader = newValue}
+  }
+  /// Returns true if `requestHeader` has been explicitly set.
+  var hasRequestHeader: Bool {self._requestHeader != nil}
+  /// Clears the value of `requestHeader`. Subsequent reads from it will return its default value.
+  mutating func clearRequestHeader() {self._requestHeader = nil}
+
+  var unknownFields = SwiftProtobuf.UnknownStorage()
+
+  nonisolated enum EmojiType: Int, SwiftProtobuf.Enum, Swift.CaseIterable {
+    case unspecified = 0
+    case unicode = 1
+    case custom = 2
+
+    init() {
+      self = .unspecified
+    }
+
+  }
+
+  init() {}
+
+  fileprivate var _query: String? = nil
+  fileprivate var _limit: Int32? = nil
+  fileprivate var _requestHeader: Dynamite_RequestHeader? = nil
+}
+
+nonisolated struct Dynamite_SearchEmojisResponse: Sendable {
+  // SwiftProtobuf.Message conformance is added in an extension below. See the
+  // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
+  // methods supported on all messages.
+
+  var results: [Dynamite_SearchEmojisResponse.Result] = []
+
+  var unknownFields = SwiftProtobuf.UnknownStorage()
+
+  nonisolated struct Result: Sendable {
+    // SwiftProtobuf.Message conformance is added in an extension below. See the
+    // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
+    // methods supported on all messages.
+
+    var emoji: Dynamite_SearchEmojisResponse.Result.OneOf_Emoji? = nil
+
+    /// a standard emoji, left to Parley's own catalog
+    var unicode: Data {
+      get {
+        if case .unicode(let v)? = emoji {return v}
+        return Data()
+      }
+      set {emoji = .unicode(newValue)}
+    }
+
+    var customEmoji: Dynamite_CustomEmoji {
+      get {
+        if case .customEmoji(let v)? = emoji {return v}
+        return Dynamite_CustomEmoji()
+      }
+      set {emoji = .customEmoji(newValue)}
+    }
+
+    var unknownFields = SwiftProtobuf.UnknownStorage()
+
+    nonisolated enum OneOf_Emoji: Equatable, Sendable {
+      /// a standard emoji, left to Parley's own catalog
+      case unicode(Data)
+      case customEmoji(Dynamite_CustomEmoji)
+
+    }
+
+    init() {}
+  }
+
+  init() {}
+}
+
 nonisolated struct Dynamite_ListCustomEmojisResponse: Sendable {
   // SwiftProtobuf.Message conformance is added in an extension below. See the
   // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
@@ -15301,6 +15404,151 @@ nonisolated extension Dynamite_ListCustomEmojisRequest.Filter.States: SwiftProto
 
   static func ==(lhs: Dynamite_ListCustomEmojisRequest.Filter.States, rhs: Dynamite_ListCustomEmojisRequest.Filter.States) -> Bool {
     if lhs.states != rhs.states {return false}
+    if lhs.unknownFields != rhs.unknownFields {return false}
+    return true
+  }
+}
+
+nonisolated extension Dynamite_SearchEmojisRequest: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
+  static let protoMessageName: String = _protobuf_package + ".SearchEmojisRequest"
+  static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{1}query\0\u{1}types\0\u{1}limit\0\u{4}a\u{1}request_header\0")
+
+  mutating func decodeMessage<D: SwiftProtobuf.Decoder>(decoder: inout D) throws {
+    while let fieldNumber = try decoder.nextFieldNumber() {
+      // The use of inline closures is to circumvent an issue where the compiler
+      // allocates stack space for every case branch when no optimizations are
+      // enabled. https://github.com/apple/swift-protobuf/issues/1034
+      switch fieldNumber {
+      case 1: try { try decoder.decodeSingularStringField(value: &self._query) }()
+      case 2: try { try decoder.decodeRepeatedEnumField(value: &self.types) }()
+      case 3: try { try decoder.decodeSingularInt32Field(value: &self._limit) }()
+      case 100: try { try decoder.decodeSingularMessageField(value: &self._requestHeader) }()
+      default: break
+      }
+    }
+  }
+
+  func traverse<V: SwiftProtobuf.Visitor>(visitor: inout V) throws {
+    // The use of inline closures is to circumvent an issue where the compiler
+    // allocates stack space for every if/case branch local when no optimizations
+    // are enabled. https://github.com/apple/swift-protobuf/issues/1034 and
+    // https://github.com/apple/swift-protobuf/issues/1182
+    try { if let v = self._query {
+      try visitor.visitSingularStringField(value: v, fieldNumber: 1)
+    } }()
+    if !self.types.isEmpty {
+      try visitor.visitRepeatedEnumField(value: self.types, fieldNumber: 2)
+    }
+    try { if let v = self._limit {
+      try visitor.visitSingularInt32Field(value: v, fieldNumber: 3)
+    } }()
+    try { if let v = self._requestHeader {
+      try visitor.visitSingularMessageField(value: v, fieldNumber: 100)
+    } }()
+    try unknownFields.traverse(visitor: &visitor)
+  }
+
+  static func ==(lhs: Dynamite_SearchEmojisRequest, rhs: Dynamite_SearchEmojisRequest) -> Bool {
+    if lhs._query != rhs._query {return false}
+    if lhs.types != rhs.types {return false}
+    if lhs._limit != rhs._limit {return false}
+    if lhs._requestHeader != rhs._requestHeader {return false}
+    if lhs.unknownFields != rhs.unknownFields {return false}
+    return true
+  }
+}
+
+nonisolated extension Dynamite_SearchEmojisRequest.EmojiType: SwiftProtobuf._ProtoNameProviding {
+  static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{2}\0EMOJI_TYPE_UNSPECIFIED\0\u{1}UNICODE\0\u{1}CUSTOM\0")
+}
+
+nonisolated extension Dynamite_SearchEmojisResponse: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
+  static let protoMessageName: String = _protobuf_package + ".SearchEmojisResponse"
+  static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{1}results\0")
+
+  mutating func decodeMessage<D: SwiftProtobuf.Decoder>(decoder: inout D) throws {
+    while let fieldNumber = try decoder.nextFieldNumber() {
+      // The use of inline closures is to circumvent an issue where the compiler
+      // allocates stack space for every case branch when no optimizations are
+      // enabled. https://github.com/apple/swift-protobuf/issues/1034
+      switch fieldNumber {
+      case 1: try { try decoder.decodeRepeatedMessageField(value: &self.results) }()
+      default: break
+      }
+    }
+  }
+
+  func traverse<V: SwiftProtobuf.Visitor>(visitor: inout V) throws {
+    if !self.results.isEmpty {
+      try visitor.visitRepeatedMessageField(value: self.results, fieldNumber: 1)
+    }
+    try unknownFields.traverse(visitor: &visitor)
+  }
+
+  static func ==(lhs: Dynamite_SearchEmojisResponse, rhs: Dynamite_SearchEmojisResponse) -> Bool {
+    if lhs.results != rhs.results {return false}
+    if lhs.unknownFields != rhs.unknownFields {return false}
+    return true
+  }
+}
+
+nonisolated extension Dynamite_SearchEmojisResponse.Result: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
+  static let protoMessageName: String = Dynamite_SearchEmojisResponse.protoMessageName + ".Result"
+  static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{1}unicode\0\u{3}custom_emoji\0")
+
+  mutating func decodeMessage<D: SwiftProtobuf.Decoder>(decoder: inout D) throws {
+    while let fieldNumber = try decoder.nextFieldNumber() {
+      // The use of inline closures is to circumvent an issue where the compiler
+      // allocates stack space for every case branch when no optimizations are
+      // enabled. https://github.com/apple/swift-protobuf/issues/1034
+      switch fieldNumber {
+      case 1: try {
+        var v: Data?
+        try decoder.decodeSingularBytesField(value: &v)
+        if let v = v {
+          if self.emoji != nil {try decoder.handleConflictingOneOf()}
+          self.emoji = .unicode(v)
+        }
+      }()
+      case 2: try {
+        var v: Dynamite_CustomEmoji?
+        var hadOneofValue = false
+        if let current = self.emoji {
+          hadOneofValue = true
+          if case .customEmoji(let m) = current {v = m}
+        }
+        try decoder.decodeSingularMessageField(value: &v)
+        if let v = v {
+          if hadOneofValue {try decoder.handleConflictingOneOf()}
+          self.emoji = .customEmoji(v)
+        }
+      }()
+      default: break
+      }
+    }
+  }
+
+  func traverse<V: SwiftProtobuf.Visitor>(visitor: inout V) throws {
+    // The use of inline closures is to circumvent an issue where the compiler
+    // allocates stack space for every if/case branch local when no optimizations
+    // are enabled. https://github.com/apple/swift-protobuf/issues/1034 and
+    // https://github.com/apple/swift-protobuf/issues/1182
+    switch self.emoji {
+    case .unicode?: try {
+      guard case .unicode(let v)? = self.emoji else { preconditionFailure() }
+      try visitor.visitSingularBytesField(value: v, fieldNumber: 1)
+    }()
+    case .customEmoji?: try {
+      guard case .customEmoji(let v)? = self.emoji else { preconditionFailure() }
+      try visitor.visitSingularMessageField(value: v, fieldNumber: 2)
+    }()
+    case nil: break
+    }
+    try unknownFields.traverse(visitor: &visitor)
+  }
+
+  static func ==(lhs: Dynamite_SearchEmojisResponse.Result, rhs: Dynamite_SearchEmojisResponse.Result) -> Bool {
+    if lhs.emoji != rhs.emoji {return false}
     if lhs.unknownFields != rhs.unknownFields {return false}
     return true
   }

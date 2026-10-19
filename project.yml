@@ -15,8 +15,8 @@ settings:
     STRING_CATALOG_GENERATE_SYMBOLS: YES
     ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS: YES
     # The app's and the share extension's version, each alone on its line.
-    MARKETING_VERSION: "1.7.13"
-    CURRENT_PROJECT_VERSION: "74"
+    MARKETING_VERSION: "1.7.14"
+    CURRENT_PROJECT_VERSION: "75"
     PARLEY_URL_SCHEME: parley   # the share extension's hand-off link
     PARLEY_DISPLAY_NAME: Parley   # the app's and the share extension's name
   configs:

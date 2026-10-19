@@ -15,6 +15,7 @@ struct NativeComposer: NSViewRepresentable {
     var needMembers: () -> Void = {}      // asked when a mention starts, to load the full member list
     var customEmoji: [CustomEmoji] = []   // what `:shortcode` suggests
     var needCustomEmoji: () -> Void = {}  // asked when a `:shortcode` starts, to load the organisation's list
+    var searchCustomEmoji: (String) -> Void = { _ in }   // asked as a `:shortcode` is typed, with the text after the ":"
     var slashCommands: [SlashCommand] = []   // what a "/" at the start suggests
     var needSlashCommands: (String) -> Void = { _ in }   // asked as a "/command" is typed, with the text after the "/"
     var runCommand: (SlashCommand) -> Void = { _ in }   // a picked quick command or Google Chat action
@@ -62,6 +63,7 @@ struct NativeComposer: NSViewRepresentable {
         view.heightChanged = { height in DispatchQueue.main.async { report(height) } }   // never mutates state inside this update
         view.needMembers = needMembers
         view.needCustomEmoji = needCustomEmoji
+        view.searchCustomEmoji = searchCustomEmoji
         if view.mentionPeople != members { view.mentionPeople = members }
         view.chipConversations = spaces
         if view.customEmoji != customEmoji { view.customEmoji = customEmoji }
@@ -620,6 +622,7 @@ final class ComposerTextView: NSTextView {
         }
         super.didChangeText()
         updateMention()
+        if emojiAnimation.playing { emojiAnimation.update(customEmojiPictures) }   // the last one deleted: stop
     }
     override func setSelectedRanges(_ ranges: [NSValue], affinity: NSSelectionAffinity, stillSelecting: Bool) {
         super.setSelectedRanges(ranges, affinity: affinity, stillSelecting: stillSelecting)
@@ -659,6 +662,7 @@ final class ComposerTextView: NSTextView {
         if let found = query, dismissedMention != nil || [Self.mentionKey, Self.commandKey].contains(where: { textStorage?.attribute($0, at: found.range.location, effectiveRange: nil) != nil }) { query = nil }
         if let query, query.command, mentionQuery?.command != true || mentionQuery?.text != query.text { needSlashCommands?(query.text) }
         else if let query, mentionQuery?.shortcode != query.shortcode || mentionQuery?.command == true { query.shortcode ? needCustomEmoji?() : needMembers?() }
+        if let query, query.shortcode, !query.text.isEmpty, mentionQuery?.shortcode != true || mentionQuery?.text != query.text { searchCustomEmoji?(query.text) }
         if query == nil, caret.length == 0, let link = MentionQuery.chatLink(in: string, caret: caret.location, among: chipConversations),
            link.range.location != dismissedMention, textStorage?.attribute(Self.chipKey, at: link.range.location, effectiveRange: nil) == nil {
             query = link
@@ -706,8 +710,11 @@ final class ComposerTextView: NSTextView {
     static let customEmojiKey = NSAttributedString.Key("Parley.composer.customEmoji")
     var customEmoji: [CustomEmoji] = [] { didSet { updateMention() } }
     var needCustomEmoji: (() -> Void)?
+    var searchCustomEmoji: ((String) -> Void)?
     var loadImage: (Attachment, Bool) async throws -> Data = { _, _ in throw CancellationError() }
     private var imageTask: Task<Void, Never>?
+    private lazy var emojiAnimation = EmojiAnimation(self) { [weak self] in self?.needsDisplay = true }
+    var animatesEmoji: Bool { emojiAnimation.playing }
 
     /// Replaces `range` (the selection, or a `:shortcode` query) with the emoji's picture, and a space after a query.
     func insertCustomEmoji(_ emoji: CustomEmoji, replacing range: NSRange, space: Bool = false) {
@@ -728,12 +735,11 @@ final class ComposerTextView: NSTextView {
         return picture.length == 1 ? picture : NSAttributedString(string: "\u{FFFD}", attributes: attributes)
     }
     /// Pictures not in `ImageCache` yet draw as placeholders: fetch them, then redraw.
+    /// Animated ones play (`EmojiAnimation`).
     private func loadCustomEmojiImages() {
-        guard let storage = textStorage else { return }
-        var pictures = Set<Attachment>()
-        storage.enumerateAttribute(Self.customEmojiKey, in: NSRange(location: 0, length: storage.length)) { value, _, _ in
-            if let picture = (value as? CustomEmoji)?.image, ImageCache.cached(picture) == nil { pictures.insert(picture) }
-        }
+        let all = customEmojiPictures
+        emojiAnimation.update(all)
+        let pictures = all.filter { ImageCache.cached($0) == nil }
         guard !pictures.isEmpty else { return }
         let load = loadImage
         imageTask?.cancel()
@@ -741,7 +747,16 @@ final class ComposerTextView: NSTextView {
             for picture in pictures { _ = try? await ImageCache.load(picture, load) }
             guard let self, !Task.isCancelled else { return }
             needsDisplay = true
+            emojiAnimation.update(all)
         }
+    }
+    private var customEmojiPictures: Set<Attachment> {
+        guard let storage = textStorage else { return [] }
+        var pictures = Set<Attachment>()
+        storage.enumerateAttribute(Self.customEmojiKey, in: NSRange(location: 0, length: storage.length)) { value, _, _ in
+            if let picture = (value as? CustomEmoji)?.image { pictures.insert(picture) }
+        }
+        return pictures
     }
 
     /// List bullets sit in each item's indent. They are drawn, not typed, so the sent text stays marker-free.

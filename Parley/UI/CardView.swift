@@ -365,9 +365,13 @@ extension NSImage {
     /// which NSImageView can't animate; the view redraws while one shows.
     @MainActor func drawFrame(in rect: NSRect, at time: TimeInterval = Date.now.timeIntervalSinceReferenceDate) {
         guard let rep = animatedRep else { draw(in: rect); return }
-        let frame = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion ? 0 : Self.frame(durations: Self.durations(rep), at: time)
-        rep.setProperty(.currentFrame, withValue: frame)
-        rep.draw(in: rect)
+        let frames = Self.frames(rep)
+        frames.images[NSWorkspace.shared.accessibilityDisplayShouldReduceMotion ? 0 : Self.frame(durations: frames.durations, at: time)].draw(in: rect)
+    }
+    /// Redraws a second that show every frame, as NSImageView plays it: one per shortest frame, up to 60. Nil when still.
+    @MainActor var frameRate: Float? {
+        guard let rep = animatedRep, let shortest = Self.frames(rep).durations.min(), shortest > 0 else { return nil }
+        return Float(min(60, (1 / shortest).rounded()))
     }
     /// Which frame shows `time` seconds into a loop of these durations.
     nonisolated static func frame(durations: [TimeInterval], at time: TimeInterval) -> Int {
@@ -382,16 +386,63 @@ extension NSImage {
     }
     /// As browsers play GIFs: a frame of under 20 ms (often 0, "as fast as possible") shows for 100 ms.
     nonisolated static func playable(_ durations: [TimeInterval]) -> [TimeInterval] { durations.map { $0 < 0.02 ? 0.1 : $0 } }
-    @MainActor private static let frameDurations = NSMapTable<NSBitmapImageRep, NSArray>.weakToStrongObjects()
-    @MainActor private static func durations(_ rep: NSBitmapImageRep) -> [TimeInterval] {
-        if let known = frameDurations.object(forKey: rep) as? [TimeInterval] { return known }
+    /// An animation's frames, decoded once in order: a GIF frame drawn on its own is rebuilt from every frame before it,
+    /// which costs milliseconds each time a redraw jumps ahead.
+    private final class Frames {
+        let images: [NSBitmapImageRep], durations: [TimeInterval]
+        init(images: [NSBitmapImageRep], durations: [TimeInterval]) { self.images = images; self.durations = durations }
+    }
+    // ponytail: every frame stays decoded while its picture is in `ImageCache` (74 frames of 128 px are about 5 MB);
+    // decode at the drawn size if many animated emoji show at once.
+    @MainActor private static let decoded = NSMapTable<NSBitmapImageRep, Frames>.weakToStrongObjects()
+    @MainActor private static func frames(_ rep: NSBitmapImageRep) -> Frames {
+        if let known = decoded.object(forKey: rep) { return known }
         let count = rep.value(forProperty: .frameCount) as? Int ?? 1
-        let durations = playable((0..<count).map { frame in
+        var images: [NSBitmapImageRep] = [], durations: [TimeInterval] = []
+        for frame in 0..<count {
             rep.setProperty(.currentFrame, withValue: frame)
-            return (rep.value(forProperty: .currentFrameDuration) as? Double) ?? 0.1
-        })
-        frameDurations.setObject(durations as NSArray, forKey: rep)
-        return durations
+            durations.append((rep.value(forProperty: .currentFrameDuration) as? Double) ?? 0.1)
+            guard let image = rep.cgImage, let still = Self.decodedCopy(image) else { continue }
+            images.append(NSBitmapImageRep(cgImage: still))
+        }
+        rep.setProperty(.currentFrame, withValue: 0)
+        let frames = images.count == count ? Frames(images: images, durations: playable(durations)) : Frames(images: [rep], durations: [1])
+        decoded.setObject(frames, forKey: rep)
+        return frames
+    }
+    /// The frame's pixels drawn into a bitmap of their own, so drawing it later decodes nothing.
+    private static func decodedCopy(_ image: CGImage) -> CGImage? {
+        let context = CGContext(data: nil, width: image.width, height: image.height, bitsPerComponent: 8, bytesPerRow: 0,
+                                space: CGColorSpace(name: CGColorSpace.sRGB)!, bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)
+        context?.draw(image, in: CGRect(x: 0, y: 0, width: image.width, height: image.height))
+        return context?.makeImage()
+    }
+}
+
+/// Redraws a view while it shows an animated custom emoji, at the emoji's own pace (`NSImage.frameRate`), with the view's
+/// display link: it follows the screen, keeps going while a list scrolls, and stops when the view leaves its window.
+/// Nothing plays with Reduce Motion on.
+@MainActor final class EmojiAnimation: NSObject {
+    private weak var view: NSView?
+    private let redraw: () -> Void
+    private var link: CADisplayLink?
+    var playing: Bool { link != nil }
+    init(_ view: NSView, redraw: @escaping () -> Void) { self.view = view; self.redraw = redraw }
+    /// Plays while one of `pictures` is an animated picture `ImageCache` has.
+    func update(_ pictures: Set<Attachment>) {
+        let rate = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion ? nil : pictures.compactMap { ImageCache.cached($0)?.frameRate }.max()
+        guard let rate, let view else { stop(); return }
+        if link == nil {
+            let link = view.displayLink(target: self, selector: #selector(tick))
+            link.add(to: .main, forMode: .common)
+            self.link = link
+        }
+        link?.preferredFrameRateRange = CAFrameRateRange(minimum: min(rate, 10), maximum: rate, preferred: rate)
+    }
+    func stop() { link?.invalidate(); link = nil }
+    @objc private func tick(_ link: CADisplayLink) {
+        guard let view else { stop(); return }
+        if view.window != nil { redraw() }
     }
 }
 

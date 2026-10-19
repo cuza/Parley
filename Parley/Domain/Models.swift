@@ -778,6 +778,8 @@ protocol ChatBackend: Sendable {
     func shared(_ category: SharedCategory, in conversation: ConversationID, after: SharedContent.Item?) async throws -> SharedPage
     /// The organisation's custom emoji that can be sent (enabled ones), every page.
     func customEmojis() async throws -> [CustomEmoji]
+    /// The organisation's enabled custom emoji whose shortcode matches `query` (typed after the ":"), as the server finds them.
+    func searchCustomEmoji(_ query: String) async throws -> [CustomEmoji]
     /// The commands `conversation` offers whose name contains `query` (typed after the "/"; empty: the first page of all):
     /// its apps' and Google Chat's "Send a Meet link"; in an app's DM (`toApp`), that app's only.
     func slashCommands(in conversation: ConversationID, matching query: String, toApp: Bool) async throws -> [SlashCommand]

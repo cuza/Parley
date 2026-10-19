@@ -32,6 +32,14 @@ extension AuthTests {
         // Filter {1 kind, 2 {1 states}, 3 operation} on the wire.
         #expect(try Dynamite_ListCustomEmojisRequest.Filter(serializedBytes: Data([0x08, 0x03, 0x12, 0x02, 0x08, 0x01, 0x18, 0x01])) == DynamiteBackend.customEmojiFilters[1])
     }
+    /// A page that brings nothing new ends the read: a server handing out pages that repeat can't keep it going.
+    @Test func aPageWithNothingNewEndsTheList() async throws {
+        let first = Dynamite_ListCustomEmojisResponse.with { $0.customEmojis = [listed("a", "parrot")]; $0.nextPageToken = "p2"; $0.validationToken = "v1" }
+        let again = Dynamite_ListCustomEmojisResponse.with { $0.customEmojis = [listed("a", "parrot")]; $0.nextPageToken = "p3"; $0.validationToken = "v1" }
+        let (backend, exchange) = try await Self.connected([try Self.proto(first), try Self.proto(again)])
+        #expect(try await backend.customEmojis().map(\.id) == ["a"])
+        #expect(exchange.requests.filter { $0.url?.path == "/api/list_custom_emojis" }.count == 2)
+    }
     /// A page that fails after others loaded keeps what they brought: the picker shows those instead of none.
     @Test func aLaterPageFailingKeepsTheEarlierOnes() async throws {
         let first = Dynamite_ListCustomEmojisResponse.with { $0.customEmojis = [listed("a", "parrot")]; $0.nextPageToken = "p2"; $0.validationToken = "v1" }
@@ -43,14 +51,23 @@ extension AuthTests {
         var tally = CustomEmojiTally()
         tally.add([listed("uuid-secret", "secret-name"), listed("b", "other", state: .systemDisabled),
                    .with { $0.uuid = "c"; $0.shortcode = "no-token"; $0.state = .enabled }])
-        let line = tally.line(end: "done")
-        #expect(line == "custom emoji: 1 pages, 3 listed, 2 enabled, 1 enabled without an image, states [enabled: 2, systemDisabled: 1], done")
+        let line = tally.line(kept: 2, end: "done")
+        #expect(line == "custom emoji: 1 pages, 3 listed, 2 enabled, 1 enabled without an image, 2 kept, states [enabled: 2, systemDisabled: 1], done")
         for secret in ["uuid-secret", "secret-name", "rt-", "blob", "no-token", "http"] { #expect(!line.contains(secret)) }
         // Errors by kind and code, never their text.
         #expect(CustomEmojiTally.kind(of: AuthFailure.http(429)) == "HTTP 429")
         #expect(CustomEmojiTally.kind(of: AuthFailure.malformedProto) == "malformedProto")
         #expect(CustomEmojiTally.kind(of: AuthFailure.bootstrapRedirect("a name")) == "bootstrapRedirect")
         #expect(CustomEmojiTally.kind(of: URLError(.timedOut)) == "network -1001")
+    }
+    /// ":" plus letters searches the server, as Google Chat's web does: search_emojis_v2 {1 ":query", 2 [CUSTOM], 3 40}.
+    /// Its custom results become CustomEmoji; standard ones are left to the local catalog.
+    @Test func aShortcodeSearchAsksTheServerForCustomEmoji() async throws {
+        let found = Dynamite_SearchEmojisResponse.with { $0.results = [.with { $0.customEmoji = listed("z", "samba") }, .with { $0.unicode = Data([0x0A, 0x01, 0x41]) }] }
+        let (backend, exchange) = try await Self.connected([try Self.proto(found)])
+        #expect(try await backend.searchCustomEmoji("sam").map(\.id) == ["z"])
+        let sent = try Dynamite_SearchEmojisRequest(serializedBytes: Self.body(try #require(exchange.requests.last { $0.url?.path == "/api/search_emojis_v2" })))
+        #expect(sent.query == ":sam" && sent.types == [.custom] && sent.limit == 40 && sent.hasRequestHeader)
     }
     @Test func aCustomEmojiPickedForAReactionSendsItsWholePayload() async throws {
         let list = Dynamite_ListCustomEmojisResponse.with { $0.customEmojis = [listed("a", "parrot")] }
@@ -119,6 +136,15 @@ struct CustomEmojiAnnotationTests {
         #expect(MentionQuery.nearest(in: "@ana", caret: 4)?.shortcode == false)
         #expect(MentionQuery.filter([party, parrot], by: "PAR").map(\.id) == ["a", "b"])
         #expect(MentionQuery.filter([party, parrot], by: "ty").map(\.id) == ["b"])
+    }
+    /// Each new ":" query asks for a server search with what follows the colon.
+    @Test func typingAShortcodeSearchesAsItGoes() {
+        let view = ComposerTextView(usingTextLayoutManager: false)
+        var searched: [String] = []
+        view.searchCustomEmoji = { searched.append($0) }
+        view.insertText(":s", replacementRange: view.selectedRange())
+        view.insertText("a", replacementRange: view.selectedRange())
+        #expect(searched == ["s", "sa"])
     }
     @Test func typingAShortcodeAsksForTheListAndPickingInsertsTheEmoji() {
         let view = ComposerTextView(usingTextLayoutManager: false)
@@ -198,5 +224,20 @@ struct CustomEmojiAnnotationTests {
         view.insertText(":facepalm", replacementRange: view.selectedRange())
         #expect(view.mentionMatches.first == .unicode(EmojiCatalog.emoji("🤦")))
         #expect(view.mentionMatches.contains(.unicode(EmojiCatalog.emoji("🤦\u{200D}♂\u{FE0F}"))))
+    }
+}
+
+/// What a server search finds joins the list, so ":" suggestions and the picker can show it.
+@MainActor struct CustomEmojiSearchStoreTests {
+    @Test func searchResultsJoinTheList() async throws {
+        let store = ChatStore(backend: FakeBackend())
+        await store.start()
+        await store.loadCustomEmoji()
+        let before = store.customEmoji.map(\.id)
+        store.searchCustomEmoji("sam")
+        await eventually { store.customEmoji.count > before.count }
+        #expect(store.customEmoji.map(\.id) == before + [FakeBackend.searchOnlyEmoji.id])
+        store.searchCustomEmoji("sam")   // found again: still once
+        #expect(store.customEmoji.filter { $0.id == FakeBackend.searchOnlyEmoji.id }.count == 1)
     }
 }

@@ -943,6 +943,7 @@ struct ComposerBar: View {
             }, attach: attach,
                members: store.mentionSuggestions(conversation.id), spaces: store.conversations, needMembers: { Task { await store.loadMembers(conversation.id) } },
                customEmoji: store.customEmoji, needCustomEmoji: { Task { await store.loadCustomEmoji() } },
+               searchCustomEmoji: { query in store.searchCustomEmoji(query) },
                slashCommands: store.slashCommands[conversation.id] ?? [],
                needSlashCommands: { query in Task { await store.loadSlashCommands(conversation.id, query: query) } },
                runCommand: { command in Task { await store.run(command, in: conversation.id) } },

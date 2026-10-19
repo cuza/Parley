@@ -231,6 +231,9 @@ actor FakeBackend: ChatBackend {
     static let customEmoji = [shipIt, CustomEmoji(id: "demo-lgtm", shortcode: "lgtm", imageURL: URL(string: "https://example.invalid/emoji/lgtm")),
                               CustomEmoji(id: "demo-party-parrot", shortcode: "party-parrot", imageURL: URL(string: "https://example.invalid/emoji/party-parrot"))]
     func customEmojis() -> [CustomEmoji] { Self.customEmoji }
+    /// One the list leaves out, found only by searching: an organisation with more emoji than one read brings.
+    static let searchOnlyEmoji = CustomEmoji(id: "demo-samba", shortcode: "samba", imageURL: URL(string: "https://example.invalid/emoji/samba"))
+    func searchCustomEmoji(_ query: String) -> [CustomEmoji] { MentionQuery.filter(Self.customEmoji + [Self.searchOnlyEmoji], by: query) }
     /// The demo apps' commands, matched as the server does: the query anywhere in the name.
     static let slashCommands = [
         SlashCommand(appID: shipyard.id, appName: shipyard.name, appAvatar: shipyardIcon, name: "/deploy", id: 1, description: "Deploy a build", opensDialog: true),

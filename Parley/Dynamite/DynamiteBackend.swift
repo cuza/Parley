@@ -1645,15 +1645,18 @@ actor DynamiteBackend: ChatBackend {
     /// (an answer's field 4, back as field 5); without it a second page answers HTTP 400. Only enabled ones can be sent; a
     /// later copy of one replaces it. A page that fails after the first keeps what came before; a first page that fails
     /// throws, so it's asked again. Each read logs what it found, in numbers only (`CustomEmojiTally`).
-    // ponytail: stops after 30 pages (3,000 emoji); raise it if an organisation has more.
+    /// Reads every page: it stops when there's no next page, a page token repeats or a page brings nothing new.
     func customEmojis() async throws -> [CustomEmoji] {
-        var order: [String] = [], byID: [String: CustomEmoji] = [:], tally = CustomEmojiTally()
+        var order: [String] = [], byID: [String: CustomEmoji] = [:], seen: Set<String> = [], tally = CustomEmojiTally()
         var token = "", validation = ""
         func done(_ end: String) -> [CustomEmoji] {
-            log.notice("\(tally.line(end: end), privacy: .public)")
-            return order.compactMap { byID[$0] }
+            let kept = order.compactMap { byID[$0] }
+            log.notice("\(tally.line(kept: kept.count, end: end), privacy: .public)")
+            return kept
         }
-        for page in 1...30 {
+        var page = 0
+        while true {
+            page += 1
             let request = Dynamite_ListCustomEmojisRequest.with { r in
                 r.requestHeader = DynamiteClient.header
                 r.pageSize = 100
@@ -1666,17 +1669,30 @@ actor DynamiteBackend: ChatBackend {
                 return line
             }
             tally.add(response.customEmojis)
+            var unseen = 0   // any state: a page of disabled ones is still news
             for proto in response.customEmojis {
                 let id = proto.uuid.isEmpty ? proto.shortcode : proto.uuid
+                if seen.insert(id).inserted { unseen += 1 }
                 guard proto.state == .enabled, let emoji = DynamiteMapper.customEmoji(proto) else { byID[id] = nil; continue }
                 if byID.updateValue(emoji, forKey: id) == nil { order.append(id) }
             }
+            if page > 1, unseen == 0 { return done("a page brought nothing new") }
             if !response.validationToken.isEmpty { validation = response.validationToken }
             guard !response.nextPageToken.isEmpty else { return done("done") }
             guard response.nextPageToken != token else { return done("a page token came back twice") }
             token = response.nextPageToken
         }
-        return done("stopped at the page limit")
+    }
+    /// The organisation's enabled emoji matching `query` (what follows ":"), as Google Chat's web searches them: up to 40.
+    func searchCustomEmoji(_ query: String) async throws -> [CustomEmoji] {
+        let request = Dynamite_SearchEmojisRequest.with { r in
+            r.requestHeader = DynamiteClient.header; r.query = ":" + query; r.types = [.custom]; r.limit = 40
+        }
+        let response: Dynamite_SearchEmojisResponse = try await rpc("search_emojis_v2", request)
+        return response.results.compactMap { result in
+            guard case .customEmoji(let proto) = result.emoji, proto.state == .enabled else { return nil }
+            return DynamiteMapper.customEmoji(proto)
+        }
     }
     static let customEmojiFilters: [Dynamite_ListCustomEmojisRequest.Filter] = [
         .with { $0.kind = 2; $0.states.states = [.enabled, .systemDisabled]; $0.operation = 1 },
@@ -1953,9 +1969,10 @@ struct CustomEmojiTally {
             if emoji.state == .enabled { enabled += 1; if emoji.readToken.isEmpty { withoutImage += 1 } }
         }
     }
-    func line(end: String) -> String {
+    /// `kept`: the distinct enabled emoji the read ends with (pages can repeat one).
+    func line(kept: Int, end: String) -> String {
         let states = self.states.sorted { $0.key < $1.key }.map { "\($0.key): \($0.value)" }.joined(separator: ", ")
-        return "custom emoji: \(pages) pages, \(listed) listed, \(enabled) enabled, \(withoutImage) enabled without an image, states [\(states)], \(end)"
+        return "custom emoji: \(pages) pages, \(listed) listed, \(enabled) enabled, \(withoutImage) enabled without an image, \(kept) kept, states [\(states)], \(end)"
     }
     /// An error's kind and code, never its text (which can carry a link).
     static func kind(of error: Error) -> String {

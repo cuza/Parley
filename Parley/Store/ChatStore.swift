@@ -94,6 +94,7 @@ final class ChatStore {
     /// The organisation's custom emoji, for the picker and `:shortcode` suggestions; see `loadCustomEmoji`.
     private(set) var customEmoji: [CustomEmoji] = []
     @ObservationIgnored private var customEmojiLoad: Task<Void, Never>?
+    @ObservationIgnored private var customEmojiQuery = ""
     /// The conversations' apps' slash commands found so far, for the composer's "/" list; see `loadSlashCommands`.
     private(set) var slashCommands: [ConversationID: [SlashCommand]] = [:]
     @ObservationIgnored private var slashQueries: [ConversationID: Set<String>] = [:]
@@ -189,7 +190,7 @@ final class ChatStore {
     }
     /// What `forgetAccount` clears when another account connects.
     static let accountState: Set<String> = [
-        "draftListing", "customEmojiLoad", "followCheck", "draftTimers", "draftWrites", "pageLoads",
+        "draftListing", "customEmojiLoad", "customEmojiQuery", "followCheck", "draftTimers", "draftWrites", "pageLoads",
         "serverDrafts", "scheduled", "pinned", "draftEdits", "draftsListed", "spentDrafts", "draftSends",
         "conversations", "hidden", "homeThreads", "messages", "timelines", "selectedID", "drafts", "draftedScopes",
         "draftFormatting", "draftAttachments", "quoting", "editing", "heldDrafts",
@@ -1389,6 +1390,18 @@ final class ChatStore {
         }
         customEmojiLoad = load
         await load.value
+    }
+
+    /// Asks the server for the organisation's emoji matching `text` (what follows ":") and adds what's new to `customEmoji`,
+    /// so a large organisation's emoji show before (or without) the whole list. The latest query wins; a failure is ignored.
+    func searchCustomEmoji(_ text: String) {
+        customEmojiQuery = text
+        coalesce("emoji-search") {
+            guard let found = try? await self.backend.searchCustomEmoji(self.customEmojiQuery) else { return }
+            let known = Set(self.customEmoji.map(\.id))
+            let new = found.filter { !known.contains($0.id) }
+            if !new.isEmpty { self.customEmoji += new }
+        }
     }
 
     func loadMembers(_ conversation: ConversationID) async {

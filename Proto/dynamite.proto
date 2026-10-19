@@ -79,6 +79,24 @@ message ListCustomEmojisRequest {
   optional string validation_token = 5;   // the first answer's field 4, with each page token: without it, HTTP 400
   optional RequestHeader request_header = 100;
 }
+// search_emojis_v2: what ":" suggestions search, as Google Chat's web asks it (the query keeps its colon).
+message SearchEmojisRequest {
+  enum EmojiType { EMOJI_TYPE_UNSPECIFIED = 0; UNICODE = 1; CUSTOM = 2; }
+  optional string query = 1;
+  repeated EmojiType types = 2;
+  optional int32 limit = 3;
+  optional RequestHeader request_header = 100;
+}
+message SearchEmojisResponse {
+  message Result {
+    oneof emoji {
+      bytes unicode = 1;               // a standard emoji, left to Parley's own catalog
+      CustomEmoji custom_emoji = 2;
+    }
+  }
+  repeated Result results = 1;
+}
+
 message ListCustomEmojisResponse {
   repeated CustomEmoji custom_emojis = 1;
   optional string next_page_token = 2;

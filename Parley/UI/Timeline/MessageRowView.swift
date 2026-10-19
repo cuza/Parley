@@ -80,7 +80,7 @@ final class MessageRowView: NSTableRowView {
     private(set) var attachmentViews: [AttachmentHostView] = []
     private(set) var reactionPills: [TextLabel] = []
     private var emojiTask: Task<Void, Never>?
-    private var emojiTimer: Timer?   // redraws an animated custom emoji's frames while the row shows one
+    private lazy var emojiAnimation = EmojiAnimation(self) { [weak self] in self?.redrawEmoji() }   // while the row shows an animated custom emoji
     let repliesLink = TextLabel()
     let sourcesLink = TextLabel()   // a Gemini answer's "N Sources": a click lists them
     let translationLink = TextLabel()   // a translated message's "View original (…)" / "Show translation"
@@ -409,36 +409,20 @@ final class MessageRowView: NSTableRowView {
         let all = Set((text + message.reactions.compactMap(\.custom)).compactMap(\.image))
         let pictures = all.filter { ImageCache.cached($0) == nil }
         emojiTask?.cancel()
-        emojiTimer?.invalidate(); emojiTimer = nil
-        guard !pictures.isEmpty else { animateEmoji(all); return }
+        emojiAnimation.update(all)
+        guard !pictures.isEmpty else { return }
         let load = actions.loadAttachment
         emojiTask = Task { [weak self] in
             for picture in pictures { _ = try? await ImageCache.load(picture, load) }
             guard let self, !Task.isCancelled else { return }
             redrawEmoji()
-            animateEmoji(all)
+            emojiAnimation.update(all)
         }
     }
     private func redrawEmoji() {
         textView.needsDisplay = true
         quoteTextLabel.needsDisplay = true
         reactionPills.forEach { $0.needsDisplay = true }
-    }
-    /// While an animated custom emoji shows, the text and pills redraw 15 times a second (in every run loop mode, so it
-    /// moves while the list scrolls); their drawing picks each emoji's frame for the time. None with Reduce Motion on.
-    private func animateEmoji(_ pictures: Set<Attachment>) {
-        guard !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion,
-              pictures.contains(where: { ImageCache.cached($0)?.animated == true }) else { return }
-        let timer = Timer(timeInterval: 1.0 / 15, repeats: true) { [weak self] timer in
-            let alive = MainActor.assumeIsolated { () -> Bool in
-                guard let self else { return false }
-                if self.window != nil { self.redrawEmoji() }
-                return true
-            }
-            if !alive { timer.invalidate() }
-        }
-        RunLoop.main.add(timer, forMode: .common)
-        emojiTimer = timer
     }
     private func addReactionFrame(_ layout: RowLayout) -> CGRect? {
         guard let last = layout.reactions.last else { return nil }
