@@ -31,6 +31,27 @@ import UniformTypeIdentifiers
         #expect((color(at: 0.15)?.greenComponent ?? 0) > 0.9)
         #expect((color(at: 0.25)?.blueComponent ?? 0) > 0.9)
     }
+    /// Google serves animated custom emoji as WebP, which NSImage splits into separate pictures with no frame count: the
+    /// decoder rebuilds it as a GIF, so it plays like one, with each frame for its time.
+    @Test func anAnimatedWebPDecodesToAPlayableAnimation() throws {
+        let webp = try #require(Data(base64Encoded: Self.webp))   // three 8×8 frames, red, green, blue, 100 ms each (img2webp)
+        #expect(NSImage(data: webp)?.animated == false)   // what AppKit makes of it alone
+        let image = try #require(ImageCache.decode(webp, maxPixels: 64))
+        #expect(image.animated)
+        func color(at time: TimeInterval) -> NSColor? {
+            let bitmap = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: 4, pixelsHigh: 4, bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true,
+                                          isPlanar: false, colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0)!
+            NSGraphicsContext.saveGraphicsState()
+            NSGraphicsContext.current = NSGraphicsContext(bitmapImageRep: bitmap)
+            image.drawFrame(in: NSRect(x: 0, y: 0, width: 4, height: 4), at: time)
+            NSGraphicsContext.restoreGraphicsState()
+            return bitmap.colorAt(x: 2, y: 2)
+        }
+        #expect((color(at: 0.05)?.redComponent ?? 0) > 0.9)
+        #expect((color(at: 0.15)?.greenComponent ?? 0) > 0.9)
+        #expect((color(at: 0.25)?.blueComponent ?? 0) > 0.9)
+    }
+    static let webp = "UklGRrQAAABXRUJQVlA4WAoAAAACAAAABwAABwAAQU5JTQYAAAD/////AABBTk1GKAAAAAAAAAAAAAcAAAcAAGQAAAJWUDhMDwAAAC8HwAEABxD9j/4HIqL/AQBBTk1GKAAAAAAAAAAAAAcAAAcAAGQAAABWUDhMDwAAAC8HwAEAB9D/iP4HIqL/AQBBTk1GKAAAAAAAAAAAAAcAAAcAAGQAAABWUDhMDwAAAC8HwAEABxDR//4HIqL/AQA="
     static func gif(_ colors: [NSColor], delay: Double) -> Data {
         let data = NSMutableData()
         let destination = CGImageDestinationCreateWithData(data, UTType.gif.identifier as CFString, colors.count, nil)!

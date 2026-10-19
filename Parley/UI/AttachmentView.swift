@@ -3,6 +3,9 @@ import CryptoKit
 import AppKit
 import SwiftUI
 import UniformTypeIdentifiers
+import os
+
+private let log = Logger(subsystem: "dev.cuza.Parley", category: "images")
 
 /// One attachment in a bubble: images, GIFs and video posters inline; files and links as a chip.
 /// `load(attachment, thumbnail)` returns the bytes (`ChatStore.attachmentData`). Clicks, drags and the menu are
@@ -248,14 +251,48 @@ extension Attachment {
         return try await task.value
     }
     /// Downsampled to `maxPixels` on its longer side and decoded now, so drawing it costs nothing on the main thread.
-    /// An animated GIF is kept whole: `AnimatedImage` plays its frames.
+    /// An animated GIF or PNG is kept whole: `AnimatedImage` and `NSImage.drawFrame` play its frames. An animated WebP (as
+    /// Google serves animated custom emoji), which NSImage splits into separate pictures, is rebuilt as a GIF first.
     nonisolated static func decode(_ data: Data, maxPixels: Int) -> NSImage? {
         guard let source = CGImageSourceCreateWithData(data as CFData, nil) else { return nil }
-        if CGImageSourceGetCount(source) > 1 { return NSImage(data: data) }
+        if CGImageSourceGetCount(source) > 1 {
+            if let image = NSImage(data: data), image.animated { return image }
+            return gif(from: source, maxPixels: maxPixels) ?? NSImage(data: data)
+        }
         let options: [CFString: Any] = [kCGImageSourceCreateThumbnailFromImageAlways: true, kCGImageSourceShouldCacheImmediately: true,
                                         kCGImageSourceCreateThumbnailWithTransform: true, kCGImageSourceThumbnailMaxPixelSize: maxPixels]
         guard let image = CGImageSourceCreateThumbnailAtIndex(source, 0, options as CFDictionary) else { return nil }
         return NSImage(cgImage: image, size: NSSize(width: image.width, height: image.height))
+    }
+}
+
+extension ImageCache {
+    /// An animated picture AppKit won't play, rebuilt as a looping GIF from ImageIO's frames at display size, each for its
+    /// own time. Logged by format and frame count only.
+    nonisolated static func gif(from source: CGImageSource, maxPixels: Int) -> NSImage? {
+        let count = CGImageSourceGetCount(source), data = NSMutableData()
+        guard let destination = CGImageDestinationCreateWithData(data, UTType.gif.identifier as CFString, count, nil) else { return nil }
+        CGImageDestinationSetProperties(destination, [kCGImagePropertyGIFDictionary: [kCGImagePropertyGIFLoopCount: 0]] as CFDictionary)
+        let options: [CFString: Any] = [kCGImageSourceCreateThumbnailFromImageAlways: true, kCGImageSourceCreateThumbnailWithTransform: true,
+                                        kCGImageSourceThumbnailMaxPixelSize: maxPixels]
+        for index in 0..<count {
+            guard let frame = CGImageSourceCreateThumbnailAtIndex(source, index, options as CFDictionary) else { return nil }
+            CGImageDestinationAddImage(destination, frame, [kCGImagePropertyGIFDictionary: [kCGImagePropertyGIFDelayTime: delay(source, index)]] as CFDictionary)
+        }
+        guard CGImageDestinationFinalize(destination) else { return nil }
+        log.info("animated picture: \(CGImageSourceGetType(source) as String? ?? "unknown", privacy: .public), \(count, privacy: .public) frames, played as a GIF")
+        return NSImage(data: data as Data)
+    }
+    /// A frame's time, from whichever format's dictionary it has (unclamped first); a tenth of a second when none.
+    nonisolated private static func delay(_ source: CGImageSource, _ index: Int) -> Double {
+        let properties = CGImageSourceCopyPropertiesAtIndex(source, index, nil) as? [CFString: Any] ?? [:]
+        let keys = [(kCGImagePropertyWebPDictionary, kCGImagePropertyWebPUnclampedDelayTime, kCGImagePropertyWebPDelayTime),
+                    (kCGImagePropertyGIFDictionary, kCGImagePropertyGIFUnclampedDelayTime, kCGImagePropertyGIFDelayTime),
+                    (kCGImagePropertyPNGDictionary, kCGImagePropertyAPNGUnclampedDelayTime, kCGImagePropertyAPNGDelayTime)]
+        for (dictionary, unclamped, clamped) in keys {
+            if let values = properties[dictionary] as? [CFString: Any], let time = (values[unclamped] ?? values[clamped]) as? Double { return time }
+        }
+        return 0.1
     }
 }
 

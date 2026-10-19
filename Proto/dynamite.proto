@@ -76,26 +76,13 @@ message ListCustomEmojisRequest {
   repeated Filter filters = 1;
   optional int32 page_size = 2;
   optional string page_token = 3;
+  optional string validation_token = 5;   // the first answer's field 4, with each page token: without it, HTTP 400
   optional RequestHeader request_header = 100;
 }
 message ListCustomEmojisResponse {
   repeated CustomEmoji custom_emojis = 1;
-  optional string next_page_token = 2;   // goes to sync_custom_emojis: list_custom_emojis refuses a page token (HTTP 400)
-  optional EmojiWatermark watermark = 3;
-}
-message EmojiWatermark { optional int64 value = 1; }
-// The rest of the list after list_custom_emojis's first page, as Google Chat's Android app reads it: its watermark and
-// next page token, 504 a page, until no token comes back.
-message SyncCustomEmojisRequest {
-  optional EmojiWatermark watermark = 1;
-  optional int32 page_size = 2;
-  optional string page_token = 3;
-  optional RequestHeader request_header = 100;
-}
-message SyncCustomEmojisResponse {
-  repeated CustomEmoji custom_emojis = 1;
-  optional EmojiWatermark watermark = 2;
-  optional string next_page_token = 3;
+  optional string next_page_token = 2;
+  optional string validation_token = 4;   // sent back on every later page (request field 5), as Google Chat's web does
 }
 message Emoji {
   oneof content {
