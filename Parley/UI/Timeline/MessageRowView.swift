@@ -9,7 +9,7 @@ struct MessageRowActions {
     var clickCard: (Message, String?, Data, [Card.Input]) async -> Void = { _, _, _, _ in }   // a card button's action   // a card's dismiss button (an app suggestion's "Don't install")
     var reactCustom: (CustomEmoji, Message) -> Void = { _, _ in }
     /// The organisation's custom emoji, which the picker offers; nil: none.
-    var customEmoji: (() async -> [CustomEmoji])? = nil
+    var customEmoji: (() -> [CustomEmoji])? = nil
     /// Who reacted, "Alice and You", for a reaction pill's hover card; nil: keep the count.
     var reactors: (Reaction, Message) async -> String? = { _, _ in nil }
     var openThread: (Message) -> Void = { _ in }

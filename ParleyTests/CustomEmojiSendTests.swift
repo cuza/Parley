@@ -146,6 +146,16 @@ struct CustomEmojiAnnotationTests {
         view.insertText("a", replacementRange: view.selectedRange())
         #expect(searched == ["s", "sa"])
     }
+    /// A workspace with thousands of emoji matches far more than a list can show: every match is offered (to 100), and
+    /// the list scrolls past 8 rows.
+    @Test func aShortcodeOffersEveryMatchInAScrollingList() {
+        let view = ComposerTextView(usingTextLayoutManager: false)
+        view.customEmoji = (0..<150).map { CustomEmoji(id: "c\($0)", shortcode: "cat-\($0)", imageURL: URL(string: "https://example.invalid/c\($0)")) }
+        view.insertText(":cat", replacementRange: view.selectedRange())
+        #expect(view.mentionMatches.filter { if case .emoji = $0 { true } else { false } }.count == 100)
+        #expect(MentionPopup.height(rows: 3) == 3 * MentionList.rowHeight + 8)
+        #expect(MentionPopup.height(rows: 100) == 8 * MentionList.rowHeight + 8)
+    }
     @Test func typingAShortcodeAsksForTheListAndPickingInsertsTheEmoji() {
         let view = ComposerTextView(usingTextLayoutManager: false)
         var asked = 0
@@ -239,5 +249,35 @@ struct CustomEmojiAnnotationTests {
         #expect(store.customEmoji.map(\.id) == before + [FakeBackend.searchOnlyEmoji.id])
         store.searchCustomEmoji("sam")   // found again: still once
         #expect(store.customEmoji.filter { $0.id == FakeBackend.searchOnlyEmoji.id }.count == 1)
+    }
+}
+
+/// The emoji picker shows the organisation's emoji without waiting for the whole list: the last launch's copy at once,
+/// then what this launch reads.
+@MainActor struct CustomEmojiLaunchTests {
+    static let parrot = CustomEmoji(id: "p", shortcode: "party-parrot", imageURL: URL(string: "https://example.invalid/p"))
+    static func cache(_ snapshot: LaunchSnapshot) throws -> LaunchCache {
+        let cache = LaunchCache(url: URL.temporaryDirectory.appending(path: "parley-cache-\(UUID().uuidString).json"))
+        try cache.save(snapshot)
+        return cache
+    }
+    @Test func theLastLaunchsListShowsAtOnce() throws {
+        let store = ChatStore(backend: FakeBackend(), cache: try Self.cache(LaunchSnapshot(accountID: "me", customEmoji: [Self.parrot])))
+        #expect(store.customEmoji == [Self.parrot])
+        #expect(store.customEmojiNow() == [Self.parrot])   // and the read for this launch starts behind it
+    }
+    @Test func aCacheFromBeforeTheListDecodes() throws {
+        let old = Data(#"{"drafts":{}}"#.utf8)
+        #expect(try JSONDecoder().decode(LaunchSnapshot.self, from: old).customEmoji.isEmpty)
+    }
+    @Test func askingForTheListStartsItsReadWithoutWaiting() async throws {
+        let cache = try Self.cache(LaunchSnapshot())
+        let store = ChatStore(backend: FakeBackend(), cache: cache)
+        await store.start()
+        #expect(store.customEmojiNow().isEmpty)
+        await eventually { store.customEmoji == FakeBackend.customEmoji }
+        #expect(store.customEmoji == FakeBackend.customEmoji)
+        store.flush()
+        #expect(cache.load().customEmoji == FakeBackend.customEmoji)   // kept for the next launch
     }
 }

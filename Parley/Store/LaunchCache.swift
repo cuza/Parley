@@ -10,6 +10,7 @@ struct LaunchSnapshot: Codable, Sendable {
     var draftEdits: [String: Date] = [:]   // drafts changed on this Mac since last saved to Google, and when
     var serverDrafts: [String: ServerDraft] = [:]   // per draft key, Google's copy as last saved or heard of
     var homeThreads: [HomeThread] = []
+    var customEmoji: [CustomEmoji] = []   // the organisation's, so the picker has them before this launch reads the list
 }
 extension LaunchSnapshot {
     /// Caches written before draft formatting existed lack that key. Ones written before server drafts count every draft
@@ -26,7 +27,8 @@ extension LaunchSnapshot {
                   draftFormatting: (try? c.decodeIfPresent([String: [TextStyleRange]].self, forKey: .draftFormatting)) ?? [:],
                   draftEdits: (try? c.decodeIfPresent([String: Date].self, forKey: .draftEdits)) ?? drafts.filter { !$0.value.isEmpty }.mapValues { _ in .distantPast },
                   serverDrafts: (try? c.decodeIfPresent([String: ServerDraft].self, forKey: .serverDrafts)) ?? [:],
-                  homeThreads: (try? c.decodeIfPresent([HomeThread].self, forKey: .homeThreads)) ?? [])
+                  homeThreads: (try? c.decodeIfPresent([HomeThread].self, forKey: .homeThreads)) ?? [],
+                  customEmoji: (try? c.decodeIfPresent([CustomEmoji].self, forKey: .customEmoji)) ?? [])
     }
 }
 struct LaunchCache: Sendable {

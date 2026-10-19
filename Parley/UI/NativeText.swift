@@ -104,7 +104,7 @@ struct NativeComposer: NSViewRepresentable {
     /// formatting after it moves along), is counted, closes the picker and gives the field back the focus.
     /// A custom emoji goes in as its picture.
     // ponytail: custom emoji are not counted, so never in "Frequently Used"; EmojiUsage keys are plain strings.
-    func emojiPicker(custom: (() async -> [CustomEmoji])? = nil, loadImage: @escaping (Attachment, Bool) async throws -> Data = { _, _ in throw CancellationError() },
+    func emojiPicker(custom: (() -> [CustomEmoji])? = nil, loadImage: @escaping (Attachment, Bool) async throws -> Data = { _, _ in throw CancellationError() },
                      close: @escaping () -> Void) -> EmojiPicker {
         EmojiPicker(frequent: usage.top(EmojiPicker.columns), pick: { [weak self] emoji in
             guard let self else { return }
@@ -670,7 +670,8 @@ final class ComposerTextView: NSTextView {
         let matches: [Suggestion] = query.map { query in
             if let room = query.chip { return [.space(room)] }
             if query.command { return SlashCommand.filter(slashCommands, by: query.text).map(Suggestion.command) }
-            return query.shortcode ? Array((MentionQuery.filter(customEmoji, by: query.text).map(Suggestion.emoji) + Self.standardEmoji(query.text)).prefix(8))
+            // Every match a workspace's thousands of emoji give (to 100), in a list that scrolls past 8 rows.
+            return query.shortcode ? MentionQuery.filter(customEmoji, by: query.text, limit: 100).map(Suggestion.emoji) + Self.standardEmoji(query.text)
                 : MentionQuery.filter(mentionPeople, by: query.text).map(Suggestion.person)
         } ?? []
         if query?.text != mentionQuery?.text || matches != mentionMatches { mentionSelection = 0 }
@@ -701,7 +702,7 @@ final class ComposerTextView: NSTextView {
     /// them; "thumbs_up" and "folded-hands" read as words.
     private static func standardEmoji(_ text: String) -> [Suggestion] {
         guard text.count >= 2 else { return [] }
-        return EmojiCatalog.search(text.replacingOccurrences(of: "_", with: " ").replacingOccurrences(of: "-", with: " "), frequent: EmojiUsage().top(.max)).prefix(8).map(Suggestion.unicode)
+        return EmojiCatalog.search(text.replacingOccurrences(of: "_", with: " ").replacingOccurrences(of: "-", with: " "), frequent: EmojiUsage().top(.max)).prefix(20).map(Suggestion.unicode)
     }
 
     // MARK: Custom emoji

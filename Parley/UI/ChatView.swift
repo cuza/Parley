@@ -610,7 +610,7 @@ struct TimelineView: View {
                           dismissCard: { store.dismissCard(of: $0) },
                           clickCard: { message, card, action, inputs in await store.clickCard(message, card: card, action: action, inputs: inputs) },
                           reactCustom: { emoji, message in Task { await store.react(emoji.text, custom: emoji, to: message) } },
-                          customEmoji: { await store.loadCustomEmoji(); return store.customEmoji },
+                          customEmoji: { store.customEmojiNow() },
                           reactors: { reaction, message in await store.reactorsLine(reaction, on: message.id) },
                           openThread: { message in Task { await store.openThread(message, window: paneWindow) } },
                           quote: { store.quote($0) },
@@ -960,7 +960,7 @@ struct ComposerBar: View {
                 .buttonStyle(.plain).padding(.bottom, 13).help(formatBar ? "Hide formatting" : "Show formatting").accessibilityLabel("Formatting")
             Button { emojiPicker.toggle() } label: { Image(systemName: "face.smiling").font(.system(size: 18)).foregroundStyle(emojiPicker ? Color.accentColor : .secondary) }
                 .buttonStyle(.plain).padding(.bottom, 11).help("Emoji").accessibilityLabel("Emoji")
-                .popover(isPresented: $emojiPicker, arrowEdge: .top) { composerHandle.emojiPicker(custom: { await store.loadCustomEmoji(); return store.customEmoji },
+                .popover(isPresented: $emojiPicker, arrowEdge: .top) { composerHandle.emojiPicker(custom: { store.customEmojiNow() },
                                                                                        loadImage: { try await store.attachmentData($0, thumbnail: $1) },
                                                                                        close: { emojiPicker = false }) }
             Button { gifPicker.toggle() } label: { Text("GIF").font(.system(size: 11, weight: .bold)).fixedSize().padding(.horizontal, 3).overlay(RoundedRectangle(cornerRadius: 3).stroke(lineWidth: 1.5)).foregroundStyle(gifPicker ? Color.accentColor : .secondary) }

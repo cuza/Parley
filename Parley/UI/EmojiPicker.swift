@@ -212,11 +212,11 @@ struct EmojiPicker: View {
     let frequent: [String]
     let pick: (String) -> Void
     let close: () -> Void
-    /// The organisation's custom emoji, asked for when the picker opens; nil offers none.
-    var custom: (() async -> [CustomEmoji])? = nil
+    /// The organisation's custom emoji as they are now, read as the picker draws: one read from the store redraws the
+    /// picker as the list arrives, so it shows what's known at once. Nil offers none.
+    var custom: (() -> [CustomEmoji])? = nil
     var pickCustom: (CustomEmoji) -> Void = { _ in }
     var loadImage: (Attachment, Bool) async throws -> Data = { _, _ in throw CancellationError() }
-    @State private var customEmoji: [CustomEmoji] = []
     @State private var query = ""
     @State private var selection = 0
     @State private var grid: Grid?
@@ -243,6 +243,7 @@ struct EmojiPicker: View {
         }
         return [("Frequently Used", frequent.map(EmojiCatalog.emoji))] + EmojiCatalog.categories.map { ($0.name, $0.emoji) } + [("Custom", cells(custom))]
     }
+    private var customEmoji: [CustomEmoji] { custom?() ?? [] }
     private func built() -> Grid { Grid(Self.sections(query: query, custom: customEmoji, frequent: frequent)) }
     private func rebuild() { grid = built() }
     private func choose(_ emoji: Emoji) {
@@ -314,7 +315,7 @@ struct EmojiPicker: View {
         }
         .frame(width: 10 * 2 + CGFloat(Self.columns) * 35, height: 380)
         .onAppear { searching = true; rebuild() }
-        .task { if let custom { customEmoji = await custom(); rebuild() } }
+        .onChange(of: "\(customEmoji.count) \(customEmoji.last?.id ?? "")") { rebuild() }   // the list arrived or changed
         .onChange(of: query) { selection = 0; rebuild() }
         .onExitCommand(perform: close)
     }

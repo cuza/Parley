@@ -95,6 +95,7 @@ final class ChatStore {
     private(set) var customEmoji: [CustomEmoji] = []
     @ObservationIgnored private var customEmojiLoad: Task<Void, Never>?
     @ObservationIgnored private var customEmojiQuery = ""
+    @ObservationIgnored private var customEmojiAsked: ContinuousClock.Instant?
     /// The conversations' apps' slash commands found so far, for the composer's "/" list; see `loadSlashCommands`.
     private(set) var slashCommands: [ConversationID: [SlashCommand]] = [:]
     @ObservationIgnored private var slashQueries: [ConversationID: Set<String>] = [:]
@@ -162,6 +163,7 @@ final class ChatStore {
             conversations = snapshot.conversations; messages = snapshot.messages
             selectedID = snapshot.selectedID; drafts = snapshot.drafts; draftFormatting = snapshot.draftFormatting
             draftEdits = snapshot.draftEdits; serverDrafts = snapshot.serverDrafts; homeThreads = snapshot.homeThreads
+            customEmoji = snapshot.customEmoji
         }
     }
     /// No session, or it was lost before this launch connected: the welcome screen.
@@ -190,7 +192,7 @@ final class ChatStore {
     }
     /// What `forgetAccount` clears when another account connects.
     static let accountState: Set<String> = [
-        "draftListing", "customEmojiLoad", "customEmojiQuery", "followCheck", "draftTimers", "draftWrites", "pageLoads",
+        "draftListing", "customEmojiLoad", "customEmojiQuery", "customEmojiAsked", "followCheck", "draftTimers", "draftWrites", "pageLoads",
         "serverDrafts", "scheduled", "pinned", "draftEdits", "draftsListed", "spentDrafts", "draftSends",
         "conversations", "hidden", "homeThreads", "messages", "timelines", "selectedID", "drafts", "draftedScopes",
         "draftFormatting", "draftAttachments", "quoting", "editing", "heldDrafts",
@@ -1376,10 +1378,20 @@ final class ChatStore {
             if (error as? AuthFailure)?.endsSession == true { report(error) }
         }
     }
+    /// The organisation's custom emoji as known now (the last launch's copy until this launch reads the list), starting
+    /// that read if it hasn't started. For views that show the list as it arrives, such as the emoji picker.
+    func customEmojiNow() -> [CustomEmoji] {
+        // Read as a view draws: after a failed read, ask again at most every 30 seconds, not at each redraw.
+        if customEmojiLoad == nil, customEmojiAsked.map({ ContinuousClock.now - $0 > .seconds(30) }) ?? true {
+            customEmojiAsked = .now
+            Task { await loadCustomEmoji() }
+        }
+        return customEmoji
+    }
     func loadCustomEmoji() async {
         if let customEmojiLoad { return await customEmojiLoad.value }
         let load = Task {
-            do { customEmoji = try await backend.customEmojis() } catch {
+            do { customEmoji = try await backend.customEmojis(); persist() } catch {
                 if case .http(403)? = error as? AuthFailure {   // personal accounts have none: don't ask again
                     log.notice("custom emoji: the list was refused (403); not asked again this launch")
                     return
@@ -2089,7 +2101,7 @@ final class ChatStore {
         return LaunchSnapshot(accountID: me.id.isEmpty ? cachedAccountID : me.id, conversations: conversations,
                               messages: grouped.values.flatMap { Array($0.sorted { $0.createdAt < $1.createdAt }.suffix(50)) },
                               selectedID: selectedID, drafts: drafts, draftFormatting: formatting, draftEdits: draftEdits, serverDrafts: serverDrafts,
-                              homeThreads: homeThreads)
+                              homeThreads: homeThreads, customEmoji: customEmoji)
     }
     private func save() async {
         guard let cache else { return }

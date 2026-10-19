@@ -86,7 +86,7 @@ enum Suggestion: Hashable {
               loadImage: @escaping (Attachment, Bool) async throws -> Data, pick: @escaping (Suggestion) -> Void) {
         let list = MentionList(items: items, selected: selected, loadImage: loadImage, pick: pick)
         let commands = items.contains { if case .command = $0 { true } else { false } }   // a description and the app's name too
-        let size = NSSize(width: commands ? 440 : 260, height: CGFloat(items.count) * MentionList.rowHeight + 8)
+        let size = NSSize(width: commands ? 440 : 260, height: Self.height(rows: items.count))
         let panel = self.panel ?? {
             let panel = NSPanel(contentRect: .zero, styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: true)
             panel.isOpaque = false; panel.backgroundColor = .clear; panel.hasShadow = true
@@ -98,6 +98,8 @@ enum Suggestion: Hashable {
         panel.setFrame(NSRect(x: anchor.minX - 8, y: anchor.maxY + 4, width: size.width, height: size.height), display: true)
         if panel.parent == nil { parent.addChildWindow(panel, ordered: .above) }
     }
+    /// Up to 8 rows tall; a longer list scrolls.
+    static func height(rows: Int) -> CGFloat { CGFloat(min(rows, 8)) * MentionList.rowHeight + 8 }
     func close() {
         guard let panel else { return }
         panel.parent?.removeChildWindow(panel)
@@ -117,7 +119,9 @@ struct MentionList: View {
     let loadImage: (Attachment, Bool) async throws -> Data
     let pick: (Suggestion) -> Void
     var body: some View {
-        VStack(spacing: 0) {
+        ScrollViewReader { proxy in
+        ScrollView {
+        LazyVStack(spacing: 0) {
             ForEach(Array(items.enumerated()), id: \.element.id) { index, item in
                 HStack(spacing: 8) {
                     switch item {
@@ -156,9 +160,14 @@ struct MentionList: View {
                 .contentShape(Rectangle())
                 .onTapGesture { pick(item) }
                 .accessibilityAddTraits(.isButton).accessibilityLabel(Self.label(item))
+                .id(item.id)
             }
         }
         .padding(4)
+        }
+        .scrollIndicators(items.count > 8 ? .automatic : .never)
+        .onChange(of: selected) { if items.indices.contains(selected) { proxy.scrollTo(items[selected].id) } }   // ↑ ↓ keep it in view
+        }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 10))
         .overlay(RoundedRectangle(cornerRadius: 10).stroke(.quaternary))
