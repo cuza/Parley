@@ -234,3 +234,23 @@ struct EmojiGridTests {
         #expect(handle.emojiPicker(close: {}).frequent.first == "🦊")
     }
 }
+
+/// The picker's sections: built once per search and list, not at each hover.
+@MainActor struct EmojiPickerSectionTests {
+    static let parrot = CustomEmoji(id: "p", shortcode: "party-parrot", imageURL: URL(string: "https://example.invalid/p"))
+    /// A workspace with thousands of its own emoji keeps the standard ones near: the workspace's come last.
+    @Test func customEmojiComeAfterTheStandardOnes() {
+        let titles = EmojiPicker.sections(query: "", custom: [Self.parrot], frequent: ["👍"]).map(\.title)
+        #expect(titles.first == "Frequently Used")
+        #expect(titles.last == "Custom")
+        #expect(titles.dropFirst().dropLast() == ArraySlice(EmojiCatalog.categories.map(\.name)))
+    }
+    /// Each cell knows its own custom emoji, so drawing one looks nothing up.
+    @Test func customCellsCarryTheirEmoji() {
+        let custom = EmojiPicker.sections(query: "", custom: [Self.parrot], frequent: []).last?.emoji
+        #expect(custom?.map(\.custom) == [Self.parrot])
+        let found = EmojiPicker.sections(query: "parrot", custom: [Self.parrot], frequent: []).first?.emoji.first
+        #expect(found?.custom == Self.parrot && found?.character == ":party-parrot:")
+        #expect(EmojiCatalog.categories.first?.emoji.first?.custom == nil)
+    }
+}

@@ -3,6 +3,7 @@ import SwiftUI
 struct Emoji: Hashable, Sendable {
     let character: String
     let name: String   // lowercased: the Unicode name, or "flag " and the region's English name
+    var custom: CustomEmoji? = nil   // set on the organisation's own, which sit in the grid as their ":shortcode:"
 }
 
 /// Every emoji the system knows as a single scalar, plus the regions' flags, grouped like the system picker.
@@ -218,24 +219,38 @@ struct EmojiPicker: View {
     @State private var customEmoji: [CustomEmoji] = []
     @State private var query = ""
     @State private var selection = 0
+    @State private var grid: Grid?
     @FocusState private var searching: Bool
 
-    /// Custom emoji sit in the grid as their ":shortcode:", which no Unicode emoji can be.
-    private var sections: [(title: String, emoji: [Emoji])] {
-        func cells(_ emoji: [CustomEmoji]) -> [Emoji] { emoji.map { Emoji(character: $0.text, name: $0.shortcode) } }
+    /// What the grid shows, built when the search or the list changes rather than at each hover, which only moves the
+    /// selection: an organisation can have thousands of emoji.
+    private struct Grid {
+        let sections: [(title: String, emoji: [Emoji])], flat: [Emoji], starts: [Int]
+        init(_ sections: [(title: String, emoji: [Emoji])]) {
+            let shown = sections.filter { !$0.emoji.isEmpty }
+            self.sections = shown
+            flat = shown.flatMap(\.emoji)
+            starts = shown.indices.map { index in shown[..<index].reduce(0) { $0 + $1.emoji.count } }
+        }
+    }
+    /// The most used, every category, then the organisation's own, last so that thousands of them don't push the
+    /// standard ones away. A search puts the organisation's matches first: a typed shortcode is most often one of theirs.
+    static func sections(query: String, custom: [CustomEmoji], frequent: [String]) -> [(title: String, emoji: [Emoji])] {
+        func cells(_ emoji: [CustomEmoji]) -> [Emoji] { emoji.map { Emoji(character: $0.text, name: $0.shortcode, custom: $0) } }
         let search = query.trimmingCharacters(in: CharacterSet.whitespaces.union(.init(charactersIn: ":")))
         guard search.isEmpty else {
-            return [("Search Results", cells(MentionQuery.filter(customEmoji, by: search, limit: .max)) + EmojiCatalog.search(search, frequent: frequent))]
+            return [("Search Results", cells(MentionQuery.filter(custom, by: search, limit: .max)) + EmojiCatalog.search(search, frequent: frequent))]
         }
-        return [("Frequently Used", frequent.map(EmojiCatalog.emoji)), ("Custom", cells(customEmoji))] + EmojiCatalog.categories.map { ($0.name, $0.emoji) }
+        return [("Frequently Used", frequent.map(EmojiCatalog.emoji))] + EmojiCatalog.categories.map { ($0.name, $0.emoji) } + [("Custom", cells(custom))]
     }
+    private func built() -> Grid { Grid(Self.sections(query: query, custom: customEmoji, frequent: frequent)) }
+    private func rebuild() { grid = built() }
     private func choose(_ emoji: Emoji) {
-        if let custom = customEmoji.first(where: { $0.text == emoji.character }) { pickCustom(custom) } else { pick(emoji.character) }
+        if let custom = emoji.custom { pickCustom(custom) } else { pick(emoji.character) }
     }
     var body: some View {
-        let sections = sections.filter { !$0.emoji.isEmpty }
-        let flat = sections.flatMap(\.emoji)
-        let starts = sections.indices.map { index in sections[..<index].reduce(0) { $0 + $1.emoji.count } }
+        let grid = grid ?? built()   // the first one, before `onAppear` keeps it
+        let sections = grid.sections, flat = grid.flat, starts = grid.starts
         ScrollViewReader { proxy in
             VStack(spacing: 0) {
                 TextField("Search Emoji", text: $query)
@@ -256,10 +271,11 @@ struct EmojiPicker: View {
                 ScrollView {
                     LazyVGrid(columns: Array(repeating: GridItem(.fixed(32), spacing: 3), count: Self.columns), spacing: 3,
                               pinnedViews: [.sectionHeaders]) {
-                        ForEach(Array(sections.enumerated()), id: \.offset) { index, section in
+                        ForEach(sections.indices, id: \.self) { index in
+                            let section = sections[index]
                             Section {
-                                ForEach(Array(section.emoji.enumerated()), id: \.offset) { offset, emoji in
-                                    cell(emoji, index: starts[index] + offset)
+                                ForEach(section.emoji.indices, id: \.self) { offset in
+                                    cell(section.emoji[offset], index: starts[index] + offset)
                                 }
                             } header: {
                                 Text(section.title).font(.caption.weight(.semibold)).foregroundStyle(.secondary)
@@ -290,13 +306,13 @@ struct EmojiPicker: View {
             }
         }
         .frame(width: 10 * 2 + CGFloat(Self.columns) * 35, height: 380)
-        .onAppear { searching = true }
-        .task { if let custom { customEmoji = await custom() } }
-        .onChange(of: query) { selection = 0 }
+        .onAppear { searching = true; rebuild() }
+        .task { if let custom { customEmoji = await custom(); rebuild() } }
+        .onChange(of: query) { selection = 0; rebuild() }
         .onExitCommand(perform: close)
     }
     private func cell(_ emoji: Emoji, index: Int) -> some View {
-        let custom = customEmoji.first { $0.text == emoji.character }
+        let custom = emoji.custom
         return Group {
             if let custom { CustomEmojiImage(emoji: custom, size: 26, load: loadImage) } else { Text(emoji.character).font(.system(size: 24)) }
         }
