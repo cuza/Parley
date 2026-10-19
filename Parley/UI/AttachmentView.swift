@@ -256,6 +256,7 @@ extension Attachment {
     nonisolated static func decode(_ data: Data, maxPixels: Int) -> NSImage? {
         guard let source = CGImageSourceCreateWithData(data as CFData, nil) else { return nil }
         if CGImageSourceGetCount(source) > 1 {
+            if maxPixels <= AnimationFrames.maxPixels, let picture = AnimationFrames.image(source, maxPixels: maxPixels) { return picture }
             if let image = NSImage(data: data), image.animated { return image }
             return gif(from: source, maxPixels: maxPixels) ?? NSImage(data: data)
         }
@@ -284,7 +285,7 @@ extension ImageCache {
         return NSImage(data: data as Data)
     }
     /// A frame's time, from whichever format's dictionary it has (unclamped first); a tenth of a second when none.
-    nonisolated private static func delay(_ source: CGImageSource, _ index: Int) -> Double {
+    nonisolated static func delay(_ source: CGImageSource, _ index: Int) -> Double {
         let properties = CGImageSourceCopyPropertiesAtIndex(source, index, nil) as? [CFString: Any] ?? [:]
         let keys = [(kCGImagePropertyWebPDictionary, kCGImagePropertyWebPUnclampedDelayTime, kCGImagePropertyWebPDelayTime),
                     (kCGImagePropertyGIFDictionary, kCGImagePropertyGIFUnclampedDelayTime, kCGImagePropertyGIFDelayTime),
@@ -301,7 +302,7 @@ extension NSImage {
     var pixelBytes: Int {
         let rep = representations.first
         let pixels = (rep?.pixelsWide ?? 0) * (rep?.pixelsHigh ?? 0)
-        return 4 * (pixels > 0 ? pixels : Int(size.width * size.height))
+        return 4 * (pixels > 0 ? pixels : Int(size.width * size.height)) * (decodedFrames?.frames.count ?? 1)
     }
 }
 
@@ -315,18 +316,92 @@ extension Attachment {
     }
 }
 
-/// NSImageView animates GIFs; SwiftUI's Image shows only the first frame.
+/// A small animation (a custom emoji) decoded whole off the main thread, at the size it shows, and attached to its
+/// NSImage: every frame is ready to draw, so scrolling past hundreds of them decodes nothing on the main thread. Drawn
+/// as an image, the NSImage is the first frame; `NSImage.drawFrame` and `AnimatedImage` play the rest.
+final class AnimationFrames: NSObject {
+    /// Animations up to this many pixels a side are decoded whole; bigger ones (GIFs, media) play through NSImageView,
+    /// which decodes a frame at a time.
+    nonisolated static let maxPixels = 256
+    let frames: [NSBitmapImageRep], durations: [TimeInterval]
+    nonisolated private init(frames: [NSBitmapImageRep], durations: [TimeInterval]) { self.frames = frames; self.durations = durations }
+    nonisolated(unsafe) fileprivate static let key = UnsafeRawPointer(UnsafeMutableRawPointer.allocate(byteCount: 1, alignment: 1))
+    nonisolated static func image(_ source: CGImageSource, maxPixels: Int) -> NSImage? {
+        let options: [CFString: Any] = [kCGImageSourceCreateThumbnailFromImageAlways: true, kCGImageSourceCreateThumbnailWithTransform: true,
+                                        kCGImageSourceShouldCacheImmediately: true, kCGImageSourceThumbnailMaxPixelSize: maxPixels]
+        var frames: [NSBitmapImageRep] = [], durations: [TimeInterval] = []
+        for index in 0..<CGImageSourceGetCount(source) {
+            guard let frame = CGImageSourceCreateThumbnailAtIndex(source, index, options as CFDictionary) else { return nil }
+            frames.append(NSBitmapImageRep(cgImage: frame))
+            durations.append(ImageCache.delay(source, index))
+        }
+        guard let first = frames.first else { return nil }
+        let image = NSImage(size: NSSize(width: first.pixelsWide, height: first.pixelsHigh))
+        image.addRepresentation(first)
+        objc_setAssociatedObject(image, key, AnimationFrames(frames: frames, durations: NSImage.playable(durations)), .OBJC_ASSOCIATION_RETAIN)
+        return image
+    }
+}
+extension NSImage {
+    /// Set on a small animation `ImageCache` decoded whole (`AnimationFrames`).
+    nonisolated var decodedFrames: AnimationFrames? { objc_getAssociatedObject(self, AnimationFrames.key) as? AnimationFrames }
+}
+
+/// Plays an animated picture: a small one from its decoded frames (`AnimationFrames`) on a display link, a GIF with NSImageView.
+/// SwiftUI's Image shows only the first frame.
 struct AnimatedImage: NSViewRepresentable {
     let image: NSImage
-    func makeNSView(context: Context) -> NSImageView {
-        let view = NSImageView()
-        view.imageScaling = .scaleProportionallyUpOrDown
-        view.animates = !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
-        view.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
-        view.setContentCompressionResistancePriority(.defaultLow, for: .vertical)
-        return view
+    func makeNSView(context: Context) -> AnimatedPictureView { AnimatedPictureView() }
+    func updateNSView(_ view: AnimatedPictureView, context: Context) { view.image = image }
+}
+final class AnimatedPictureView: NSView {
+    private let gif = NSImageView(), frames = CALayer()
+    var image: NSImage? { didSet { if image !== oldValue { show() } } }
+    override init(frame: NSRect) {
+        super.init(frame: frame)
+        wantsLayer = true
+        frames.contentsGravity = .resizeAspect
+        layer?.addSublayer(frames)
+        gif.imageScaling = .scaleProportionallyUpOrDown
+        gif.animates = !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
+        gif.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        gif.setContentCompressionResistancePriority(.defaultLow, for: .vertical)
+        addSubview(gif)
     }
-    func updateNSView(_ view: NSImageView, context: Context) { if view.image !== image { view.image = image } }
+    required init?(coder: NSCoder) { nil }
+    override func layout() {
+        super.layout()
+        gif.frame = bounds
+        CATransaction.begin(); CATransaction.setDisableActions(true); frames.frame = bounds; CATransaction.commit()
+    }
+    /// Decoded frames play as a Core Animation keyframe animation, which the render server runs with no work on the main
+    /// thread, in step with every other copy (the same clock as `NSImage.drawFrame`).
+    private func show() {
+        frames.removeAnimation(forKey: "frames")
+        guard let decoded = image?.decodedFrames else {
+            frames.contents = nil
+            gif.image = image; gif.isHidden = false
+            return
+        }
+        gif.image = nil; gif.isHidden = true
+        let pictures = decoded.frames.compactMap(\.cgImage)
+        frames.contents = pictures.first
+        let loop = decoded.durations.reduce(0, +)
+        guard pictures.count == decoded.durations.count, pictures.count > 1, loop > 0,
+              !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion else { return }
+        let animation = CAKeyframeAnimation(keyPath: "contents")
+        animation.values = pictures
+        var start = 0.0, keyTimes: [NSNumber] = []
+        for duration in decoded.durations { keyTimes.append(NSNumber(value: start / loop)); start += duration }
+        animation.keyTimes = keyTimes
+        animation.calculationMode = .discrete
+        animation.duration = loop
+        animation.repeatCount = .infinity
+        animation.isRemovedOnCompletion = false
+        let phase = Date.now.timeIntervalSinceReferenceDate.truncatingRemainder(dividingBy: loop)
+        animation.beginTime = frames.convertTime(CACurrentMediaTime(), from: nil) - phase
+        frames.add(animation, forKey: "frames")
+    }
 }
 
 /// A picture, GIF or video poster filling its frame exactly: stretched by under 2% when its aspect is the frame's (the

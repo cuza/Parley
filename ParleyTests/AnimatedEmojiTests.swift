@@ -106,6 +106,27 @@ import UniformTypeIdentifiers
         view.selectAll(nil); view.deleteBackward(nil)
         #expect(!view.animatesEmoji)
     }
+    /// An emoji-sized animation is decoded whole, off the main thread, at the size it shows; a big GIF keeps AppKit's own
+    /// frame-by-frame playback.
+    @Test func aSmallAnimationIsDecodedWhole() throws {
+        let gif = Self.gif([.red, .green, .blue], delay: 0.04)
+        let small = try #require(ImageCache.decode(gif, maxPixels: 128))
+        #expect(small.decodedFrames?.frames.count == 3 && small.decodedFrames?.durations == [0.04, 0.04, 0.04])
+        #expect(small.animated && small.frameRate == 25)
+        let big = try #require(ImageCache.decode(gif, maxPixels: 1024))
+        #expect(big.decodedFrames == nil && big.animated)
+    }
+    /// A decoded animation plays as a Core Animation keyframe animation, with nothing to do on the main thread per frame;
+    /// a GIF plays in an NSImageView.
+    @Test func anAnimatedPictureViewHandsItsFramesToCoreAnimation() throws {
+        let view = AnimatedPictureView(frame: NSRect(x: 0, y: 0, width: 26, height: 26))
+        view.image = try #require(ImageCache.decode(Self.gif([.red, .green, .blue], delay: 0.04), maxPixels: 128))
+        let animation = try #require(view.layer?.sublayers?.lazy.compactMap { $0.animation(forKey: "frames") as? CAKeyframeAnimation }.first)
+        #expect(animation.values?.count == 3 && abs(animation.duration - 0.12) < 0.001 && animation.calculationMode == .discrete)
+        view.image = try #require(ImageCache.decode(Self.gif([.red, .green], delay: 0.04), maxPixels: 1024))
+        #expect(view.layer?.sublayers?.allSatisfy { $0.animation(forKey: "frames") == nil } == true)
+        #expect(view.subviews.compactMap { $0 as? NSImageView }.first?.image != nil)
+    }
     static let webp = "UklGRrQAAABXRUJQVlA4WAoAAAACAAAABwAABwAAQU5JTQYAAAD/////AABBTk1GKAAAAAAAAAAAAAcAAAcAAGQAAAJWUDhMDwAAAC8HwAEABxD9j/4HIqL/AQBBTk1GKAAAAAAAAAAAAAcAAAcAAGQAAABWUDhMDwAAAC8HwAEAB9D/iP4HIqL/AQBBTk1GKAAAAAAAAAAAAAcAAAcAAGQAAABWUDhMDwAAAC8HwAEABxDR//4HIqL/AQA="
     static func gif(_ colors: [NSColor], delay: Double) -> Data {
         let data = NSMutableData()

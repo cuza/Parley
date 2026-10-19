@@ -590,9 +590,10 @@ import Testing
         let frame = try #require(NSBitmapImageRep(data: png)?.cgImage)
         for _ in 0..<3 { CGImageDestinationAddImage(destination, frame, nil) }
         #expect(CGImageDestinationFinalize(destination))
-        let animated = try #require(ImageCache.decode(gif as Data, maxPixels: 100))
+        let animated = try #require(ImageCache.decode(gif as Data, maxPixels: 1000))
         let rep = try #require(animated.representations.first as? NSBitmapImageRep)
         #expect(rep.value(forProperty: .frameCount) as? Int == 3)
+        #expect(try #require(ImageCache.decode(gif as Data, maxPixels: 100)).decodedFrames?.frames.count == 3)   // emoji-sized: decoded whole
     }
     @Test func aCachedPictureShowsOnTheFirstFrame() throws {
         let picture = Attachment(name: "seen.png", kind: .image, url: URL(string: "https://example.com/seen-\(UUID())"), width: 320, height: 240)

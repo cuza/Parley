@@ -356,7 +356,7 @@ private struct CardImage: View {
 }
 extension NSImage {
     /// More than one frame: a GIF (or animated PNG) that moves.
-    var animated: Bool { animatedRep != nil }
+    var animated: Bool { decodedFrames != nil || animatedRep != nil }
     private var animatedRep: NSBitmapImageRep? {
         representations.lazy.compactMap { $0 as? NSBitmapImageRep }.first { ($0.value(forProperty: .frameCount) as? Int ?? 1) > 1 }
     }
@@ -364,13 +364,19 @@ extension NSImage {
     /// first one with Reduce Motion on. For pictures drawn inside text (custom emoji in a message or a reaction pill),
     /// which NSImageView can't animate; the view redraws while one shows.
     @MainActor func drawFrame(in rect: NSRect, at time: TimeInterval = Date.now.timeIntervalSinceReferenceDate) {
+        let still = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
+        if let decoded = decodedFrames {
+            decoded.frames[still ? 0 : Self.frame(durations: decoded.durations, at: time)].draw(in: rect)
+            return
+        }
         guard let rep = animatedRep else { draw(in: rect); return }
         let frames = Self.frames(rep)
-        frames.images[NSWorkspace.shared.accessibilityDisplayShouldReduceMotion ? 0 : Self.frame(durations: frames.durations, at: time)].draw(in: rect)
+        frames.images[still ? 0 : Self.frame(durations: frames.durations, at: time)].draw(in: rect)
     }
     /// Redraws a second that show every frame, as NSImageView plays it: one per shortest frame, up to 60. Nil when still.
     @MainActor var frameRate: Float? {
-        guard let rep = animatedRep, let shortest = Self.frames(rep).durations.min(), shortest > 0 else { return nil }
+        let durations = decodedFrames?.durations ?? animatedRep.map { Self.frames($0).durations }
+        guard let shortest = durations?.min(), shortest > 0 else { return nil }
         return Float(min(60, (1 / shortest).rounded()))
     }
     /// Which frame shows `time` seconds into a loop of these durations.
@@ -430,9 +436,10 @@ extension NSImage {
     var playing: Bool { link != nil }
     init(_ view: NSView, redraw: @escaping () -> Void) { self.view = view; self.redraw = redraw }
     /// Plays while one of `pictures` is an animated picture `ImageCache` has.
-    func update(_ pictures: Set<Attachment>) {
-        let rate = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion ? nil : pictures.compactMap { ImageCache.cached($0)?.frameRate }.max()
-        guard let rate, let view else { stop(); return }
+    func update(_ pictures: Set<Attachment>) { play(at: pictures.compactMap { ImageCache.cached($0)?.frameRate }.max()) }
+    /// Redraws `rate` times a second; nil stops.
+    func play(at rate: Float?) {
+        guard let rate, !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion, let view else { stop(); return }
         if link == nil {
             let link = view.displayLink(target: self, selector: #selector(tick))
             link.add(to: .main, forMode: .common)

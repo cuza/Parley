@@ -245,6 +245,14 @@ struct EmojiGridTests {
         #expect(titles.last == "Custom")
         #expect(titles.dropFirst().dropLast() == ArraySlice(EmojiCatalog.categories.map(\.name)))
     }
+    /// The arrow keys scroll to the row holding the selection: rows of 9, counted within their section.
+    @Test func theSelectionsRowIsCountedWithinItsSection() {
+        let starts = [0, 5, 30]   // sections of 5, 25 and more
+        #expect(EmojiPicker.rowID(of: 3, starts: starts, columns: 9) == "row 0 0")
+        #expect(EmojiPicker.rowID(of: 5, starts: starts, columns: 9) == "row 1 0")
+        #expect(EmojiPicker.rowID(of: 23, starts: starts, columns: 9) == "row 1 2")
+        #expect(EmojiPicker.rowID(of: 40, starts: starts, columns: 9) == "row 2 1")
+    }
     /// Each cell knows its own custom emoji, so drawing one looks nothing up.
     @Test func customCellsCarryTheirEmoji() {
         let custom = EmojiPicker.sections(query: "", custom: [Self.parrot], frequent: []).last?.emoji

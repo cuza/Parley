@@ -264,18 +264,25 @@ struct EmojiPicker: View {
                         }
                         if (direction == .left || direction == .right) && !query.isEmpty { return .ignored }   // the caret's keys
                         selection = EmojiGrid.move(selection, direction, sizes: sections.map(\.emoji.count), columns: Self.columns)
-                        proxy.scrollTo(selection)
+                        proxy.scrollTo(Self.rowID(of: selection, starts: starts, columns: Self.columns))
                         return .handled
                     }
                     .onSubmit { if flat.indices.contains(selection) { choose(flat[selection]) } }
                 ScrollView {
-                    LazyVGrid(columns: Array(repeating: GridItem(.fixed(32), spacing: 3), count: Self.columns), spacing: 3,
-                              pinnedViews: [.sectionHeaders]) {
+                    // Rows in a lazy stack rather than a LazyVGrid: placing a scrolled grid walks every cell of a section
+                    // before the visible ones, which stutters past an organisation's thousands of emoji.
+                    LazyVStack(spacing: 3, pinnedViews: [.sectionHeaders]) {
                         ForEach(sections.indices, id: \.self) { index in
                             let section = sections[index]
                             Section {
-                                ForEach(section.emoji.indices, id: \.self) { offset in
-                                    cell(section.emoji[offset], index: starts[index] + offset)
+                                ForEach(0..<(section.emoji.count + Self.columns - 1) / Self.columns, id: \.self) { row in
+                                    HStack(spacing: 3) {
+                                        ForEach(row * Self.columns..<min(section.emoji.count, (row + 1) * Self.columns), id: \.self) { offset in
+                                            cell(section.emoji[offset], index: starts[index] + offset)
+                                        }
+                                    }
+                                    .frame(width: CGFloat(Self.columns) * 35 - 3, alignment: .leading)
+                                    .id(Self.rowID(index, row))
                                 }
                             } header: {
                                 Text(section.title).font(.caption.weight(.semibold)).foregroundStyle(.secondary)
@@ -324,7 +331,12 @@ struct EmojiPicker: View {
             .help(custom?.text ?? emoji.name.capitalized)
             .accessibilityLabel(emoji.name.isEmpty ? emoji.character : emoji.name)
             .accessibilityAddTraits(.isButton)
-            .id(index)
+    }
+    private static func rowID(_ section: Int, _ row: Int) -> String { "row \(section) \(row)" }
+    /// The row holding the `selection`th emoji of the flat list, for scrolling to it.
+    static func rowID(of selection: Int, starts: [Int], columns: Int) -> String {
+        let section = max(0, (starts.lastIndex { $0 <= selection }) ?? 0)
+        return rowID(section, (selection - (starts.indices.contains(section) ? starts[section] : 0)) / columns)
     }
 }
 
