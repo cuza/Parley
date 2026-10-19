@@ -11,9 +11,14 @@ import UniformTypeIdentifiers
         #expect([0.0, 0.05, 0.1, 0.29, 0.31, 0.39, 0.4, 0.45].map { NSImage.frame(durations: durations, at: $0) } == [0, 0, 1, 1, 2, 2, 0, 0])
         #expect(NSImage.frame(durations: [], at: 3) == 0)
     }
-    /// As browsers play GIFs: a frame of under 20 ms (often 0, meaning "as fast as possible") shows for 100 ms.
+    /// As browsers play GIFs: a frame of 10 ms or less (often 0, meaning "as fast as possible") shows for 100 ms. A 20 ms
+    /// frame plays as 20 ms, though AppKit reports it as a float a hair under (0.019999999552965164).
     @Test func tooShortFramesShowForATenthOfASecond() {
-        #expect(NSImage.playable([0, 0.01, 0.02, 0.5]) == [0.1, 0.1, 0.02, 0.5])
+        let twenty = Double(Float(0.02)), ten = Double(Float(0.01))
+        #expect(NSImage.playable([0, ten, 0.01, twenty, 0.02, 0.5]) == [0.1, 0.1, 0.1, twenty, 0.02, 0.5])
+    }
+    @Test func aGIFWith20msFramesPlaysAt50FramesASecond() throws {
+        #expect(try #require(NSImage(data: Self.gif([.red, .green], delay: 0.02))).frameRate == 50)
     }
     @Test func drawingAnAnimatedGIFDrawsTheFrameForTheTime() throws {
         let image = try #require(NSImage(data: Self.gif([.red, .green, .blue], delay: 0.1)))

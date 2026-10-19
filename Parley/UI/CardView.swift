@@ -384,8 +384,9 @@ extension NSImage {
         }
         return durations.count - 1
     }
-    /// As browsers play GIFs: a frame of under 20 ms (often 0, "as fast as possible") shows for 100 ms.
-    nonisolated static func playable(_ durations: [TimeInterval]) -> [TimeInterval] { durations.map { $0 < 0.02 ? 0.1 : $0 } }
+    /// As browsers play GIFs: a frame of 10 ms or less (often 0, "as fast as possible") shows for 100 ms. The cutoff sits
+    /// between 10 and 20 ms because AppKit reports frame times as floats, a 20 ms frame as 0.0199999995.
+    nonisolated static func playable(_ durations: [TimeInterval]) -> [TimeInterval] { durations.map { $0 < 0.015 ? 0.1 : $0 } }
     /// An animation's frames, decoded once in order: a GIF frame drawn on its own is rebuilt from every frame before it,
     /// which costs milliseconds each time a redraw jumps ahead.
     private final class Frames {
