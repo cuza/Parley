@@ -65,7 +65,7 @@ final class ChatStore {
     private var shortcutLists: [Shortcut: [Message]] = [:]
     var homeUnreadOnly = false   // Home's filters, kept for the session
     var homeThreadsOnly = false
-    private(set) var homeThreads: [HomeThread] = []   // Home's thread rows, from the backend's last conversation list
+    private(set) var homeThreads: [HomeThread] = [] { didSet { updateBadge() } }   // Home's thread rows, from the backend's last conversation list
     @ObservationIgnored private var shortcutCursors: [Shortcut: String] = [:]
     /// A message just jumped to, outlined in the timeline; it fades after `highlightDuration`, as Telegram flashes it.
     var highlightedID: MessageID? {
@@ -206,7 +206,7 @@ final class ChatStore {
     /// What stays across accounts: the app's wiring, settings, timers and the connection, and requests the user made
     /// before the switch (a link to open, content to share, a search to run).
     static let appState: Set<String> = [
-        "backend", "cache", "cachedAccountID", "me", "connection", "onSessionLost", "onBadge", "shownBadge", "error", "connectedSince", "lastEventAt",
+        "backend", "cache", "cachedAccountID", "me", "connection", "onSessionLost", "onBadge", "shownBadge", "notifyComparison", "error", "connectedSince", "lastEventAt",
         "reconnects", "homeUnreadOnly", "homeThreadsOnly", "highlightDuration", "highlightFade", "eventTask", "cacheTask",
         "searchGeneration", "sweepTask", "now", "isAppActive", "notifier", "notificationSettings", "draftPause", "draftIdle",
         "waitingLinks", "followAsked", "followRecheck", "toast", "toastDuration", "toastFade", "openURL", "defaults", "sent",
@@ -262,11 +262,17 @@ final class ChatStore {
     /// The conversation whose timeline is on screen: none while a shortcut is (Home keeps `selectedID` for its thread pane).
     private var openConversation: ConversationID? { shortcut == nil ? selectedID : nil }
     var unreadCount: Int { conversations.filter { !$0.muted }.reduce(0) { $0 + $1.unread } }
-    /// Shows the Dock badge, the unread count. The store calls it, not a window, so it keeps up with every window closed.
+    /// Home's threads with new replies, in conversations the sidebar lists and that aren't muted: Home's count.
+    var unreadThreadCount: Int {   // read on every change to the conversations: the few unread threads are looked up, not the list
+        homeThreads.filter { thread in thread.unread && conversations.contains { $0.id == thread.conversationID && !$0.muted } }.count
+    }
+    /// The Dock badge's number: the sidebar's unread messages and Home's unread threads.
+    var badgeCount: Int { unreadCount + unreadThreadCount }
+    /// Shows the Dock badge, `badgeCount`. The store calls it, not a window, so it keeps up with every window closed.
     @ObservationIgnored var onBadge: (String?) -> Void = { _ in } { didSet { shownBadge = .none; updateBadge() } }
     @ObservationIgnored private var shownBadge: String?? = .none
     private func updateBadge() {
-        let label = unreadCount == 0 ? nil : String(unreadCount)
+        let count = badgeCount, label = count == 0 ? nil : String(count)
         if shownBadge != .some(label) { shownBadge = label; onBadge(label) }
     }
     /// The Dock menu's conversations: the unread ones the badge counts (not muted), most recent first, at most 10.
@@ -275,10 +281,15 @@ final class ChatStore {
     }
     /// The Dock menu's Mark All as Read: every unread conversation, muted ones included.
     func markAllRead() async {
-        let unread = conversations.filter { $0.unread > 0 }.map(\.id)
-        for i in conversations.indices where conversations[i].unread > 0 { conversations[i].unread = 0 }
+        let unread = conversations.filter { $0.unread > 0 }.map(\.id), threads = homeThreads.filter(\.unread)
+        // One change each, not one per conversation or thread: each change recounts the badge and redraws.
+        conversations = conversations.map { var room = $0; room.unread = 0; return room }
+        homeThreads = homeThreads.map { var thread = $0; thread.unread = false; return thread }   // as opening each from Home would
         persist()
-        for id in unread { await markRead(id) }
+        await withTaskGroup(of: Void.self) { group in
+            for id in unread { group.addTask { await self.markRead(id) } }
+            for thread in threads { group.addTask { await self.readThread(thread.id, upTo: thread.latest.createdAt) } }
+        }
     }
     func key(_ conversation: String, _ thread: String?) -> String { "\(conversation)/\(thread ?? "timeline")" }
     func timeline(_ conversation: String, thread: String? = nil) -> [Message] {
@@ -556,9 +567,10 @@ final class ChatStore {
         await readThread(thread)
     }
     /// An open thread is read up to its newest reply, on the server too, so it reads as read on the web and phone.
-    private func readThread(_ thread: ThreadID) async {
-        guard let newest = messages.filter({ $0.threadID == thread || $0.id == thread }).map(\.createdAt).max() else { return }
-        if let i = homeThreads.firstIndex(where: { $0.id == thread }) { homeThreads[i].unread = false }
+    /// `upTo`: the newest reply when none of the thread is loaded (Home's thread, read from Mark All as Read).
+    private func readThread(_ thread: ThreadID, upTo latest: Date? = nil) async {
+        guard let newest = messages.lazy.filter({ $0.threadID == thread || $0.id == thread }).map(\.createdAt).max() ?? latest else { return }
+        if let i = homeThreads.firstIndex(where: { $0.id == thread }), homeThreads[i].unread { homeThreads[i].unread = false }
         do { try await backend.markThreadRead(thread, upTo: newest) }
         catch { log.error("mark thread read failed: \(ConnectionDiagnostics.redact(String(describing: error)), privacy: .public)") }
     }
@@ -697,7 +709,8 @@ final class ChatStore {
                 checkFollowed(nil)   // Home may list it now
             }
             // Only a fresh message is unread: a reaction or edit pushes an old message the user has long since read.
-            if isNew, !message.isSystem, message.threadID == nil, message.sender.id != me.id, message.conversationID != openConversation,
+            // The conversation on screen counts too while Parley is in the background: `appBecameActive` reads it.
+            if isNew, !message.isSystem, message.threadID == nil, message.sender.id != me.id, message.conversationID != openConversation || !isAppActive(),
                now().timeIntervalSince(message.createdAt) < Self.unreadWindow,
                let i = conversations.firstIndex(where: { $0.id == message.conversationID }) {
                 conversations[i].unread += 1
@@ -755,6 +768,42 @@ final class ChatStore {
                   notifiedReactions.insert(notification.id).inserted else { return }
             notifier?.post(notification)
             return
+        case .conversationViewed(let id, let time):
+            // Read elsewhere up to `time`: unread only if a message newer than that has come, as Google Chat compares its
+            // newest message with the read time. Activity is only a stand-in when none is loaded: a reaction or edit moves it.
+            guard let room = conversations.first(where: { $0.id == id }), room.unread > 0 else { break }
+            let newest = messages.lazy.filter { $0.conversationID == id && $0.threadID == nil }.map(\.createdAt).max() ?? room.activity ?? .distantPast
+            log.info("read elsewhere: conversation \(newest <= time ? "read" : "has newer messages", privacy: .public)")
+            if newest <= time { apply(.readStateChanged(id, unread: 0)) }
+        case .threadViewed(let thread, let time):
+            if let i = homeThreads.firstIndex(where: { $0.id == thread }), homeThreads[i].unread, homeThreads[i].latest.createdAt <= time {
+                homeThreads[i].unread = false
+            }
+        case .googleNotified(let id, let cause):
+            logDifferences(notifyComparison.google(id, cause: cause, at: now()))
+        case .googleCounts(let home, let mentions):
+            // ponytail: logged only, to compare with the Dock badge for a while (PARLEY-157); use them once they agree.
+            log.info("badge: Parley \(self.badgeCount, privacy: .public), Google Home \(home.map(String.init) ?? "-", privacy: .public), Mentions \(mentions.map(String.init) ?? "-", privacy: .public)")
+        case .unreadThreadsChanged(let id, let count):
+            if let i = conversations.firstIndex(where: { $0.id == id }), (conversations[i].unreadThreads ?? 0) != count {
+                conversations[i].unreadThreads = count > 0 ? count : nil
+            }
+        case .historyCleared(let id, let time):
+            messages.removeAll { $0.conversationID == id && $0.createdAt <= time }
+            homeThreads.removeAll { $0.conversationID == id && $0.latest.createdAt <= time }
+            if let room = conversations.first(where: { $0.id == id }), (room.activity ?? .distantPast) <= time { apply(.readStateChanged(id, unread: 0)) }
+        case .homeRefreshed:
+            checkFollowed(nil)
+        case .blocksChanged:
+            Task { await loadBlocked() }
+        case .dndSchedulesChanged(let schedules):
+            if dndSchedules != schedules { dndSchedules = schedules }
+        case .conversationActivity(let id, let time):
+            if let i = conversations.firstIndex(where: { $0.id == id }), time > conversations[i].activity ?? .distantPast { conversations[i].activity = time }
+        case .conversationMarkedUnread(let id):
+            if let i = conversations.firstIndex(where: { $0.id == id }), conversations[i].unread == 0 { conversations[i].unread = 1 }
+        case .threadMarkedUnread(let thread, let unread):
+            if let i = homeThreads.firstIndex(where: { $0.id == thread }), homeThreads[i].unread != unread { homeThreads[i].unread = unread }
         case .readStateChanged(let id, let count):
             if let i = conversations.firstIndex(where: { $0.id == id }) { conversations[i].unread = count }
             if count == 0 { notifier?.clear(conversation: id) }   // read here or on another device
@@ -843,15 +892,23 @@ final class ChatStore {
             openThread: threadID, timelineShown: shortcut == nil, appActive: !call && isAppActive(), settings: notificationSettings(),
             threadFollowed: message.threadID.map(followed.contains) ?? false)
             .map { call ? $0.incomingCall(join: message.attachments.first { $0.kind == .call }?.url) : $0 }
+        // Why or why not, for "notifications don't show" reports: nothing here names the conversation or the sender.
+        let level = room?.notificationLevel.map { "\($0)" } ?? "unknown", followed = message.threadID.map(followed.contains)
+        let detail = "level \(level), \(message.threadID == nil ? "new thread" : followed == true ? "followed reply" : "unfollowed reply"), muted \(room?.muted ?? false), app active \(isAppActive()), open here \(message.conversationID == selectedID)"
         if notification == nil {
-            // Why not, for "notifications don't show" reports: nothing here names the conversation or the sender.
-            let level = room?.notificationLevel.map { "\($0)" } ?? "unknown", followed = message.threadID.map(followed.contains)
-            log.notice("message pushed: no banner (level \(level, privacy: .public), \(message.threadID == nil ? "new thread" : followed == true ? "followed reply" : "unfollowed reply", privacy: .public), muted \(room?.muted ?? false, privacy: .public), app active \(self.isAppActive(), privacy: .public), open here \(message.conversationID == self.selectedID, privacy: .public))")
+            log.notice("message pushed: no banner (\(detail, privacy: .public))")
         } else {
             log.notice("message pushed: \(self.notifier == nil ? "no notifier" : "banner", privacy: .public)")
         }
+        logDifferences(notifyComparison.parley(message.id, banner: notification != nil, detail: detail, at: now()))
         if let notification { notifier?.post(notification) }
         return notification != nil
+    }
+    /// Google's notify decisions against Parley's banners (PARLEY-155), logged where they differ.
+    // ponytail: a banner Google never matched is only noticed on the next message or push; a timer would catch the last one.
+    @ObservationIgnored private var notifyComparison = NotifyComparison()
+    private func logDifferences(_ lines: [String]) {
+        for line in lines + notifyComparison.expire(at: now()) { log.notice("\(line, privacy: .public)") }
     }
     @ObservationIgnored private var followCheck: Task<Void, Never>?
     @ObservationIgnored private var awaitingFollow: [Message] = []
@@ -1275,6 +1332,10 @@ final class ChatStore {
     func mentionCandidates(_ conversation: ConversationID) -> [Person] {
         (members[conversation] ?? conversations.first { $0.id == conversation }?.members ?? []).filter { $0.id != me.id }
     }
+    /// The composer's @ list: @all first in a space, as Google Chat offers it there and not in direct messages.
+    func mentionSuggestions(_ conversation: ConversationID) -> [Person] {
+        (conversations.first { $0.id == conversation }?.kind == .space ? [.everyone] : []) + mentionCandidates(conversation)
+    }
     /// Fetches a conversation's members once per launch; a failure keeps the fallback and allows a later retry.
     func sharedKey(_ conversation: ConversationID, _ category: SharedCategory) -> String { "\(conversation)/\(category.rawValue)" }
     /// The first page of a tab when it first shows, or the next page. A failure keeps the panel on loaded messages.
@@ -1318,7 +1379,10 @@ final class ChatStore {
         if let customEmojiLoad { return await customEmojiLoad.value }
         let load = Task {
             do { customEmoji = try await backend.customEmojis() } catch {
-                if case .http(403)? = error as? AuthFailure { return }   // personal accounts have none: don't ask again
+                if case .http(403)? = error as? AuthFailure {   // personal accounts have none: don't ask again
+                    log.notice("custom emoji: the list was refused (403); not asked again this launch")
+                    return
+                }
                 customEmojiLoad = nil
                 if (error as? AuthFailure)?.endsSession == true { report(error) }
             }
@@ -1563,6 +1627,16 @@ final class ChatStore {
     /// Messages in this timeline still uploading their files; the composer says so.
     func uploading(_ conversation: String, thread: String? = nil) -> Int {
         timeline(conversation, thread: thread).filter { $0.delivery == .pending && $0.attachments.contains { $0.isLocalFile && $0.uploadToken == nil } }.count
+    }
+    /// Back in Parley: the conversation and threads on screen are read, with what came while I was away.
+    // ponytail: only threads Home lists unread; a reply while away in another open thread stays unread on the server.
+    func appBecameActive() async {
+        let threads = ([threadID] + windowPanes.values.map(\.thread)).compactMap { $0 }
+        for thread in threads where homeThreads.contains(where: { $0.id == thread && $0.unread }) { await readThread(thread) }
+        guard let id = openConversation, !heldUnread.contains(id), let i = conversations.firstIndex(where: { $0.id == id }),
+              conversations[i].unread > 0 else { return }
+        conversations[i].unread = 0
+        await markRead(id)
     }
     func markRead(_ id: String) async {
         notifier?.clear(conversation: id)
@@ -1821,8 +1895,7 @@ final class ChatStore {
             .sorted { $0.element.time == $1.element.time ? $0.offset < $1.offset : $0.element.time > $1.element.time }.map(\.element)
     }
     /// A Home thread row: Home stays on screen and the thread opens in the thread pane beside it, at its newest reply.
-    /// The conversation itself is not opened or marked read.
-    // ponytail: the thread is read only here; the server's topic read state is not written (set_topic_unread_timestamp-style).
+    /// The conversation itself is not opened or marked read; the thread is, on the server too (`readThread`).
     func openHomeThread(_ thread: HomeThread) async {
         endMainWindowEdits()
         shortcut = .home; selectedID = thread.conversationID; info = false

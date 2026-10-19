@@ -67,6 +67,8 @@ enum CustomStatusExpiry: String, CaseIterable, Identifiable {
     }
 }
 struct Person: Identifiable, Hashable, Codable, Sendable {
+    /// @all in a space's @ list: a mention of everyone, sent as Google Chat's MENTION_ALL.
+    static let everyone = Person(id: TextStyleRange.everyone, name: "all")
     let id: String
     var name: String
     var presence: Presence = .offline
@@ -144,6 +146,7 @@ struct Conversation: Identifiable, Hashable, Codable, Sendable {
     var kind: ConversationKind
     var members: [Person]
     var unread: Int = 0
+    var unreadThreads: Int? = nil   // followed threads with new replies, as Google Chat counts them: the sidebar shows it bold
     var pinned = false
     var muted = false
     var emoji: String? = nil    // a space's emoji icon; shown before avatarURL
@@ -625,6 +628,28 @@ enum ChatEvent: Sendable, Equatable {
     case messageUpserted(Message), messageDeleted(MessageID)
     case conversationUpserted(Conversation), conversationRemoved(ConversationID)   // removed: left, removed from, or deleted
     case readStateChanged(ConversationID, unread: Int)
+    /// Read up to `at` here or on another device: what came before is read.
+    case conversationViewed(ConversationID, at: Date), threadViewed(ThreadID, at: Date)
+    /// A thread marked unread, or the mark cleared, here or on another device.
+    case threadMarkedUnread(ThreadID, Bool)
+    /// A conversation marked unread on another device (here, `markUnread` already shows it).
+    case conversationMarkedUnread(ConversationID)
+    /// Google Chat would notify for this message (its WEB_PUSH_NOTIFICATION), for `cause`: 1 DM, 2 @mention, 3 new thread, 4 followed reply.
+    case googleNotified(MessageID, cause: Int)
+    /// Google Chat's own Home and Mentions counts (nil when not sent), to set against the Dock badge.
+    case googleCounts(home: Int?, mentions: Int?)
+    /// A conversation's count of followed threads with new replies changed.
+    case unreadThreadsChanged(ConversationID, Int)
+    /// The do not disturb schedules, changed here or on another device.
+    case dndSchedulesChanged(DndSchedules)
+    /// A conversation's sort time moved (a new message, here or elsewhere).
+    case conversationActivity(ConversationID, at: Date)
+    /// A DM's history cleared up to a time, here or on another device: older messages are gone for me.
+    case historyCleared(ConversationID, upTo: Date)
+    /// Google asks for Home's lists to be read again.
+    case homeRefreshed
+    /// Someone blocked or unblocked, here or on another device.
+    case blocksChanged
     /// I started or stopped following a thread (here or elsewhere).
     case threadFollowChanged(ThreadID, following: Bool)
     /// Someone reacted to a message, or took it back, as pushed live (never replayed). `emoji` is a custom one's ":shortcode:".

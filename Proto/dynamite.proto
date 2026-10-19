@@ -354,6 +354,7 @@ message ReplySummary {
 }
 message TopicReadState {               // only sent with fetch option TOPIC_METADATA (and on Home's thread items)
   optional int64 last_read_time = 2;   // µs; a message created later is unread
+  optional int64 mark_as_unread_time = 14;   // µs; set while the thread is marked unread (here or elsewhere), else 0
   optional int32 message_count = 10;
   optional ReplySummary reply_summary = 13;
   repeated TopicLabelId topic_label_id = 11;
@@ -532,11 +533,13 @@ message PaginatedWorldRequest {
   repeated WorldSectionRequest world_section_requests = 2;
   optional bool fetch_from_user_spaces = 5;
   optional bool fetch_snippets_for_unnamed_rooms = 7;
+  repeated BadgeCount.Type badge_count_types = 10 [packed = true];   // the counts to send back in field 8
 }
 message PaginatedWorldResponse {
   repeated WorldSectionResponse world_section_responses = 1;
   repeated WorldItemLite world_items = 4;
   repeated ShortcutItem shortcut_items = 7;   // Home's threads (topics with replies), and shortcut messages, alone or in their topic
+  repeated BadgeCount badge_counts = 8;
 }
 message ShortcutItem { oneof item { Topic topic = 1; Message message = 3; } }
 
@@ -854,6 +857,30 @@ message ReadReceiptChangedEvent {
   optional GroupId group_id = 1;
   optional ReadReceiptSet read_receipt_set = 2;
 }
+// Read state as Google Chat pushes it to each of my sessions, so a read on one device shows on the others.
+message GroupViewedEvent { optional GroupId group_id = 1; optional int64 view_time = 2; }   // µs
+message TopicViewedEvent { optional TopicId topic_id = 1; optional int64 view_time = 2; }   // µs
+message MarkTopicAsUnreadUpdatedEvent { optional TopicId topic_id = 1; optional int64 mark_time = 2; }   // µs; 0 clears the mark
+message MarkAsUnreadEvent { optional GroupId group_id = 1; optional int64 mark_time = 2; }   // µs
+message WebPushNotification {
+  optional Message message = 1;
+  optional int32 cause = 5;                  // 1 DM, 2 @mention, 3 new thread (a DM's message too), 4 reply in a followed thread, 5 another reply
+}
+message WebPushNotificationEvent { optional WebPushNotification notification = 1; }   // comes twice: for the interactive session and every web session
+message GroupUnreadSubscribedTopicCountUpdatedEvent { optional int64 unread_subscribed_topic_count = 1; optional GroupId group_id = 3; }
+message BadgeCount {
+  enum Type { UNSPECIFIED_BADGE_COUNT = 0; UNREAD_HOME_BADGE_COUNT = 1; UNREAD_MENTIONS_BADGE_COUNT = 2; }
+  optional Type type = 1;
+  optional int32 count = 2;
+}
+message BadgeCountUpdatedEvent { repeated BadgeCount badge_counts = 1; }
+message TopicEvent { optional Topic topic = 1; }   // TOPIC_CREATED and TOPIC_UPDATED
+message ClearHistoryEvent {
+  optional GroupId group_id = 1;     // a DM
+  optional int64 cleared_up_to = 2;  // µs; messages up to it are gone for me
+}
+message RecurringDndUpdatedEvent { optional RecurringDnd recurring_dnd = 1; }
+message GroupDefaultSortOrderUpdatedEvent { optional GroupId group_id = 1; optional int64 default_sort_time = 2; }   // µs
 message EventBody {
   enum EventType {
     UNKNOWN = 0;
@@ -882,9 +909,44 @@ message EventBody {
     ROSTER_SECTION_CREATED = 72;                      // a sidebar section made, deleted or changed
     ROSTER_SECTION_DELETED = 73;
     ROSTER_SECTION_UPDATED = 74;
+    GROUP_VIEWED = 3;                                 // the conversation's read time moved: read here or on another device
+    TOPIC_VIEWED = 4;                                 // a thread's read time moved: read here or on another device
+    MARK_TOPIC_AS_UNREAD_UPDATED = 86;                // a thread marked unread, or the mark cleared (time 0), here or elsewhere
+    MARK_AS_UNREAD = 37;                              // a conversation marked unread here or on another device
+    // Pushed to every session; see Research/PUSH_NOTIFY_AND_UNREAD_COUNTS.md and TOPIC_WORLD_AND_SETTINGS_EVENTS.md.
+    TOPIC_MUTE_CHANGED = 9;                           // a thread muted or unmuted (Parley follows labels instead)
+    WEB_PUSH_NOTIFICATION = 12;                       // Google Chat would alert for this message
+    GROUP_UNREAD_SUBSCRIBED_TOPIC_COUNT_UPDATED = 13; // a conversation's unread followed threads changed
+    TOPIC_CREATED = 20;                               // comes with the head MESSAGE_POSTED in the same event
+    BLOCK_STATE_CHANGED = 31;
+    CLEAR_HISTORY = 32;                               // a DM's history cleared up to a time
+    USER_PRESENCE_SHARED_UPDATED_EVENT = 43;          // empty
+    GROUP_UNREAD_THREAD_STATE_UPDATED = 53;           // a space's Threads list gained or lost unread followed threads
+    USER_RECURRING_DND_UPDATED_EVENT = 56;            // the whole Do Not Disturb schedule set
+    GROUP_DEFAULT_SORT_ORDER_UPDATED = 64;
+    STRING_SORT_ORDER_UPDATED = 67;
+    BADGE_COUNT_UPDATED = 75;                         // Google Chat's Home and Mentions counts
+    WORLD_REFRESHED = 76;                             // Home's lists to read again
+    TOPIC_METADATA_UPDATED = 82;                      // a thread's reply counts changed
+    GROUP_READ_STATE_UPDATED = 83;                    // a conversation's newest top-level message time moved
+    GEN_AI_SUMMARY_UPDATED = 90;                      // empty
+    TOPIC_UPDATED = 95;                               // Ask Gemini session DMs
+    STREAMING_MESSAGE_UPDATED = 99;                   // empty
+    BACKGROUND_JOB_STATUS_UPDATE = 100;
   }
   optional GroupUpdatedEvent group_updated = 5;
   optional MessageEvent message_posted = 6;          // also carries MESSAGE_UPDATED
+  optional GroupViewedEvent group_viewed = 3;
+  optional TopicViewedEvent topic_viewed = 4;
+  optional MarkTopicAsUnreadUpdatedEvent mark_topic_as_unread_updated = 66;
+  optional MarkAsUnreadEvent mark_as_unread = 32;
+  optional WebPushNotificationEvent web_push_notification = 10;
+  optional GroupUnreadSubscribedTopicCountUpdatedEvent group_unread_subscribed_topic_count_updated = 11;
+  optional ClearHistoryEvent history_cleared = 29;
+  optional RecurringDndUpdatedEvent recurring_dnd_updated = 48;
+  optional GroupDefaultSortOrderUpdatedEvent group_default_sort_order_updated = 53;
+  optional BadgeCountUpdatedEvent badge_count_updated = 59;
+  optional TopicEvent topic_updated = 70;
   optional EventType event_type = 12;
   optional GroupNotificationSettingsUpdatedEvent group_notification_settings_updated = 17;
   optional MembershipChangedEvent membership_changed = 14;

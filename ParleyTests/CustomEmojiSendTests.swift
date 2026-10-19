@@ -27,6 +27,26 @@ extension AuthTests {
         // Filter {1 kind, 2 {1 states}, 3 operation} on the wire.
         #expect(try Dynamite_ListCustomEmojisRequest.Filter(serializedBytes: Data([0x08, 0x03, 0x12, 0x02, 0x08, 0x01, 0x18, 0x01])) == DynamiteBackend.customEmojiFilters[1])
     }
+    /// A page that fails after others loaded keeps what they brought: the picker shows those instead of none.
+    @Test func aLaterPageFailingKeepsTheEarlierOnes() async throws {
+        let first = Dynamite_ListCustomEmojisResponse.with { $0.customEmojis = [listed("a", "parrot")]; $0.nextPageToken = "p2" }
+        let (backend, _) = try await Self.connected([try Self.proto(first), StubExchange.Reply(status: 500)])
+        #expect(try await backend.customEmojis().map(\.id) == ["a"])
+    }
+    /// The log line says what a read found in numbers and state names only: no shortcode, id, token or link.
+    @Test func theListsLogLineCarriesNoNamesOrTokens() {
+        var tally = CustomEmojiTally()
+        tally.add([listed("uuid-secret", "secret-name"), listed("b", "other", state: .systemDisabled),
+                   .with { $0.uuid = "c"; $0.shortcode = "no-token"; $0.state = .enabled }])
+        let line = tally.line(end: "done")
+        #expect(line == "custom emoji: 1 pages, 3 listed, 2 enabled, 1 enabled without an image, states [enabled: 2, systemDisabled: 1], done")
+        for secret in ["uuid-secret", "secret-name", "rt-", "blob", "no-token", "http"] { #expect(!line.contains(secret)) }
+        // Errors by kind and code, never their text.
+        #expect(CustomEmojiTally.kind(of: AuthFailure.http(429)) == "HTTP 429")
+        #expect(CustomEmojiTally.kind(of: AuthFailure.malformedProto) == "malformedProto")
+        #expect(CustomEmojiTally.kind(of: AuthFailure.bootstrapRedirect("a name")) == "bootstrapRedirect")
+        #expect(CustomEmojiTally.kind(of: URLError(.timedOut)) == "network -1001")
+    }
     @Test func aCustomEmojiPickedForAReactionSendsItsWholePayload() async throws {
         let list = Dynamite_ListCustomEmojisResponse.with { $0.customEmojis = [listed("a", "parrot")] }
         let (backend, exchange) = try await Self.connected([try Self.proto(list), try Self.proto(Dynamite_UpdateReactionResponse())])

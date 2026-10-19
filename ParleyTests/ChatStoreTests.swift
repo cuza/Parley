@@ -86,6 +86,7 @@ struct ChatStoreTests {
     }
     @Test func pushedMessagesCountAsUnreadOnlyElsewhereAndOnce() async throws {
         let store = ChatStore(backend: FakeBackend())
+        store.isAppActive = { true }   // on screen and in front; in the background it counts (DockMenuTests)
         await store.start()
         let selected = try #require(store.selectedID)
         let other = try #require(store.conversations.first { $0.id != selected })

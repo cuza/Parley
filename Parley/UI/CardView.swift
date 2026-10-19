@@ -188,8 +188,18 @@ struct CardView: View {
                 }
             }
             .frame(width: width, alignment: .topLeading)
-        case .collapse(let more, let less, _):   // a collapsible section's toggle, in its own words
-            Button(expanded ? less : more, action: toggle).buttonStyle(.link).frame(height: CardLayout.more)
+        case .collapse(let more, let less, _):   // a collapsible section's toggle: a disclosure chevron, as Google Chat draws it
+            Button(action: toggle) {
+                HStack(spacing: 6) {
+                    Image(systemName: "chevron.right").font(.caption.weight(.semibold)).foregroundStyle(.secondary)
+                        .rotationEffect(.degrees(expanded ? 90 : 0))
+                    Text(expanded ? less : more).fontWeight(.medium)
+                }
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain).frame(height: CardLayout.more)
+            .accessibilityElement(children: .ignore).accessibilityLabel(expanded ? less : more)
+            .accessibilityValue(expanded ? "expanded" : "collapsed").accessibilityAddTraits(.isButton)
         }
     }
 }

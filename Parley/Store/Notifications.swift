@@ -380,3 +380,41 @@ enum NotificationPolicy {
         }
     }
 }
+
+/// Google Chat's own decision to notify (WEB_PUSH_NOTIFICATION) set against Parley's banner, matched by message id, to
+/// see where they differ before deciding whether to follow Google's. Only differences come out, as log lines.
+struct NotifyComparison {
+    private struct Entry { var banner: Bool?; var detail = ""; var cause: Int?; var at: Date }
+    private var entries: [MessageID: Entry] = [:]
+    /// How long Google gets to say it would notify for a banner Parley showed.
+    static let wait: TimeInterval = 15
+    mutating func parley(_ id: MessageID, banner: Bool, detail: String, at now: Date) -> [String] {
+        var entry = entries[id] ?? Entry(at: now)
+        entry.banner = banner; entry.detail = detail
+        entries[id] = entry
+        return report(id)
+    }
+    /// Google sends each push twice (for the interactive session and for every web session): the second says nothing.
+    mutating func google(_ id: MessageID, cause: Int, at now: Date) -> [String] {
+        var entry = entries[id] ?? Entry(at: now)
+        guard entry.cause == nil else { return [] }
+        entry.cause = cause
+        entries[id] = entry
+        return report(id)
+    }
+    /// Parley's banners Google said nothing about in `wait`; every entry that old goes.
+    mutating func expire(at now: Date) -> [String] {
+        var lines: [String] = []
+        for (id, entry) in entries where now.timeIntervalSince(entry.at) >= Self.wait {
+            if entry.cause == nil, entry.banner == true { lines.append("notify differs: Google no, Parley yes (\(entry.detail))") }
+            entries[id] = nil
+        }
+        return lines
+    }
+    /// Both sides known: said once, then forgotten (Google's second copy finds no Parley side and says nothing).
+    private mutating func report(_ id: MessageID) -> [String] {
+        guard let entry = entries[id], let cause = entry.cause, let banner = entry.banner else { return [] }
+        entries[id] = nil
+        return banner ? [] : ["notify differs: Google yes (cause \(cause)), Parley no (\(entry.detail))"]
+    }
+}

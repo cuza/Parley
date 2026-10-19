@@ -608,7 +608,7 @@ actor FakeBackend: ChatBackend {
         }
     }
     static let shipyard = Person(id: "shipyard", name: "Shipyard", avatarURL: shipyardIcon)
-    /// Shipyard's dialog: a title, a priority menu, Cancel and Create.
+    /// Shipyard's dialog: a title, a priority menu, an assignee behind "More fields", Cancel and Create.
     static let createIssue: AppDialog = {
         func action(_ function: String) -> Data { (try? Dynamite_CardAction.with { $0.function = function }.serializedData()) ?? Data() }
         let page = URL(string: "https://shipyard.example/issues/new")!
@@ -618,6 +618,8 @@ actor FakeBackend: ChatBackend {
             .choice(Card.Choice(name: "priority", label: "Priority", style: .menu, options: [
                 .init(text: "Low", value: "low", selected: false), .init(text: "Normal", value: "normal", selected: true),
                 .init(text: "High", value: "high", selected: false)])),
+            .field(Card.Field(name: "assignee", label: "Assignee", value: "", placeholder: "Who takes it?")),
+            .collapse(more: "More fields", less: "More fields", hidden: 1),
         ]]), primary: Card.Link(title: "Create", url: page, filled: true, action: action("create"), required: ["title"]),
              secondary: Card.Link(title: "Cancel", url: page, action: action("cancel")))
     }()

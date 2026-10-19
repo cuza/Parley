@@ -51,14 +51,17 @@ struct MentionQuery: Equatable {
             .sorted { ($0.shortcode.lowercased().hasPrefix(query) ? 0 : 1, $0.shortcode) < ($1.shortcode.lowercased().hasPrefix(query) ? 0 : 1, $1.shortcode) }
             .prefix(limit))
     }
-    /// People whose name, or any word of it onward, starts with `query`, ignoring case and accents; sorted by name.
+    /// People whose name, or any word of it onward, starts with `query`, ignoring case and accents; @all first, then by name.
     static func filter(_ people: [Person], by query: String, limit: Int = 8) -> [Person] {
         func fold(_ s: String) -> String { s.folding(options: [.caseInsensitive, .diacriticInsensitive], locale: nil) }
         let query = fold(query)
         return Array(people.filter { person in
             let name = fold(person.name)
             return query.isEmpty || name.split(separator: " ").contains { name[$0.startIndex...].hasPrefix(query) }
-        }.sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }.prefix(limit))
+        }.sorted { a, b in
+            if (a == .everyone) != (b == .everyone) { return a == .everyone }
+            return a.name.localizedStandardCompare(b.name) == .orderedAscending
+        }.prefix(limit))
     }
 }
 
@@ -118,6 +121,10 @@ struct MentionList: View {
             ForEach(Array(items.enumerated()), id: \.element.id) { index, item in
                 HStack(spacing: 8) {
                     switch item {
+                    case .person(let person) where person == .everyone:   // as Google Chat lists it: a group symbol and who it reaches
+                        Image(systemName: "person.3").frame(width: 22, height: 22)
+                        Text(person.name).lineLimit(1).fixedSize()
+                        Text("Everyone in the space").foregroundStyle(index == selected ? .white : .secondary).lineLimit(1)
                     case .person(let person):
                         Avatar(name: person.name, size: 22, url: person.avatarURL)
                         Text(person.name).lineLimit(1)
@@ -158,6 +165,7 @@ struct MentionList: View {
     }
     private static func label(_ item: Suggestion) -> String {
         switch item {
+        case .person(let person) where person == .everyone: "Mention everyone in the space"
         case .person(let person): "Mention \(person.name)"; case .emoji(let emoji): "Insert \(emoji.text)"; case .unicode(let emoji): "Insert \(emoji.character)"
         case .space(let room): "Replace the link with \(room.name)"
         case .command(let command): "\(command.label), \(command.appName): \(command.description)"

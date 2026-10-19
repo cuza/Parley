@@ -68,6 +68,9 @@ struct ParleyApp: App {
             _ = SystemNotifier(store: store)   // the store keeps it; registering now catches the click that launched the app
         }
         store.onBadge = { NSApplication.shared.dockTile.badgeLabel = $0 }
+        NotificationCenter.default.addObserver(forName: NSApplication.didBecomeActiveNotification, object: nil, queue: .main) { _ in
+            Task { @MainActor in await store.appBecameActive() }
+        }
         _store = State(initialValue: store)
         spotlight = live ? ConversationSpotlight() : nil
         if live, #available(macOS 27, *) {

@@ -11,7 +11,6 @@ struct CardEngineTests {
         .with { $0.segments = [.with { $0.run = .with { r in r.text = string; r.weight = weight } }] }
     }
     private static let vote = Data(try! Dynamite_CardAction.with { $0.function = "vote" }.serializedBytes() as [UInt8])
-    private static let dialog = Data(try! Dynamite_CardAction.with { $0.function = "f"; $0.interaction = 1 }.serializedBytes() as [UInt8])
     private func message(_ widgets: [Dynamite_CardWidget] = [], body: String = "", configure: (inout Dynamite_Message) -> Void = { _ in }) -> Dynamite_Message {
         .with { m in
             m.id.messageID = "m1"; m.id.parentID.topicID.topicID = "m1"; m.textBody = body; m.creator.userID.id = "bot1"
@@ -138,6 +137,9 @@ struct CardEngineTests {
         // Without the control's words, Google Chat's own.
         var plain = proto; plain.appAttachments[0].card.sections[0].clearCollapseControl()
         #expect(try card(plain).sections.first?.last == .collapse(more: "Show more", less: "Show less", hidden: 2))
+        // Only the expand words (as the GitHub app's "Advanced filters"): they stay once open, beside the turned chevron.
+        var named = proto; named.appAttachments[0].card.sections[0].collapseControl.clearCollapseButton()
+        #expect(try card(named).sections.first?.last == .collapse(more: "Show V", less: "Show V", hidden: 2))
     }
     /// The buttons an app puts under its message (a poll's "End voting") are drawn bare, without a card's box.
     @Test func accessoryButtonsAreBare() throws {

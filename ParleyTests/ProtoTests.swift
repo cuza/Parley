@@ -39,7 +39,7 @@ struct ProtoTests {
     }
     @Test func eventBodiesDecodeKnownAndUnknownTypes() throws {
         let ready = ProbeWire.message(8, ProbeWire.integer(12, 33))
-        let unknown = ProbeWire.message(8, ProbeWire.integer(12, 99))
+        let unknown = ProbeWire.message(8, ProbeWire.integer(12, 250))   // a type no build knows
         let posted = ProbeWire.message(8, ProbeWire.integer(12, 6) + ProbeWire.message(6, ProbeWire.message(1, ProbeWire.string(10, "hi"))))
         let event = try Dynamite_Event(serializedBytes: ready + unknown + posted + ProbeWire.message(6, ProbeWire.integer(1, 77)))
         #expect(event.bodies.map(\.eventType) == [.sessionReady, .unknown, .messagePosted])

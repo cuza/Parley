@@ -8,7 +8,6 @@ struct TypingBubble: View {
     var activity: String? = nil   // an app's status, such as "Collecting info"
     var showsName = true
     var dots: [Color] = [.secondary, .secondary, .secondary]
-    @Environment(\.colorScheme) private var scheme
     private var fill: Color { Color(nsColor: BubblePalette.incoming) }
     var body: some View {
         HStack(alignment: .bottom, spacing: 8) {

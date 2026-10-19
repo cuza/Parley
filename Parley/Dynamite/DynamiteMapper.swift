@@ -329,8 +329,10 @@ enum DynamiteMapper {
                 func label(_ button: Dynamite_CardButton) -> String? {
                     var text = CardText(); text.add(button.textButton.label); return text.trimmed.isEmpty ? nil : text.trimmed
                 }
-                items.append(.collapse(more: label(section.collapseControl.expandButton) ?? "Show more",
-                                       less: label(section.collapseControl.collapseButton) ?? "Show less", hidden: items.count - boundary))
+                // Only the expand words ("Advanced filters"): they stay once open, beside the turned chevron.
+                let more = label(section.collapseControl.expandButton)
+                items.append(.collapse(more: more ?? "Show more", less: label(section.collapseControl.collapseButton) ?? more ?? "Show less",
+                                       hidden: items.count - boundary))
             }
             if !items.isEmpty { sections.append(items) }
         }
@@ -1125,7 +1127,9 @@ enum DynamiteMapper {
         let messages = topic(proto, in: conversation, selfID: selfID, people: people)
         guard messages.count > 1, let head = messages.first, let latest = messages.last else { return nil }
         let read = proto.topicReadState.lastReadTime
-        let unread = proto.replies.contains { $0.createTime > read && $0.creator.userID.id != selfID && $0.deleteTime == 0 }
+        // As Google Chat: a thread marked unread stays unread until it's read again.
+        let unread = proto.topicReadState.markAsUnreadTime > 0
+            || proto.replies.contains { $0.createTime > read && $0.creator.userID.id != selfID && $0.deleteTime == 0 }
         return HomeThread(id: head.id, conversationID: conversation, head: head, latest: latest, unread: unread,
                           time: proto.sortTime > 0 ? date(proto.sortTime) : latest.createdAt)
     }
@@ -1146,7 +1150,9 @@ enum DynamiteMapper {
             : others.isEmpty ? "Unnamed conversation" : others.map(\.name).sorted().joined(separator: ", ")
         // A space's emoji comes before its image; a 1:1 DM shows the other person's photo.
         return Conversation(id: id, name: name, kind: kind, members: members,
-                            unread: unread(item.readState), pinned: item.readState.starred,
+                            unread: unread(item.readState),
+                            unreadThreads: item.readState.unreadSubscribedTopicCount > 0 ? Int(item.readState.unreadSubscribedTopicCount) : nil,
+                            pinned: item.readState.starred,
                             muted: item.readState.notificationSettings.muteSettings.state == .muted,
                             emoji: item.avatarInfo.emoji.unicode.isEmpty ? nil : item.avatarInfo.emoji.unicode,
                             avatarURL: imageURL(item.avatarURL) ?? (kind == .direct ? others.first?.avatarURL : nil),

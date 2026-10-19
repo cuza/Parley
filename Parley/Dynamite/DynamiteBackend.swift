@@ -183,6 +183,7 @@ actor DynamiteBackend: ChatBackend {
         latest[id] = state.lastHeadMessageCreateTime > 0 ? state.lastHeadMessageCreateTime : item.sortTimestamp
         notifyLevel[id] = state.notificationSettings.level
         if state.markAsUnreadTimestamp > 0 { markedUnread.insert(id) } else { markedUnread.remove(id) }
+        readUpTo[id] = max(readUpTo[id] ?? 0, state.lastReadTime)
     }
     /// Every sidebar item, one per conversation, most recent first, and the topics Home's sections brought.
     private func worldItems() async throws -> ([Dynamite_WorldItemLite], [Dynamite_Topic]) {
@@ -203,8 +204,10 @@ actor DynamiteBackend: ChatBackend {
                 r.worldSectionRequests = sections
                 r.fetchFromUserSpaces = true
                 r.fetchSnippetsForUnnamedRooms = true
+                if page == 0 { r.badgeCountTypes = [.unreadHomeBadgeCount, .unreadMentionsBadgeCount] }
             }
             let response: Dynamite_PaginatedWorldResponse = try await rpc("paginated_world", request)
+            if !response.badgeCounts.isEmpty { continuation.yield(Self.counts(response.badgeCounts)) }
             items += response.worldItems + response.worldSectionResponses.flatMap(\.worldItems)
             if page == 0 {
                 topics = response.shortcutItems.compactMap { if case .topic(let topic)? = $0.item { topic } else { nil } }
@@ -835,9 +838,11 @@ actor DynamiteBackend: ChatBackend {
         let response: Dynamite_GetRecurringDndResponse = try await rpc("get_recurring_dnd", Dynamite_GetRecurringDndRequest.with {
             $0.timeZone = timeZone; $0.requestHeader = DynamiteClient.header
         })
-        let proto = response.recurringDnd
-        return DndSchedules(periods: proto.schedules.map { .init(days: $0.days.map(Int.init), start: Int($0.start), end: Int($0.end), enabled: $0.enabled) },
-                            followsTimeZone: proto.updatesOnTimeZoneChange, timeZone: proto.timeZone.isEmpty ? timeZone : proto.timeZone)
+        return Self.schedules(response.recurringDnd, timeZone: timeZone)
+    }
+    private static func schedules(_ proto: Dynamite_RecurringDnd, timeZone: String) -> DndSchedules {
+        DndSchedules(periods: proto.schedules.map { .init(days: $0.days.map(Int.init), start: Int($0.start), end: Int($0.end), enabled: $0.enabled) },
+                     followsTimeZone: proto.updatesOnTimeZoneChange, timeZone: proto.timeZone.isEmpty ? timeZone : proto.timeZone)
     }
     /// `set_recurring_dnd` with the whole set and field 2 at 0, as Google Chat sends it. A period switched on that covers
     /// now turns DND on at once: the reply's status says so.
@@ -1245,6 +1250,48 @@ actor DynamiteBackend: ChatBackend {
                     deleted(DynamiteID.message(conversation, topic: proto.id.parentID.topicID.topicID, message: proto.id.messageID))
                 }
                 placed.forEach { continuation.yield(.messageUpserted($0)) }
+            case .topicUpdated:   // an Ask Gemini session's topic, whole: its messages show as MESSAGE_POSTED would show them
+                let topic = body.topicUpdated.topic
+                guard let conversation = DynamiteID.conversation(topic.id.groupID) ?? DynamiteID.conversation(event.groupID) else { continue }
+                let protos = topic.replies.filter { !$0.id.messageID.isEmpty }.sorted { $0.createTime < $1.createTime }
+                log.info("event: topic updated, \(protos.count, privacy: .public) messages")
+                await resolve(messages: protos)
+                for proto in protos { place(proto, in: conversation, isHead: nil).forEach { continuation.yield(.messageUpserted($0)) } }
+            case .userRecurringDndUpdatedEvent:   // the whole set, as get_recurring_dnd answers it
+                continuation.yield(.dndSchedulesChanged(Self.schedules(body.recurringDndUpdated.recurringDnd, timeZone: TimeZone.current.identifier)))
+            case .groupDefaultSortOrderUpdated:
+                if let id = DynamiteID.conversation(body.groupDefaultSortOrderUpdated.groupID), body.groupDefaultSortOrderUpdated.defaultSortTime > 0 {
+                    continuation.yield(.conversationActivity(id, at: DynamiteMapper.date(body.groupDefaultSortOrderUpdated.defaultSortTime)))
+                }
+            case .clearHistory:
+                log.info("event: history cleared")
+                if let id = DynamiteID.conversation(body.historyCleared.groupID), body.historyCleared.clearedUpTo > 0 {
+                    continuation.yield(.historyCleared(id, upTo: DynamiteMapper.date(body.historyCleared.clearedUpTo)))
+                }
+            case .groupUnreadSubscribedTopicCountUpdated:
+                let update = body.groupUnreadSubscribedTopicCountUpdated
+                if let id = DynamiteID.conversation(update.groupID) { continuation.yield(.unreadThreadsChanged(id, Int(update.unreadSubscribedTopicCount))) }
+            case .webPushNotification:
+                let push = body.webPushNotification.notification, id = push.message.id
+                guard !id.messageID.isEmpty,
+                      let conversation = DynamiteID.conversation(id.parentID.topicID.groupID) ?? DynamiteID.conversation(event.groupID) else { continue }
+                continuation.yield(.googleNotified(DynamiteID.message(conversation, topic: id.parentID.topicID.topicID, message: id.messageID),
+                                                   cause: Int(push.cause)))
+            case .badgeCountUpdated:
+                continuation.yield(Self.counts(body.badgeCountUpdated.badgeCounts))
+            case .worldRefreshed:
+                log.info("event: Home refreshed")
+                continuation.yield(.homeRefreshed)
+            case .blockStateChanged:   // the blocked list and the conversation list both change
+                log.info("event: block state changed")
+                continuation.yield(.blocksChanged)
+                reload()
+            // Known and not needed: a new topic (its head's MESSAGE_POSTED brings the message), counts for Android's Threads
+            // panel and per-thread badges (Home's threads follow TOPIC_VIEWED), sort strings for Google's own lists, thread
+            // mute (Parley follows the THREAD_FOLLOWED label), empty signals, and a mark-section-read job's progress.
+            case .topicCreated, .groupUnreadThreadStateUpdated, .topicMetadataUpdated, .groupReadStateUpdated, .stringSortOrderUpdated,
+                 .topicMuteChanged, .userPresenceSharedUpdatedEvent, .genAiSummaryUpdated, .streamingMessageUpdated, .backgroundJobStatusUpdate:
+                break
             case .messageDeleted:
                 let id = body.messageDeleted.messageID
                 guard !id.messageID.isEmpty,
@@ -1314,11 +1361,67 @@ actor DynamiteBackend: ChatBackend {
                     keepUneditable(unsent)
                     continuation.yield(.draftChanged(draft))
                 }
-            default: break
+            case .groupViewed:
+                log.info("event: conversation viewed")
+                if let id = DynamiteID.conversation(body.groupViewed.groupID) {
+                    readUpTo[id] = max(readUpTo[id] ?? 0, body.groupViewed.viewTime)
+                    continuation.yield(.conversationViewed(id, at: DynamiteMapper.date(body.groupViewed.viewTime)))
+                }
+            case .topicViewed:
+                log.info("event: thread viewed")
+                if let thread = Self.thread(body.topicViewed.topicID) {
+                    continuation.yield(.threadViewed(thread, at: DynamiteMapper.date(body.topicViewed.viewTime)))
+                }
+            case .markAsUnread:
+                log.info("event: conversation unread mark \(body.markAsUnread.markTime > 0 ? "set" : "cleared", privacy: .public)")
+                guard let id = DynamiteID.conversation(body.markAsUnread.groupID) else { continue }
+                if body.markAsUnread.markTime > 0 {
+                    markedUnread.insert(id)
+                    continuation.yield(.conversationMarkedUnread(id))
+                } else {
+                    // Opening it elsewhere clears the mark without moving the read time: read, unless a newer message came.
+                    // ponytail: newest counts thread replies too, so a reply after the read keeps it unread until a GROUP_VIEWED.
+                    markedUnread.remove(id)
+                    let newest = max(newest[id] ?? 0, latest[id] ?? 0)
+                    if newest > 0, (readUpTo[id] ?? 0) >= newest { continuation.yield(.readStateChanged(id, unread: 0)) }
+                }
+            case .markTopicAsUnreadUpdated:
+                log.info("event: thread unread mark \(body.markTopicAsUnreadUpdated.markTime > 0 ? "set" : "cleared", privacy: .public)")
+                if let thread = Self.thread(body.markTopicAsUnreadUpdated.topicID) {
+                    continuation.yield(.threadMarkedUnread(thread, body.markTopicAsUnreadUpdated.markTime > 0))
+                }
+            default:   // numbers only, to see what Google sends that Parley doesn't use yet
+                log.info("event: unhandled type \(body.eventType.rawValue, privacy: .public), fields \(Self.fieldNumbers(body), privacy: .public)")
             }
         }
     }
 
+    private static func counts(_ counts: [Dynamite_BadgeCount]) -> ChatEvent {
+        .googleCounts(home: counts.last { $0.type == .unreadHomeBadgeCount }.map { Int($0.count) },
+                      mentions: counts.last { $0.type == .unreadMentionsBadgeCount }.map { Int($0.count) })
+    }
+    /// A thread's id from its topic: the thread is named by its first message, whose id is the topic's.
+    private static func thread(_ topic: Dynamite_TopicId) -> ThreadID? {
+        guard !topic.topicID.isEmpty, let conversation = DynamiteID.conversation(topic.groupID) else { return nil }
+        return DynamiteID.message(conversation, topic: topic.topicID, message: topic.topicID)
+    }
+    /// The top-level field numbers a message carries, known or not: what an unhandled event is made of.
+    private static func fieldNumbers(_ message: some SwiftProtobuf.Message) -> [Int] {
+        guard let data = try? message.serializedData() else { return [] }
+        var reader = WireReader(bytes: [UInt8](data)[...]), numbers: [Int] = []
+        while let key = reader.varint(), key >> 3 > 0 {
+            numbers.append(Int(key >> 3))
+            let skipped = switch key & 7 {
+            case 0: reader.varint() != nil
+            case 1: reader.skip(8)
+            case 2: reader.varint().map { reader.skip(Int($0)) } ?? false
+            case 5: reader.skip(4)
+            default: false
+            }
+            guard skipped else { break }
+        }
+        return numbers
+    }
     /// A conversation created, renamed, joined, left or deleted elsewhere: gone when we
     /// left it or it was deleted; otherwise its sidebar item, from the event when sent, else from a fresh world read.
     /// `hidden`: what a hide event says, over the read state, which may not have caught up.
@@ -1539,20 +1642,32 @@ actor DynamiteBackend: ChatBackend {
 
     /// `list_custom_emojis` as Google Chat sends it: 100 a page, the first with filters for enabled (and system-disabled)
     /// emoji, later pages only the token. Only enabled ones can be sent.
+    /// A page that fails after others loaded keeps what they brought; a first page that fails throws, so it's asked again.
+    /// Each read logs what it found, in numbers only (`CustomEmojiTally`), for "custom emoji don't show" reports.
     // ponytail: stops after 20 pages (2,000 emoji); raise it if an organisation has more.
     func customEmojis() async throws -> [CustomEmoji] {
-        var emoji: [CustomEmoji] = [], token: String?
-        for _ in 0..<20 {
+        var emoji: [CustomEmoji] = [], token: String?, tally = CustomEmojiTally()
+        for page in 0..<20 {
             let request = Dynamite_ListCustomEmojisRequest.with { r in
                 r.requestHeader = DynamiteClient.header
                 r.pageSize = 100
                 if let token { r.pageToken = token } else { r.filters = Self.customEmojiFilters }
             }
-            let response: Dynamite_ListCustomEmojisResponse = try await rpc("list_custom_emojis", request)
+            let response: Dynamite_ListCustomEmojisResponse
+            do { response = try await rpc("list_custom_emojis", request) } catch {
+                log.notice("\(tally.line(end: "page \(page + 1) failed: \(CustomEmojiTally.kind(of: error))"), privacy: .public)")
+                if page == 0 { throw error }
+                return emoji
+            }
+            tally.add(response.customEmojis)
             emoji += response.customEmojis.filter { $0.state == .enabled }.compactMap(DynamiteMapper.customEmoji)
-            guard !response.nextPageToken.isEmpty, response.nextPageToken != token else { break }
+            guard !response.nextPageToken.isEmpty, response.nextPageToken != token else {
+                log.notice("\(tally.line(end: response.nextPageToken.isEmpty ? "done" : "a page token came back twice"), privacy: .public)")
+                return emoji
+            }
             token = response.nextPageToken
         }
+        log.notice("\(tally.line(end: "stopped at the page limit"), privacy: .public)")
         return emoji
     }
     static let customEmojiFilters: [Dynamite_ListCustomEmojisRequest.Filter] = [
@@ -1814,6 +1929,34 @@ actor DynamiteBackend: ChatBackend {
             unresolvable.formUnion(missing.subtracting(people.keys).map { "\(bots)/\($0)" })
         } catch {
             log.error("get_members failed: \(String(describing: type(of: error)), privacy: .public)")
+        }
+    }
+}
+
+/// What a `list_custom_emojis` read found, in numbers and state names only, for the log: no shortcode, id, token or link.
+struct CustomEmojiTally {
+    private var pages = 0, listed = 0, enabled = 0, withoutImage = 0
+    private var states: [String: Int] = [:]
+    mutating func add(_ page: [Dynamite_CustomEmoji]) {
+        pages += 1
+        listed += page.count
+        for emoji in page {
+            states["\(emoji.state)", default: 0] += 1
+            if emoji.state == .enabled { enabled += 1; if emoji.readToken.isEmpty { withoutImage += 1 } }
+        }
+    }
+    func line(end: String) -> String {
+        let states = self.states.sorted { $0.key < $1.key }.map { "\($0.key): \($0.value)" }.joined(separator: ", ")
+        return "custom emoji: \(pages) pages, \(listed) listed, \(enabled) enabled, \(withoutImage) enabled without an image, states [\(states)], \(end)"
+    }
+    /// An error's kind and code, never its text (which can carry a link).
+    static func kind(of error: Error) -> String {
+        switch error {
+        case let failure as AuthFailure:   // the case's name, without what it carries
+            if case .http(let status) = failure { "HTTP \(status)" } else { String(String(describing: failure).prefix { $0 != "(" }) }
+        case let failure as URLError: "network \(failure.code.rawValue)"
+        case is SwiftProtobuf.BinaryDecodingError: "the answer didn't decode"
+        default: "\(type(of: error))"
         }
     }
 }

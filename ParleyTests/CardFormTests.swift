@@ -20,7 +20,6 @@ struct CardFormTests {
     private func card(_ proto: Dynamite_Message) throws -> Card {
         try #require(DynamiteMapper.message(proto, in: "space/s", selfID: "me", people: [:])?.attachments.first?.card)
     }
-    private func items(_ widgets: [Dynamite_CardWidget]) throws -> [Card.Item] { try #require(try card(message(widgets)).sections.first) }
     private func gaps(_ proto: Dynamite_Message) -> [String] { MessageCoverage.gaps(proto, selfID: "me") }
     private func option(_ value: String, selected: Bool = false) -> Dynamite_SelectionItem {
         .with { $0.text = value.uppercased(); $0.value = value; $0.selected = selected }

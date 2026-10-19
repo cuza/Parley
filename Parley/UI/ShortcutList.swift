@@ -172,10 +172,7 @@ struct ShortcutList: View {
                 }
                 VStack(alignment: .trailing, spacing: 3) {
                     if let time = last?.createdAt ?? room.activity { Text(Self.time(time)).font(.caption).foregroundStyle(.secondary).fixedSize() }
-                    if room.unread > 0 {
-                        Text("\(room.unread)").font(.system(size: 11, weight: .semibold, design: .rounded)).padding(.horizontal, 6).padding(.vertical, 2)
-                            .background(Color.accentColor, in: Capsule()).foregroundStyle(.white).monospacedDigit().fixedSize()
-                    }
+                    if room.unread > 0 { UnreadPill(count: room.unread) }
                 }
                 .reportFrame("column")
             }

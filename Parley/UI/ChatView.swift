@@ -438,7 +438,8 @@ struct ChatView: View {
     }
     /// A sidebar row as VoiceOver reads it: the name, then unread, pinned and muted when they are so.
     static func spoken(_ room: Conversation) -> String {
-        ([room.name] + [room.unread > 0 ? "\(room.unread) unread" : nil, room.pinned ? "pinned" : nil, room.muted ? "muted" : nil].compactMap { $0 })
+        ([room.name] + [room.unread > 0 ? "\(room.unread) unread" : nil, room.unreadThreads.map { "\($0) unread threads" },
+                        room.pinned ? "pinned" : nil, room.muted ? "muted" : nil].compactMap { $0 })
             .joined(separator: ", ")
     }
     /// One of my own sections, by its title.
@@ -452,6 +453,10 @@ struct ChatView: View {
                     ForEach(Shortcut.allCases, id: \.self) { shortcut in
                         HStack {
                             Label(shortcut.title, systemImage: shortcut.icon)
+                            if shortcut == .home, case let count = store.unreadThreadCount, count > 0 {   // threads with new replies, which the Dock badge counts too
+                                Spacer(minLength: 0)
+                                UnreadPill(count: count).accessibilityLabel("\(count) unread threads")
+                            }
                             if shortcut == .drafts, case let count = store.draftCount + store.scheduled.count, count > 0 {   // as web shows it
                                 Spacer(minLength: 0)
                                 Text("\(count)").font(.system(size: 11)).foregroundStyle(.secondary).accessibilityLabel("\(count) drafts")
@@ -465,10 +470,10 @@ struct ChatView: View {
                             .overlay(alignment: .bottomTrailing) {
                                 if let partner = store.partner(in: room) { PresenceDot(presence: store.presence[partner], size: 7).offset(x: 2, y: 2) }
                             }
-                        Text(room.name).fontWeight(room.unread > 0 ? .semibold : .regular).lineLimit(1).truncationMode(.tail).help(room.name)
+                        Text(room.name).fontWeight(room.unread > 0 || (room.unreadThreads ?? 0) > 0 ? .semibold : .regular).lineLimit(1).truncationMode(.tail).help(room.name)
                         Spacer(minLength: 0)
                         if room.muted { Image(systemName: "bell.slash").font(.caption2).foregroundStyle(.secondary) }
-                        if room.unread > 0 { Text("\(room.unread)").font(.system(size: 11, weight: .semibold, design: .rounded)).padding(.horizontal, 6).padding(.vertical, 2).background(Color.accentColor, in: Capsule()).foregroundStyle(.white).monospacedDigit().fixedSize() }
+                        if room.unread > 0 { UnreadPill(count: room.unread) }
                     }.tag(room.id)
                         // A double-click opens it in a window of its own, as in Messages; ⌘-click too, as Safari's new tab
                         // (conversation windows join as tabs). The sidebar selects one row at a time, so ⌘-click is free.
@@ -936,7 +941,7 @@ struct ComposerBar: View {
                     if thread != nil { DispatchQueue.main.async { if let main = ComposerTextView.all(in: window).first(where: { $0 !== closing }) { window?.makeFirstResponder(main) } } }
                 }
             }, attach: attach,
-               members: store.mentionCandidates(conversation.id), spaces: store.conversations, needMembers: { Task { await store.loadMembers(conversation.id) } },
+               members: store.mentionSuggestions(conversation.id), spaces: store.conversations, needMembers: { Task { await store.loadMembers(conversation.id) } },
                customEmoji: store.customEmoji, needCustomEmoji: { Task { await store.loadCustomEmoji() } },
                slashCommands: store.slashCommands[conversation.id] ?? [],
                needSlashCommands: { query in Task { await store.loadSlashCommands(conversation.id, query: query) } },
@@ -1228,6 +1233,14 @@ extension View {
     /// A small floating row above the composer's field.
     func floatingCapsule() -> some View {
         padding(.horizontal, 12).padding(.vertical, 6).floatingGlass(RoundedRectangle(cornerRadius: 16, style: .continuous))
+    }
+}
+/// An unread count in a sidebar or list row: white on the accent color.
+struct UnreadPill: View {
+    let count: Int
+    var body: some View {
+        Text("\(count)").font(.system(size: 11, weight: .semibold, design: .rounded)).padding(.horizontal, 6).padding(.vertical, 2)
+            .background(Color.accentColor, in: Capsule()).foregroundStyle(.white).monospacedDigit().fixedSize()
     }
 }
 /// The main window's actions for the menu bar; each acts on the window in front.

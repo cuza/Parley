@@ -36,6 +36,16 @@ extension AuthTests {
         #expect(sent.worldSectionRequests.first(where: \.fetchRosterSections)?.hasWorldFilter == true, "its own filter, so paging tokens can't mix")
     }
 
+    /// Google Chat's own Home and Mentions counts come with the first page, to set against the Dock badge.
+    @Test func theFirstPageAsksForGooglesCounts() async throws {
+        let answer = Dynamite_PaginatedWorldResponse.with {
+            $0.badgeCounts = [.with { $0.type = .unreadHomeBadgeCount; $0.count = 3 }, .with { $0.type = .unreadMentionsBadgeCount; $0.count = 1 }]
+        }
+        let (backend, exchange) = try await Self.connectedForWorld([try Self.proto(answer)])
+        _ = try await backend.conversations()
+        #expect(try Self.world(exchange).first?.badgeCountTypes == [.unreadHomeBadgeCount, .unreadMentionsBadgeCount])
+        #expect(await Self.drain(backend).contains(.googleCounts(home: 3, mentions: 1)))
+    }
     @Test func eachSectionPagesWithItsOwnFilterAndToken() async throws {
         let first = Dynamite_PaginatedWorldResponse.with {
             $0.worldSectionResponses = [

@@ -37,6 +37,19 @@ import Testing
         view.insertText("@ma", replacementRange: view.selectedRange())
         #expect(view.mentionQuery?.text == "ma")
     }
+    @Test func everyoneStaysFirstWhileTheQueryMatchesAll() {
+        #expect(MentionQuery.filter([maria, .everyone, alex], by: "").map(\.id) == [TextStyleRange.everyone, "alex", "maria"])
+        #expect(MentionQuery.filter([maria, .everyone, alex], by: "Al").map(\.id) == [TextStyleRange.everyone, "alex"])
+        #expect(MentionQuery.filter([maria, .everyone, alex], by: "ma").map(\.id) == ["maria"])
+    }
+    @Test func pickingEveryoneInsertsAnAtAllMention() {
+        let view = ComposerTextView(usingTextLayoutManager: false)
+        view.load("hi @a", [])
+        view.setSelectedRange(NSRange(location: 5, length: 0))
+        view.insertMention(.everyone, replacing: NSRange(location: 3, length: 2))
+        #expect(view.string == "hi @all ")
+        #expect(view.formatting == [TextStyleRange(style: .mention(userID: TextStyleRange.everyone), start: 3, length: 4)])
+    }
     @Test func pickingInsertsAStyledTokenAndASpace() throws {
         let view = ComposerTextView(usingTextLayoutManager: false)
         view.load("hi @ma", [])
@@ -93,6 +106,14 @@ import Testing
         let store = ChatStore(backend: FakeBackend())
         await store.start()
         #expect(store.mentionCandidates("maria").map(\.id) == ["maria"])
+    }
+    /// A space's @ list starts with @all, as Google Chat's does; a direct message has none, and the members stay people.
+    @Test func aSpaceOffersEveryoneFirst() async throws {
+        let store = ChatStore(backend: FakeBackend())
+        await store.start()
+        #expect(store.mentionSuggestions("design").map(\.id) == [TextStyleRange.everyone, "maria", "alex"])
+        #expect(store.mentionSuggestions("maria").map(\.id) == ["maria"])
+        #expect(!store.mentionCandidates("design").contains(.everyone))
     }
 }
 
