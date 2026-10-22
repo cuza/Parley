@@ -41,7 +41,8 @@ extension ChatStore {
     /// ⌘I or the title: opens the info panel in place of a thread, or closes it.
     func toggleInfo(window: ConversationID? = nil) {
         setPane(window) { pane in
-            pane.info.toggle()
+            // Over a person's details, ⇧⌘I goes back to the info panel.
+            if pane.person != nil { pane.person = nil; pane.info = true } else { pane.info.toggle() }
             if pane.info { pane.thread = nil; pane.threads = false }
         }
     }

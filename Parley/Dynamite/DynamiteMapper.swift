@@ -870,10 +870,13 @@ enum DynamiteMapper {
                 styles.append((style, range))
             case .userMentionMetadata(let mention):
                 let id = mention.type == .mentionAll ? TextStyleRange.everyone : mention.id.id.isEmpty ? nil : mention.id.id
+                if mention.type != .mentionAll, mention.id.type == .bot, let id { styles.append((.appMention(userID: id), range)); continue }
                 styles.append((.mention(userID: id), range))
             case .customEmojiMetadata(let metadata):   // one U+FFFD in the text
                 if let emoji = customEmoji(metadata.customEmoji) { styles.append((.customEmoji(emoji), range)) }
             case .urlMetadata(let link): if let url = URL(string: link.url.url) { styles.append((.link(url), range)) }
+            case .driveMetadata:   // a Drive file's chip in the text (its title): a link to the file, beside its card
+                if let url = URL(string: annotation.interactionData.url.url), url.scheme == "https" { styles.append((.link(url), range)) }
             case .groupMetadata(let chip):   // a space or DM chip: drawn as Google Chat draws it, opening in place
                 if let conversation = DynamiteID.conversation(chip.groupID) { styles.append((.chip(conversation, emoji: chip.avatarInfo.emoji.unicode.nilIfEmpty), range)) }
             default: continue
@@ -905,19 +908,30 @@ enum DynamiteMapper {
     /// FORMAT_DATA annotations for marker-free text, as Google Chat's composer sends them:
     /// one BULLETED_LIST_ITEM per line, plus one BULLETED_LIST over each run of adjacent items. Mentions become USER_MENTION
     /// annotations, custom emoji CUSTOM_EMOJI ones and links URL ones; mentions without a user are skipped.
-    static func annotations(_ formatting: [TextStyleRange]) -> [Dynamite_Annotation] {
+    /// `outsiders`: mentioned people who aren't members, sent as INVITE or REFERENCE instead of MENTION.
+    static func annotations(_ formatting: [TextStyleRange], outsiders: [PersonID: MessageDraft.Outsider] = [:]) -> [Dynamite_Annotation] {
         func annotation(_ type: Dynamite_FormatMetadata.FormatType, _ start: Int, _ length: Int) -> Dynamite_Annotation {
             .with { $0.type = .formatData; $0.startIndex = Int32(start); $0.length = Int32(length); $0.formatMetadata.formatType = type }
         }
-        var annotations: [Dynamite_Annotation] = [], lists: [(start: Int, end: Int)] = [], chips = false
+        var annotations: [Dynamite_Annotation] = [], lists: [(start: Int, end: Int)] = [], chips = false, files = false
         for range in formatting where range.length > 0 {
-            if case .mention(let id?) = range.style { annotations.append(mention(id, range.start, range.length)); continue }
+            if case .mention(let id?) = range.style {
+                var annotation = mention(id, range.start, range.length)
+                switch outsiders[id] {
+                case .invite: annotation.userMentionMetadata.type = .invite
+                case .reference: annotation.userMentionMetadata.type = .reference
+                case nil: break
+                }
+                annotations.append(annotation); continue
+            }
+            if case .appMention(let id) = range.style { annotations.append(mention(id, range.start, range.length, app: true)); continue }
             if case .customEmoji(let emoji) = range.style { annotations.append(customEmoji(emoji, range.start, range.length)); continue }
             if case .link(let url) = range.style { annotations.append(link(url, range.start, range.length)); continue }
             if case .chip(let room, let emoji, let link) = range.style {
                 if let chip = chip(room, emoji: emoji, link: link, range.start, range.length) { annotations.append(chip); chips = true }
                 continue
             }
+            if case .drive(let file) = range.style { annotations.append(drive(file, range.start, range.length)); files = true; continue }
             if case .color(let argb) = range.style {
                 var colour = annotation(.fontColor, range.start, range.length)
                 colour.formatMetadata.fontColor = argb
@@ -936,7 +950,7 @@ enum DynamiteMapper {
                 type = .bulletedListItem
                 if let last = lists.last, last.end == range.start { lists[lists.count - 1].end = range.start + range.length }
                 else { lists.append((range.start, range.start + range.length)) }
-            case .heading, .mention, .link, .customEmoji, .color, .chip, .small, .nowrap, .slashCommand: continue   // a command: `slashCommand(_:)`, on send only
+            case .heading, .mention, .appMention, .link, .customEmoji, .color, .chip, .drive, .small, .nowrap, .slashCommand: continue   // a command: `slashCommand(_:)`, on send only
             }
             var made = annotation(type, range.start, range.length)
             if case .list(let level, let number) = range.style {   // kept as it came, so an edit doesn't flatten it
@@ -944,12 +958,13 @@ enum DynamiteMapper {
             }
             annotations.append(made)
         }
-        // A message with a space chip says so, as Google Chat's composer does: clients without group smart chips (6) then
-        // show it as they can, and web Chat draws the chip only with it.
+        // A message with chips says so, as Google Chat records it: Drive smart chips (4), group smart chips (6). Clients
+        // without them show the chips as they can, and web Chat draws a space chip only with it.
+        let needed = (files ? [Int32(4)] : []) + (chips ? [Int32(6)] : [])
         let features = Dynamite_Annotation.with { a in
-            a.type = .requiredMessageFeaturesMetadata; a.chipRenderType = .render; a.requiredMessageFeaturesMetadata.requiredFeatures = [6]
+            a.type = .requiredMessageFeaturesMetadata; a.chipRenderType = .render; a.requiredMessageFeaturesMetadata.requiredFeatures = needed
         }
-        return annotations + lists.map { annotation(.bulletedList, $0.start, $0.end - $0.start) } + (chips ? [features] : [])
+        return annotations + lists.map { annotation(.bulletedList, $0.start, $0.end - $0.start) } + (needed.isEmpty ? [] : [features])
     }
     /// A space or DM chip as Google Chat's composer sends one made from a pasted link: drawn inline (no chip card), opening
     /// the link, with the space's emoji and, for a message's link, that message.
@@ -966,6 +981,15 @@ enum DynamiteMapper {
         }
     }
 
+    /// A Drive file's chip as Google Chat's web sends one picked from the @ list: over its title, drawn if possible, inline.
+    static func drive(_ file: DriveFile, _ start: Int, _ length: Int) -> Dynamite_Annotation {
+        .with { a in
+            a.type = .driveFile; a.startIndex = Int32(start); a.length = Int32(length)
+            a.chipRenderType = .renderIfPossible; a.inlineRenderFormat = 1
+            a.driveMetadata.id = file.id; a.driveMetadata.title = file.title; a.driveMetadata.mimeType = file.mimeType
+            a.driveMetadata.field9 = false; a.driveMetadata.field12 = .init()
+        }
+    }
     /// A link with its own text, as Google Chat's composer sends one: a RICH_TEXT URL annotation over the text.
     static func link(_ url: URL, _ start: Int, _ length: Int) -> Dynamite_Annotation {
         .with { a in
@@ -975,8 +999,9 @@ enum DynamiteMapper {
     }
     /// A mention as Google Chat's composer builds it: the user id with type HUMAN, mention
     /// type MENTION, and the same id again as invitee info; @all is MENTION_ALL with no user. The range covers the `@Name` text.
-    static func mention(_ userID: String, _ start: Int, _ length: Int) -> Dynamite_Annotation {
-        let user = Dynamite_UserId.with { $0.id = userID; $0.type = .human }
+    /// `app`: an app's mention, sent as a bot's (UserId type BOT), as Google Chat sends one picked from the Apps section.
+    static func mention(_ userID: String, _ start: Int, _ length: Int, app: Bool = false) -> Dynamite_Annotation {
+        let user = Dynamite_UserId.with { $0.id = userID; $0.type = app ? .bot : .human }
         return .with { a in
             a.type = .userMention
             a.startIndex = Int32(start); a.length = Int32(length)
@@ -1055,7 +1080,7 @@ enum DynamiteMapper {
             case .driveForm: "Google Form"
             default: Attachment.untitledDrive
             }
-            return Attachment(name: drive.title.isEmpty ? kind : drive.title, contentType: drive.mimetype, kind: .link,
+            return Attachment(name: drive.title.isEmpty ? kind : drive.title, contentType: drive.mimetype.isEmpty ? drive.mimeType : drive.mimetype, kind: .link,
                               thumbnailURL: preview, url: url, width: w, height: h,
                               domain: preview == nil ? nil : url?.host()?.lowercased() ?? "drive.google.com")   // a preview makes it a card
         case .urlMetadata(let link):

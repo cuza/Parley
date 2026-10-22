@@ -148,15 +148,17 @@ struct InfoPanel: View {
     // MARK: Actions
     private var actions: some View {
         HStack {
-            action(room.muted ? "Unmute" : "Mute", icon: room.muted ? "bell" : "bell.slash") { Task { await store.setMuted(!room.muted, room.id) } }
-            action(room.pinned ? "Unpin" : "Pin", icon: room.pinned ? "pin.slash" : "pin") { Task { await store.setPinned(!room.pinned, room.id) } }
-            if let search { action("Search", icon: "magnifyingglass", help: "Search this conversation (⌘F)", search) }
-            action("Copy link", icon: "link", help: "Copy a link to this conversation") { ChatLink.copy(ChatLink.url(room.id)) }
-            if allowed.editProfile { action("Rename", icon: "pencil") { newName = room.name; renaming = true } }
-            if allowed.manageMembers { action("Add people", icon: "person.badge.plus") { addingPeople = true } }
+            Self.action(room.muted ? "Unmute" : "Mute", icon: room.muted ? "bell" : "bell.slash") { Task { await store.setMuted(!room.muted, room.id) } }
+            Self.action(room.pinned ? "Unpin" : "Pin", icon: room.pinned ? "pin.slash" : "pin") { Task { await store.setPinned(!room.pinned, room.id) } }
+            if let search { Self.action("Search", icon: "magnifyingglass", help: "Search this conversation (⌘F)", search) }
+            Self.action("Copy link", icon: "link", help: "Copy a link to this conversation") { ChatLink.copy(ChatLink.url(room.id)) }
+            if allowed.editProfile { Self.action("Rename", icon: "pencil") { newName = room.name; renaming = true } }
+            if allowed.manageMembers { Self.action("Add people", icon: "person.badge.plus") { addingPeople = true } }
+            if let partner { Self.action("Details", icon: "person.text.rectangle", help: "Show \(partner.name)’s details") { store.showDetails(partner, window: paneWindow) } }
         }
     }
-    private func action(_ title: String, icon: String, help: String? = nil, _ run: @escaping () -> Void) -> some View {
+    /// One of the panel's action buttons: an icon over its name. A person's details pane uses them too.
+    static func action(_ title: String, icon: String, help: String? = nil, _ run: @escaping () -> Void) -> some View {
         Button(action: run) {
             VStack(spacing: 4) { Image(systemName: icon).font(.system(size: 17)).frame(height: 22); Text(title).font(.caption) }
                 .frame(maxWidth: .infinity).contentShape(Rectangle())
@@ -230,10 +232,13 @@ struct InfoPanel: View {
         }
         .popover(isPresented: Binding(get: { card == person.id }, set: { if !$0 { card = nil } }), arrowEdge: .leading) {
             VStack(alignment: .leading, spacing: 8) {
-                PersonCard(person: person)
-                Button("Message \(person.name)") {
-                    card = nil
-                    Task { do { try await store.message([person]) } catch { store.report(error) } }
+                PersonCard(person: person, details: { await store.cardDetails(of: person) })
+                HStack {
+                    Button("Show Details") { card = nil; store.showDetails(person, window: paneWindow) }
+                    Button("Message \(person.name)") {
+                        card = nil
+                        Task { do { try await store.message([person]) } catch { store.report(error) } }
+                    }
                 }.padding([.horizontal, .bottom], 14)
             }.padding(.top, 8)
         }

@@ -94,7 +94,12 @@ struct ChatView: View {
     @Environment(SignInFlow.self) private var signIn: SignInFlow?
     /// This window's side pane: a conversation window has its own, so a thread opened there stays there.
     private var pane: SidePane { store.pane(fixedConversation) }
-    private var paneOpen: Bool { pane.info || pane.thread != nil }
+    private var paneOpen: Bool { Self.paneShown(pane, room: room) }
+    /// A side pane beside the timeline: Info, an open thread, or the threads list where the conversation has threads.
+    /// The window's minimum width and the room made for it follow this, as the split view does.
+    static func paneShown(_ pane: SidePane, room: Conversation?) -> Bool {
+        pane.person != nil || pane.info || pane.thread != nil || (pane.threads && room.map(offersThreads) == true)
+    }
     private var room: Conversation? { store.conversations.first { $0.id == (fixedConversation ?? store.selectedID) } }
     /// ⌘F: search what's open, the conversation as the "said in" filter, or everywhere from Home and the other shortcuts.
     private func find() { finding = .init(scope: store.shortcut == nil ? room : nil) }
@@ -228,12 +233,14 @@ struct ChatView: View {
                 // Scroll state belongs to one conversation; the toolbar stays outside so it is not duplicated on switch.
                 // The thread and info panel is our own pane: SwiftUI's .inspector inside a NavigationSplitView
                 // re-measures its columns without settling on macOS 27 and AppKit aborts the app.
-                SidePaneSplit(open: paneOpen || (pane.threads && Self.offersThreads(room))) {
+                SidePaneSplit(open: paneOpen) {
                     VStack(spacing: 0) { TimelineView(store: store, conversation: room).id(room.id) }
                         .safeAreaInset(edge: .top, spacing: 0) { expiredBanner }
                 } pane: {
                     Group {
-                        if pane.info {
+                        if let person = pane.person {
+                            PersonDetailsPane(store: store, person: person).id(person.id)
+                        } else if pane.info {
                             InfoPanel(store: store, room: room, search: fixedConversation == nil ? { finding = .init(scope: room) } : nil)
                         } else if let thread = pane.thread {
                             ThreadPane(store: store, room: room, thread: thread)
@@ -255,16 +262,23 @@ struct ChatView: View {
                     .toolbar(id: "conversation") {
                         // On the left in the title's place and size, as Home and the other shortcuts show theirs.
                         ToolbarItem(id: "title", placement: .navigation) {
-                            Button { store.toggleInfo(window: fixedConversation) } label: { VStack(alignment: .leading, spacing: 2) {
-                                HStack(spacing: 6) {
-                                    // The dot first, so it stays in one place whatever the name's length.
-                                    if let partner = store.partner(in: room) { PresenceDot(presence: store.presence[partner]) }
-                                    Text(room.name).font(.title3.weight(.semibold)).lineLimit(1)
-                                    if room.external == true { ExternalBadge() }
-                                }
-                                if room.kind != .direct, !room.members.isEmpty { Text("\(room.members.count) members").font(.caption).foregroundStyle(.secondary) }
-                                if let partner = store.partner(in: room), let status = store.statuses[partner] {
-                                    Text(status).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                            // As Google Chat's header and the sidebar show it: the space's emoji or image, or the person's
+                            // photo with their presence on its corner, then the name.
+                            Button { store.toggleInfo(window: fixedConversation) } label: { HStack(spacing: 8) {
+                                Avatar(name: room.name, space: room.kind == .space, size: 24, url: room.avatarURL, emoji: room.emoji)
+                                    .overlay(alignment: .bottomTrailing) {
+                                        if let partner = store.partner(in: room) { PresenceDot(presence: store.presence[partner], size: 8).offset(x: 2, y: 2) }
+                                    }
+                                    .accessibilityHidden(true)
+                                VStack(alignment: .leading, spacing: 2) {
+                                    HStack(spacing: 6) {
+                                        Text(room.name).font(.title3.weight(.semibold)).lineLimit(1)
+                                        if room.external == true { ExternalBadge() }
+                                    }
+                                    if room.kind != .direct, !room.members.isEmpty { Text("\(room.members.count) members").font(.caption).foregroundStyle(.secondary) }
+                                    if let partner = store.partner(in: room), let status = store.statuses[partner] {
+                                        Text(status).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                                    }
                                 }
                             }.contentShape(Rectangle()) }
                             .buttonStyle(.plain).help("Conversation info (⇧⌘I)")
@@ -623,6 +637,8 @@ struct TimelineView: View {
                           } },
                           message: { person in Task { do { try await store.message([person]) } catch { store.report(error) } } },
                           person: { store.person($0, in: conversation.id) },
+                          cardDetails: { await store.cardDetails(of: $0) },
+                          showDetails: { store.showDetails($0, window: paneWindow) },
                           openChatLink: { link, _ in await store.open(link) },
                           retry: { message in Task { await store.retry(message) } },
                           edit: { store.edit($0) },
@@ -738,6 +754,16 @@ struct ComposerBar: View {
         }
             .onChange(of: conversation.id) { recorder.cancel() }   // a recording belongs to the conversation it started in
             .onDisappear { recorder.cancel() }
+            // Mentioning people who aren't members, Google Chat asks before adding them; Cancel goes back to the draft.
+            .alert("Add to this conversation?", isPresented: Binding(get: { store.addPrompts[scope] != nil },
+                                                                   set: { if !$0 { store.addPrompts[scope] = nil } })) {
+                Button("Add and Send") { Task { await store.send(conversation: conversation.id, thread: thread, adding: true) } }
+                    .keyboardShortcut(.defaultAction)
+                Button("Send Without Adding") { Task { await store.send(conversation: conversation.id, thread: thread, adding: false) } }
+                Button("Cancel", role: .cancel) {}
+            } message: {
+                Text("New members can see the messages sent before they joined. Add \((store.addPrompts[scope] ?? []).formatted(.list(type: .and)))?")
+            }
             .onAppear { composerHandle.askForLink = { linking = LinkForm.Draft(text: composerHandle.selectedText) } }
             .sheet(item: $linking) { draft in
                 LinkForm(draft: draft) { url, text in composerHandle.link(url, text: text) }
@@ -947,6 +973,8 @@ struct ComposerBar: View {
                customEmoji: store.allowsCustomEmoji(in: conversation.id) ? store.customEmoji : [],
                needCustomEmoji: { if store.allowsCustomEmoji(in: conversation.id) { Task { await store.loadCustomEmoji() } } },
                searchCustomEmoji: { query in if store.allowsCustomEmoji(in: conversation.id) { store.searchCustomEmoji(query) } },
+               directoryPeople: store.directoryPeople, mentionApps: store.apps[conversation.id] ?? Found(), driveFiles: store.driveFiles,
+               needMentionResults: { store.searchMentionResults(conversation.id, $0) },
                slashCommands: store.slashCommands[conversation.id] ?? [],
                needSlashCommands: { query in Task { await store.loadSlashCommands(conversation.id, query: query) } },
                runCommand: { command in Task { await store.run(command, in: conversation.id) } },

@@ -45,6 +45,7 @@ struct ConversationPalette: View {
     var newChat = false
     var then: ((ConversationID) -> Void)? = nil   // after opening the pick: Forward… leaves the message there
     var thenPrompt = "Forward to a conversation or person"   // the field's prompt when `then` is set
+    var here: ((ConversationID) -> Void)? = nil   // a new tab's palette: the pick opens in that tab, not the main window
     @State private var query = ""
     @State private var selected: String?
     @State private var people: [Person] = []
@@ -54,6 +55,7 @@ struct ConversationPalette: View {
     @State private var working = false
     @State private var problem: String?
     @Environment(\.dismiss) private var dismiss
+    @FocusState private var typing: Bool   // a sheet focuses its field on its own; a new tab's window doesn't
     private var results: PaletteResults {
         PaletteResults(query: query, conversations: newChat && query.isEmpty ? [] : store.conversations, people: people, spaces: spaces, picked: picked)
     }
@@ -82,6 +84,7 @@ struct ConversationPalette: View {
                 }
                 TextField(then != nil ? thenPrompt : newChat || !picked.isEmpty ? "Name or email, or a space to join" : "Jump to a conversation, person or space", text: $query)
                     .textFieldStyle(.plain).font(.title3).onSubmit { choose() }
+                    .focused($typing).onAppear { DispatchQueue.main.async { typing = true } }   // once the window is key
                     .onKeyPress(.downArrow) { move(1); return .handled }
                     .onKeyPress(.upArrow) { move(-1); return .handled }
                 if searching || working { ProgressView().controlSize(.small) }
@@ -129,7 +132,7 @@ struct ConversationPalette: View {
                 if !results.spaces.isEmpty {
                     Section(newChat ? "Browse spaces" : "Spaces") { ForEach(results.spaces) { spaceRow($0) } }
                 }
-            }.frame(height: 320)
+            }.frame(height: here == nil ? 320 : nil).frame(maxHeight: .infinity)   // a new tab's fills the window
             if let problem {
                 Label(problem, systemImage: "exclamationmark.triangle").font(.caption).foregroundStyle(.red)
                     .frame(maxWidth: .infinity, alignment: .leading).padding(.horizontal, 14).padding(.top, 8)
@@ -144,7 +147,7 @@ struct ConversationPalette: View {
                     .keyboardShortcut(.defaultAction).disabled(working)
                 Button("") { if case .person(let person)? = current { pick(person) } }.keyboardShortcut(.return, modifiers: .command).hidden().frame(width: 0)
             }.padding(12)
-        }.frame(width: 520)
+        }.frame(width: here == nil ? 520 : nil)
             .task(id: query) {
                 problem = nil
                 let text = query.trimmingCharacters(in: .whitespaces)
@@ -184,7 +187,7 @@ struct ConversationPalette: View {
         working = true; problem = nil
         Task {
             defer { working = false }
-            do { try await Self.open(item, picked: picked, store: store, then: then, close: { dismiss() }) }
+            do { try await Self.open(item, picked: picked, store: store, then: then, here: here, close: { dismiss() }) }
             catch { problem = error.localizedDescription }
         }
     }
@@ -195,11 +198,16 @@ struct ConversationPalette: View {
     }
     /// Opens the pick and closes the palette. A listed conversation closes it at once: its timeline shows straight away,
     /// and its newest page, read mark and watch load behind. A new DM or a join closes it once the server has made it.
+    /// With `here` (a new tab's palette), the conversation opens there instead, and the palette, being the tab's
+    /// content, stays until the conversation replaces it.
     static func open(_ item: PaletteResults.Item?, picked: [Person], store: ChatStore, then: ((ConversationID) -> Void)?,
-                     close: () -> Void) async throws {
+                     here: ((ConversationID) -> Void)? = nil, close: () -> Void) async throws {
         switch item {
         case .person(let person)?: try await store.message(picked + [person])
         case _ where !picked.isEmpty: try await store.message(picked)
+        case .conversation(let room)? where here != nil:
+            here?(room.id)
+            return
         case .conversation(let room)?:
             then?(room.id); close()
             await store.select(room.id)
@@ -211,7 +219,21 @@ struct ConversationPalette: View {
             return
         case nil: return
         }
+        if let here, let id = store.selectedID { here(id); return }   // a new DM or a joined space, in the tab
         if let then, let id = store.selectedID { then(id) }
         close()
+    }
+}
+
+/// What the tab bar's + opens beside a conversation's tab: the ⌘K palette, as Safari's new tab shows its start page.
+/// The pick becomes this tab's conversation; Esc closes the tab.
+struct NewTab: View {
+    let store: ChatStore
+    let open: (ConversationID) -> Void
+    var body: some View {
+        ConversationPalette(store: store, here: open)
+            .frame(maxWidth: 640, maxHeight: .infinity)
+            .frame(maxWidth: .infinity)
+            .navigationTitle("New Tab")
     }
 }

@@ -65,6 +65,17 @@ extension AuthTests {
     private static func frame(_ json: String) -> String { "\(json.utf16.count)\n\(json)" }
     private static let bootstrap = StubExchange.Reply(data: Data((#"{"SMqcke":"test-xsrf"} "# + PunctualWireTests.block).utf8))
 
+    /// macOS repeats the same network state every few seconds; only the network coming back after being down reconnects
+    /// at once. Reopening on every report cut a healthy channel and showed Reconnecting.
+    @Test func onlyTheNetworkComingBackReconnects() async throws {
+        let auth = WebSessionAuthorizer(vault: MemoryVault(), session: AuthStubProtocol.session(StubExchange([])))
+        let channel = PunctualChannel(authorizer: auth, config: .init(backoff: { _ in .seconds(3600) }), onEvent: { _ in }, onState: { _ in })
+        #expect(await channel.network(up: true) == false)   // the first report: up, as the channel opened
+        #expect(await channel.network(up: true) == false)   // the same again, every few seconds
+        #expect(await channel.network(up: false) == false)
+        #expect(await channel.network(up: true) == true)    // back after being down
+        #expect(await channel.network(up: true) == false)
+    }
     /// Conversations subscribed or dropped while the channel opens (the open request was already built) are watched or
     /// cancelled once the stream starts, not left until the next reconnect.
     @Test(.timeLimit(.minutes(1))) func typingWatchesChangedWhileOpeningAreSentOnceStarted() async throws {

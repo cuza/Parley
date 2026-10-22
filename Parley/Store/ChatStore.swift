@@ -35,18 +35,20 @@ final class ChatStore {
     private(set) var reconnects = 0
     var threadID: ThreadID? { didSet { if threadID != oldValue { saveDrafts() } } }
     var info = false   // the conversation info panel, which shares the inspector with the thread
+    var detailsPerson: Person?   // a person's details in the main window's side pane, over the info panel or a thread
     /// A space's Threads list in the side pane; an open thread shows over it, and closing the thread goes back to it.
     var threadsShown = false
     /// Each conversation window's own side pane, by its conversation; the main window's is `info`, `threadID` and `threadsShown`.
     private(set) var windowPanes: [ConversationID: SidePane] = [:]
     /// The side pane of a window: nil for the main window, else the conversation a conversation window shows.
     func pane(_ window: ConversationID?) -> SidePane {
-        guard let window else { return SidePane(info: info, thread: threadID, threads: threadsShown) }
+        guard let window else { return SidePane(person: detailsPerson, info: info, thread: threadID, threads: threadsShown) }
         return windowPanes[window] ?? SidePane()
     }
     func setPane(_ window: ConversationID?, _ change: (inout SidePane) -> Void) {
         var pane = pane(window); change(&pane)
         guard let window else {
+            if detailsPerson != pane.person { detailsPerson = pane.person }
             if info != pane.info { info = pane.info }
             if threadID != pane.thread { threadID = pane.thread }
             if threadsShown != pane.threads { threadsShown = pane.threads }
@@ -96,6 +98,27 @@ final class ChatStore {
     @ObservationIgnored private var customEmojiLoad: Task<Void, Never>?
     @ObservationIgnored private var customEmojiQuery = ""
     @ObservationIgnored private var customEmojiAsked: ContinuousClock.Instant?
+    /// The @ list's answers from the server for the latest query (`searchMentionResults`): each conversation's own apps,
+    /// the directory's people, Drive files.
+    private(set) var apps: [ConversationID: Found<Person>] = [:]
+    @ObservationIgnored private var appQueries: [ConversationID: String] = [:]
+    private(set) var directoryPeople = Found<Person>()
+    /// `person`'s detailed view in the side pane, as Google Chat opens it from their card.
+    func showDetails(_ person: Person, window: ConversationID? = nil) { setPane(window) { $0.person = person } }
+    /// What `person`'s detailed view shows; nil when Google Contacts answers none of it. Asked each time it opens, as
+    /// what we shared changes.
+    func personDetails(of person: Person) async -> PersonDetails? {
+        try? await backend.personDetails(id: person.id, email: person.email)
+    }
+    /// What people's cards add to their names, by email, read once per session (`cardDetails(of:)`).
+    @ObservationIgnored private var personCards: [String: Task<PersonCardDetails, Never>] = [:]
+    /// A composer's send waiting for my answer, by scope: the names of the people its mentions would add, as Google Chat
+    /// asks before adding them ("Add to this conversation?"). Answered with `send(conversation:thread:adding:)`.
+    var addPrompts: [String: [String]] = [:]
+    /// The mention types chosen when a message was sent, kept until it goes, so a retry doesn't add someone I declined.
+    @ObservationIgnored private var sendOutsiders: [MessageID: [PersonID: MessageDraft.Outsider]] = [:]
+    @ObservationIgnored private var mentionQuery = ""   // the last text after "@", for the directory and Drive searches
+    private(set) var driveFiles = Found<DriveFile>()
     /// The conversations' apps' slash commands found so far, for the composer's "/" list; see `loadSlashCommands`.
     private(set) var slashCommands: [ConversationID: [SlashCommand]] = [:]
     @ObservationIgnored private var slashQueries: [ConversationID: Set<String>] = [:]
@@ -180,9 +203,10 @@ final class ChatStore {
         conversations = []; hidden = []; homeThreads = []; messages = []; timelines = [:]; selectedID = nil; drafts = [:]; draftedScopes = []
         draftFormatting = [:]; draftAttachments = [:]; quoting = [:]; editing = [:]; heldDrafts = [:]
         searchResults = []; shortcut = nil; shortcutLists = [:]; shortcutCursors = [:]; hasMore = []; loaded = []; loading = []
-        threadID = nil; info = false; threadsShown = false; windowPanes = [:]; threadSummaries = [:]; highlightedID = nil; openTranscripts = []
+        threadID = nil; info = false; detailsPerson = nil; threadsShown = false; windowPanes = [:]; threadSummaries = [:]; highlightedID = nil; openTranscripts = []
         members = [:]; memberLoads = []; permissions = [:]; roles = [:]; shared = [:]; sharedMore = []; customEmoji = []
         slashCommands = [:]; slashQueries = [:]; reactors = [:]; notifiedReactions = []
+        customEmojiQuery = ""; customEmojiAsked = nil; apps = [:]; appQueries = [:]; directoryPeople = Found(); mentionQuery = ""; addPrompts = [:]; sendOutsiders = [:]; personCards.values.forEach { $0.cancel() }; personCards = [:]; driveFiles = Found()
         typing = [:]; activities = [:]; presence = [:]; statuses = [:]; ownStatus = OwnStatus(); readReceipts = [:]; receiptsOff = []
         followed = []; presenceFetched = [:]; watching = nil; typingSent = [:]; typingRefused = []; awaitingFollow = []
         detached = []; windowEnds = [:]; newerLoads = []; listedOnce = false; backPlaces = []; forwardPlaces = []
@@ -192,12 +216,12 @@ final class ChatStore {
     }
     /// What `forgetAccount` clears when another account connects.
     static let accountState: Set<String> = [
-        "draftListing", "customEmojiLoad", "customEmojiQuery", "customEmojiAsked", "followCheck", "draftTimers", "draftWrites", "pageLoads",
+        "draftListing", "customEmojiLoad", "customEmojiQuery", "customEmojiAsked", "driveFiles", "mentionQuery", "apps", "appQueries", "directoryPeople", "addPrompts", "sendOutsiders", "personCards", "followCheck", "draftTimers", "draftWrites", "pageLoads",
         "serverDrafts", "scheduled", "pinned", "draftEdits", "draftsListed", "spentDrafts", "draftSends",
         "conversations", "hidden", "homeThreads", "messages", "timelines", "selectedID", "drafts", "draftedScopes",
         "draftFormatting", "draftAttachments", "quoting", "editing", "heldDrafts",
         "searchResults", "shortcut", "shortcutLists", "shortcutCursors", "hasMore", "loaded", "loading",
-        "threadID", "info", "threadsShown", "windowPanes", "threadSummaries", "highlightedID", "openTranscripts",
+        "threadID", "info", "detailsPerson", "threadsShown", "windowPanes", "threadSummaries", "highlightedID", "openTranscripts",
         "members", "memberLoads", "permissions", "roles", "shared", "sharedMore", "customEmoji",
         "slashCommands", "slashQueries", "reactors", "notifiedReactions",
         "typing", "activities", "presence", "statuses", "ownStatus", "readReceipts", "receiptsOff",
@@ -551,7 +575,7 @@ final class ChatStore {
     func showThreads(_ shown: Bool, window: ConversationID? = nil) async {
         setPane(window) { $0.threads = shown }
         guard shown, let id = window ?? selectedID else { return }
-        setPane(window) { $0.info = false; $0.thread = nil }
+        setPane(window) { $0.info = false; $0.thread = nil; $0.person = nil }
         await loadThreads(id)
     }
     func loadThreads(_ id: ConversationID) async {
@@ -563,7 +587,7 @@ final class ChatStore {
     }
     private func openThread(_ thread: ThreadID, in conversation: ConversationID, recording: Bool = true, window: ConversationID? = nil) async {
         if window == nil, recording, conversations.first(where: { $0.id == conversation })?.app == .gemini { visit(.session(conversation, thread)) }
-        setPane(window) { $0.thread = thread; $0.info = false }
+        setPane(window) { $0.thread = thread; $0.info = false; $0.person = nil }
         loaded.remove(key(conversation, thread))
         await load(conversation, thread: thread)
         guard pane(window).thread == thread, window != nil || selectedID == conversation else { return }
@@ -1422,6 +1446,42 @@ final class ChatStore {
         await load.value
     }
 
+    /// What `person`'s card adds to their name, as Google Chat's shows it: their job title from Google Contacts, and the
+    /// time zone they share from Google Calendar for their local time. Asked once per session per person; empty for me
+    /// or without an email, and a part they don't share is nil.
+    func cardDetails(of person: Person) async -> PersonCardDetails {
+        guard person.id != me.id, let email = person.email, !email.isEmpty else { return PersonCardDetails() }
+        if let asked = personCards[email] { return await asked.value }
+        let asking = Task { [backend] in
+            async let title = try? backend.jobTitle(email: email, name: person.name)
+            async let zone = try? backend.timeZone(email: email)
+            return await PersonCardDetails(title: title ?? nil, timeZone: zone ?? nil)
+        }
+        personCards[email] = asking
+        return await asking.value
+    }
+    /// Asks the server for the @ list's sections beyond the members, for `text` (what follows "@"): the conversation's
+    /// apps, people in the directory, and Drive files (recent ones for "@" alone). The latest query wins; a failure
+    /// leaves that section empty, and the list shows the others.
+    func searchMentionResults(_ conversation: ConversationID, _ text: String) {
+        appQueries[conversation] = text
+        coalesce("apps/" + conversation) {
+            let query = self.appQueries[conversation] ?? ""
+            let found = (try? await self.backend.apps(in: conversation, matching: query)) ?? []
+            if query == self.appQueries[conversation] { self.apps[conversation] = Found(query: query, items: found) }
+        }
+        mentionQuery = text
+        coalesce("directory-search") {
+            let query = self.mentionQuery
+            let found = (try? await self.backend.directoryPeople(matching: query)) ?? []
+            if query == self.mentionQuery { self.directoryPeople = Found(query: query, items: found.filter { $0.id != self.me.id }) }
+        }
+        coalesce("drive-search") {
+            let query = self.mentionQuery
+            let found = (try? await self.backend.driveFiles(matching: query)) ?? []
+            if query == self.mentionQuery { self.driveFiles = Found(query: query, items: found) }
+        }
+    }
     /// Asks the server for the organisation's emoji matching `text` (what follows ":") and adds what's new to `customEmoji`,
     /// so a large organisation's emoji show before (or without) the whole list. The latest query wins; a failure is ignored.
     func searchCustomEmoji(_ text: String) {
@@ -1464,8 +1524,10 @@ final class ChatStore {
     func detach(_ attachment: Attachment, conversation: String, thread: String?) {
         draftAttachments[key(conversation, thread)]?.removeAll { $0 == attachment }
     }
-    func send(conversation: String, thread: String? = nil) async {
+    /// `adding`: my answer to `addPrompts` when the draft mentions people who aren't members; nil asks first.
+    func send(conversation: String, thread: String? = nil, adding: Bool? = nil) async {
         let scope = key(conversation, thread)
+        if addPrompts[scope] != nil { addPrompts[scope] = nil }   // only a change: every composer reads it
         let (text, formatting) = Self.trimmed(drafts[scope, default: ""], draftFormatting[scope] ?? [])
         if let editingID = editing[scope] {
             guard !text.isEmpty else { return }
@@ -1475,6 +1537,23 @@ final class ChatStore {
         }
         let files = draftAttachments[scope] ?? []
         guard !text.isEmpty || !files.isEmpty || quoting[scope]?.forwardedFrom != nil else { return }   // a forward needs no note
+        var outsiders = outsiders(formatting, in: conversation)
+        let invited = formatting.filter { if case .mention(let id?) = $0.style { outsiders[id] == .invite } else { false } }
+        if !invited.isEmpty {
+            switch adding {
+            case nil:
+                var names: [String] = []
+                for range in invited {
+                    let name = (text as NSString).substring(with: NSRange(location: range.start, length: range.length))
+                    let plain = name.hasPrefix("@") ? String(name.dropFirst()) : name
+                    if !names.contains(plain) { names.append(plain) }
+                }
+                addPrompts[scope] = names
+                return
+            case false?: outsiders = outsiders.mapValues { _ in .reference }   // named in the message, not added
+            case true?: break
+            }
+        }
         setDraft("", conversation: conversation, thread: thread)
         draftAttachments[scope] = nil
         let quote = quoting.removeValue(forKey: scope)
@@ -1483,7 +1562,8 @@ final class ChatStore {
         let draft = serverDrafts.removeValue(forKey: scope)?.id
         if let draft { spentDrafts.insert(draft) }
         draftSends[scope, default: 0] += 1
-        await sendNew(text, formatting: formatting, attachments: files, quote: quote, serverDraft: draft, conversation: conversation, thread: thread)
+        await sendNew(text, formatting: formatting, attachments: files, quote: quote, serverDraft: draft, outsiders: outsiders,
+                      conversation: conversation, thread: thread)
         sent?(conversation)
     }
     /// After a send from the composer: the app tells Siri who I message (never what), so it learns my usual recipients.
@@ -1531,11 +1611,13 @@ final class ChatStore {
     }
     @discardableResult
     private func sendNew(_ text: String, formatting: [TextStyleRange] = [], attachments: [Attachment] = [], quote: QuotedMessage? = nil,
-                         serverDraft: String? = nil, conversation: String, thread: String?) async -> MessageID {
+                         serverDraft: String? = nil, outsiders: [PersonID: MessageDraft.Outsider] = [:],
+                         conversation: String, thread: String?) async -> MessageID {
         if thread == nil, detached.contains(conversation) { await returnToNewest(conversation) }   // a send lands at the bottom, as on the web
         let pending = Message(id: "local-\(UUID())", conversationID: conversation, threadID: thread, sender: me, text: text,
                               delivery: .pending, attachments: attachments, formatting: formatting, quote: quote)
         upsert(pending)
+        if !outsiders.isEmpty { sendOutsiders[pending.id] = outsiders }
         await deliver(pending, serverDraft: serverDraft)
         return pending.id
     }
@@ -1548,6 +1630,23 @@ final class ChatStore {
             let start = max(0, range.start - lead), end = min(count, range.start + range.length - lead)
             return end > start ? TextStyleRange(style: range.style, start: start, length: end - start) : nil
         })
+    }
+    /// Mentions of people who aren't members, decided as Google Chat decides them on send: in a space or group where I
+    /// may add people, the mention invites them; elsewhere (a 1:1 DM, or without that right) it only names them. Nothing
+    /// is decided until the full member list is known, so a member is never invited.
+    private func outsiders(_ formatting: [TextStyleRange], in id: ConversationID) -> [PersonID: MessageDraft.Outsider] {
+        guard let conversation = conversations.first(where: { $0.id == id }) else { return [:] }
+        return Self.outsiders(formatting, members: members[id], kind: conversation.kind, canAdd: permissions[id]?.manageMembers == true)
+    }
+    static func outsiders(_ formatting: [TextStyleRange], members: [Person]?, kind: ConversationKind, canAdd: Bool) -> [PersonID: MessageDraft.Outsider] {
+        guard let members else { return [:] }
+        let known = Set(members.map(\.id))
+        var found: [PersonID: MessageDraft.Outsider] = [:]
+        for range in formatting {
+            guard case .mention(let id?) = range.style, id != TextStyleRange.everyone, !known.contains(id) else { continue }
+            found[id] = kind != .direct && canAdd ? .invite : .reference
+        }
+        return found
     }
     /// Uploads the echo's local files first, keeping each finished upload on the echo so a retry only redoes what failed.
     // ponytail: a retry no longer names the draft; if the send never reached Google, its draft comes back at the next launch.
@@ -1562,8 +1661,9 @@ final class ChatStore {
             }
             let sent = try await backend.send(MessageDraft(text: pending.text, localID: pending.id, formatting: pending.formatting,
                                                            uploads: pending.attachments.filter(\.isLocalFile), quoting: pending.quote,
-                                                           serverDraftID: serverDraft),
+                                                           serverDraftID: serverDraft, outsiders: sendOutsiders[pending.id] ?? [:]),
                                                to: pending.conversationID, thread: pending.threadID)
+            sendOutsiders[pending.id] = nil
             messages.removeAll { $0.id == pending.id }; upsert(sent)
             // A command that opens a dialog: the app's dialog for the command's message, as Google Chat asks for it.
             if let command = pending.formatting.lazy.compactMap({ if case .slashCommand(let command) = $0.style { command } else { nil } }).first,
@@ -1898,7 +1998,7 @@ final class ChatStore {
     func openShortcut(_ shortcut: Shortcut, recording: Bool = true) async {
         if recording { visit(.shortcut(shortcut)) }
         endMainWindowEdits()
-        self.shortcut = shortcut; threadID = nil; info = false
+        self.shortcut = shortcut; threadID = nil; info = false; detailsPerson = nil
         shortcutCursors[shortcut] = nil
         await loadShortcut(shortcut)
     }
@@ -1941,7 +2041,7 @@ final class ChatStore {
     /// The conversation itself is not opened or marked read; the thread is, on the server too (`readThread`).
     func openHomeThread(_ thread: HomeThread) async {
         endMainWindowEdits()
-        shortcut = .home; selectedID = thread.conversationID; info = false
+        shortcut = .home; selectedID = thread.conversationID; info = false; detailsPerson = nil
         if let i = homeThreads.firstIndex(where: { $0.id == thread.id }) { homeThreads[i].unread = false }
         await openThread(thread.id, in: thread.conversationID)
         highlightedID = thread.latest.id

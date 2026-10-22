@@ -41,6 +41,23 @@ import Testing
         #expect(sent)
         #expect(other.string == link)   // Return sends the link as typed
     }
+    /// Google Chat's @ list offers spaces I'm in after people, matched on a word of the name (two with "@" alone).
+    /// Picking one puts the same chip as a pasted link, without a link of its own: it sends the space's link.
+    @Test func theAtListOffersSpacesAndPickingOneMakesItsChip() throws {
+        let qa = Conversation(id: "space/QA1", name: "QA", kind: .space, members: [], emoji: "🐞")
+        let dm = Conversation(id: "dm/a", name: "Quinn Adams", kind: .direct, members: [])
+        let view = ComposerTextView(usingTextLayoutManager: false)
+        view.chipConversations = [hall, qa, dm]
+        view.load("", [])
+        view.insertText("see @q", replacementRange: view.selectedRange())
+        #expect(view.mentionMatches == [.room(qa)])   // spaces only: Google Chat makes no DM chips
+        view.insert(.room(qa), replacing: try #require(view.mentionQuery?.range))
+        #expect(view.string == "see QA ")
+        #expect(view.formatting == [TextStyleRange(style: .chip(qa.id, emoji: "🐞"), start: 4, length: 2)])
+        view.load("", [])
+        view.insertText("@", replacementRange: view.selectedRange())
+        #expect(view.mentionMatches.filter { if case .room = $0 { true } else { false } } == [.room(hall), .room(qa)])
+    }
     @Test func editingTheChipsTextMakesItPlainText() {
         let view = ComposerTextView(usingTextLayoutManager: false)
         view.chipConversations = [hall]

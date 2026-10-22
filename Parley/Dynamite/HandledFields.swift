@@ -20,7 +20,7 @@ enum MessageCoverage {
         // Text and its annotations' ranges and kinds.
         "10", "11.1", "11.2", "11.3", "11.20", "11.29",
         // Drive files, mentions, links (with Google's extras around a link: none is a preview), formatting.
-        "11.4.1", "11.4.2", "11.4.3", "11.4.4", "11.4.7", "11.4.8", "11.30.*",
+        "11.4.1", "11.4.2", "11.4.3", "11.4.4", "11.4.7", "11.4.8", "11.4.14", "11.30.*",
         "11.5.*", "11.7.*", "11.8.1", "11.8.2", "11.8.3.*",   // 8.3: a list's kind (numbered) and depth
         // A YouTube link's own case (the URL's card draws it), Google's unique id per annotation, a card-capability
         // marker, the features a message needs (all ones Parley has), a Gemini turn's bookkeeping: nothing to draw.

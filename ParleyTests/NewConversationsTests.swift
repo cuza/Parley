@@ -199,6 +199,21 @@ extension AuthTests {
         menu.performActionForItem(at: menu.index(of: item))
         #expect(picked == [alex])
     }
+    /// The card fills in its job title and local time after the menu opens; the menu item then fits the whole card,
+    /// even when the answer is already known and arrives at once.
+    @Test func theCardGrowsToFitItsDetails() async throws {
+        let view = MessageRowView()
+        var actions = MessageRowActions()
+        actions.message = { _ in }
+        actions.cardDetails = { _ in PersonCardDetails(title: "Product Designer", timeZone: TimeZone(identifier: "Europe/Lisbon")) }
+        view.configure(RowLayoutTests.row("hi", sender: Person(id: "alex", name: "Alex Rivera", email: "alex@example.com")),
+                       own: false, kind: .space, meID: "me", actions: actions)
+        let card = try #require(view.personMenu()?.items.first?.view)
+        let bare = card.frame.height
+        await eventually { card.layoutSubtreeIfNeeded(); return card.frame.height > bare + 20 }
+        #expect(card.frame.height > bare + 20)   // two more lines
+        #expect(abs(card.frame.height - card.fittingSize.height) < 1)
+    }
     @Test func notOfferedForMeOrInAOneToOne() {
         #expect(row(from: Person(id: "me", name: "Dave"), kind: .group) { _ in }.personMenu() == nil)
         #expect(row(from: Person(id: "alex", name: "Alex"), kind: .direct) { _ in }.personMenu() == nil)
@@ -219,5 +234,16 @@ extension AuthTests {
         #expect((unreadAtClose ?? 0) > 0)   // closed before the conversation was loaded and marked read
         #expect(store.selectedID == room.id)
         #expect(store.conversations.first { $0.id == room.id }?.unread == 0)   // which still happened behind it
+    }
+    /// A new tab (the tab bar's +) shows the palette; the pick opens in that tab, not in the main window, and the
+    /// palette leaves the tab's window open.
+    @Test func aNewTabOpensThePickInItself() async throws {
+        let store = ChatStore(backend: FakeBackend())
+        await store.start()
+        let before = store.selectedID
+        let room = try #require(store.conversations.first { $0.id != before })
+        var here: ConversationID?, closed = false
+        try await ConversationPalette.open(.conversation(room), picked: [], store: store, then: nil, here: { here = $0 }, close: { closed = true })
+        #expect(here == room.id && store.selectedID == before && !closed)
     }
 }

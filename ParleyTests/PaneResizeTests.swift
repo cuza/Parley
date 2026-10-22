@@ -75,3 +75,17 @@ import Testing
         #expect(SidePaneSplit<EmptyView, EmptyView>.shown(wanted: 500, room: 600) == ChatView.paneWidth)
     }
 }
+
+/// Which side panes take room beside the timeline: Info, an open thread, and the threads list where a conversation has
+/// threads. Each one widens the window's minimum, so it can't be squeezed until the timeline or the pane is cut off.
+@MainActor struct SidePaneRoomTests {
+    @Test func theThreadsListTakesRoomToo() {
+        let dm = Conversation(id: "dm", name: "Alex", kind: .direct, members: [])
+        var app = dm; app.app = .bot
+        #expect(ChatView.paneShown(SidePane(threads: true), room: dm))
+        #expect(!ChatView.paneShown(SidePane(threads: true), room: app))   // a DM with an app has no threads list
+        #expect(ChatView.paneShown(SidePane(info: true), room: app))
+        #expect(ChatView.paneShown(SidePane(thread: "t"), room: nil))
+        #expect(!ChatView.paneShown(SidePane(), room: dm))
+    }
+}

@@ -9,6 +9,8 @@ actor DynamiteBackend: ChatBackend {
     nonisolated let events: AsyncStream<ChatEvent>
     private let continuation: AsyncStream<ChatEvent>.Continuation
     private let authorizer: WebSessionAuthorizer
+    private let google: GoogleServices   // Google's services beyond Chat's API: Drive suggestions, People
+    private let contacts: GoogleContacts   // Google Contacts' widget: what a person's card and detailed view show
     private let client: DynamiteClient
     private let realtime: Bool
     private let log = Logger(subsystem: "dev.cuza.Parley", category: "dynamite")
@@ -53,6 +55,8 @@ actor DynamiteBackend: ChatBackend {
     /// `vault` must be the authorizer's: media reuses its stored cookies (see `attachmentData`).
     init(authorizer: WebSessionAuthorizer, realtime: Bool = true, vault: any SessionVault = KeychainSessionVault(), media: URLSession? = nil) {
         self.authorizer = authorizer
+        google = GoogleServices(authorizer: authorizer)
+        contacts = GoogleContacts(authorizer: authorizer)
         self.realtime = realtime
         self.vault = vault
         self.media = media ?? URLSession(configuration: Self.mediaConfiguration(), delegate: NoAuthRedirects(), delegateQueue: nil)
@@ -96,7 +100,7 @@ actor DynamiteBackend: ChatBackend {
             // Network back or Mac awake: reconnect now instead of waiting out the backoff.
             stopNudges()
             let monitor = NWPathMonitor()
-            monitor.pathUpdateHandler = { path in if path.status == .satisfied { Task { await punctual.nudge() } } }
+            monitor.pathUpdateHandler = { path in Task { await punctual.network(up: path.status == .satisfied) } }
             monitor.start(queue: .global(qos: .utility))
             pathMonitor = monitor
             wakeObserver = NSWorkspace.shared.notificationCenter.addObserver(forName: NSWorkspace.didWakeNotification, object: nil, queue: nil) { _ in
@@ -335,7 +339,7 @@ actor DynamiteBackend: ChatBackend {
         // A chip the draft held (written elsewhere) goes with it, as when saving the draft.
         let extras = draft.serverDraftID.flatMap { draftExtras[$0] }.map { old in old.annotations.compactMap { Self.relocated($0, from: old.text, to: draft.text) } } ?? []
         let chips = draft.serverDraftID.flatMap { draftExtras[$0]?.annotations } ?? []
-        let formats = DynamiteMapper.annotations(Self.sendable(draft.formatting, besides: chips)), formatted = !formats.isEmpty
+        let formats = DynamiteMapper.annotations(Self.sendable(draft.formatting, besides: chips), outsiders: draft.outsiders), formatted = !formats.isEmpty
         // Uploaded files (picked GIFs too) ride in the same field 3, as UPLOAD_METADATA chips.
         let uploads = draft.uploads.compactMap(DynamiteMapper.uploadAnnotation)
         guard uploads.count == draft.uploads.count else { throw AuthFailure.malformedProto }
@@ -1685,6 +1689,45 @@ actor DynamiteBackend: ChatBackend {
             guard response.nextPageToken != token else { return done("a page token came back twice") }
             token = response.nextPageToken
         }
+    }
+    func apps(in conversation: ConversationID, matching query: String) async throws -> [Person] {
+        let response: Dynamite_AutocompleteBotsResponse = try await rpc("autocomplete_bots", Dynamite_AutocompleteBotsRequest.with { r in
+            r.requestHeader = DynamiteClient.header
+            r.query = query; r.maxResults = 4; r.appFilters = [3]   // the conversation's own: a mention never adds an app
+            r.groupID = try DynamiteID.group(conversation)
+        })
+        return response.bots.filter { !$0.userID.id.isEmpty }.map { DynamiteMapper.person($0) }
+    }
+    func driveFiles(matching query: String) async throws -> [DriveFile] {
+        let files = try await google.send(DriveSuggestions(query: query))
+        log.info("drive suggestions: \(files.count, privacy: .public) for a query of \(query.count, privacy: .public) characters")
+        return files
+    }
+    func directoryPeople(matching query: String) async throws -> [Person] {
+        guard !query.isEmpty else { return [] }   // Google answers "@" alone with nothing
+        let people = try await google.send(PeopleAutocomplete(query: query))
+        log.info("directory people: \(people.count, privacy: .public) for a query of \(query.count, privacy: .public) characters")
+        return people
+    }
+    func timeZone(email: String) async throws -> TimeZone? {
+        try await google.send(PersonTimeZone(email: email))
+    }
+    func jobTitle(email: String, name: String) async throws -> String? {
+        try await contacts.send(ContactCard(email: email, name: name))
+    }
+    /// The detailed view's three parts, asked together; one that fails leaves its section out.
+    func personDetails(id: PersonID, email: String?) async throws -> PersonDetails {
+        async let reports = try? contacts.send(ContactReports(id: id, email: email))
+        async let recent = try? contacts.send(ContactRecent(id: id, email: email))
+        async let files = try? contacts.send(ContactFiles(id: id))
+        let (line, shared, theirs) = await (reports, recent, files)
+        guard line != nil || shared != nil || theirs != nil else { throw GoogleServiceError.unexpectedReply }
+        var details = line ?? PersonDetails()
+        details.recent = shared ?? []
+        details.files = theirs?.files ?? []
+        details.moreFiles = theirs?.moreFiles
+        log.info("person details: \(details.reports.count, privacy: .public) reports, \(details.managers.count, privacy: .public) managers, \(details.recent.count, privacy: .public) recent, \(details.files.count, privacy: .public) files")
+        return details
     }
     /// The organisation's enabled emoji matching `query` (what follows ":"), as Google Chat's web searches them: up to 40.
     func searchCustomEmoji(_ query: String) async throws -> [CustomEmoji] {

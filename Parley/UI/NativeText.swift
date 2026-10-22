@@ -16,6 +16,10 @@ struct NativeComposer: NSViewRepresentable {
     var customEmoji: [CustomEmoji] = []   // what `:shortcode` suggests
     var needCustomEmoji: () -> Void = {}  // asked when a `:shortcode` starts, to load the organisation's list
     var searchCustomEmoji: (String) -> Void = { _ in }   // asked as a `:shortcode` is typed, with the text after the ":"
+    var directoryPeople = Found<Person>()                  // the @ list's People beyond the members, from the directory
+    var mentionApps = Found<Person>()                      // its Apps section: the conversation's own apps
+    var driveFiles = Found<DriveFile>()                    // its Files section
+    var needMentionResults: (String) -> Void = { _ in }    // asked as an @ query is typed, with the text after the "@"
     var slashCommands: [SlashCommand] = []   // what a "/" at the start suggests
     var needSlashCommands: (String) -> Void = { _ in }   // asked as a "/command" is typed, with the text after the "/"
     var runCommand: (SlashCommand) -> Void = { _ in }   // a picked quick command or Google Chat action
@@ -64,6 +68,10 @@ struct NativeComposer: NSViewRepresentable {
         view.needMembers = needMembers
         view.needCustomEmoji = needCustomEmoji
         view.searchCustomEmoji = searchCustomEmoji
+        view.needMentionResults = needMentionResults
+        if view.directoryPeople != directoryPeople { view.directoryPeople = directoryPeople }
+        if view.mentionApps != mentionApps { view.mentionApps = mentionApps }
+        if view.driveFiles != driveFiles { view.driveFiles = driveFiles }
         if view.mentionPeople != members { view.mentionPeople = members }
         view.chipConversations = spaces
         if view.customEmoji != customEmoji { view.customEmoji = customEmoji }
@@ -396,13 +404,16 @@ final class ComposerTextView: NSTextView {
             if let url = value as? URL { ranges.append(TextStyleRange(style: .link(url), start: range.location, length: range.length)) }
         }
         storage.enumerateAttribute(Self.mentionKey, in: NSRange(location: 0, length: storage.length)) { value, range, _ in
-            if let token = value as? MentionToken { ranges.append(TextStyleRange(style: .mention(userID: token.userID), start: range.location, length: range.length)) }
+            if let token = value as? MentionToken { ranges.append(TextStyleRange(style: token.app ? .appMention(userID: token.userID) : .mention(userID: token.userID), start: range.location, length: range.length)) }
         }
         storage.enumerateAttribute(Self.chipKey, in: NSRange(location: 0, length: storage.length)) { value, range, _ in
             if let token = value as? MentionToken { ranges.append(TextStyleRange(style: .chip(token.userID, emoji: token.emoji, link: token.link), start: range.location, length: range.length)) }
         }
         storage.enumerateAttribute(Self.commandKey, in: NSRange(location: 0, length: storage.length)) { value, range, _ in
             if let command = value as? SlashCommand { ranges.append(TextStyleRange(style: .slashCommand(command), start: range.location, length: range.length)) }
+        }
+        storage.enumerateAttribute(Self.driveKey, in: NSRange(location: 0, length: storage.length)) { value, range, _ in
+            if let file = value as? DriveFile { ranges.append(TextStyleRange(style: .drive(file), start: range.location, length: range.length)) }
         }
         storage.enumerateAttribute(Self.customEmojiKey, in: NSRange(location: 0, length: storage.length)) { value, range, _ in
             guard let emoji = value as? CustomEmoji else { return }   // equal neighbours share a run: one range each
@@ -441,14 +452,15 @@ final class ComposerTextView: NSTextView {
             if case .color(let argb) = range.style { styled.addAttribute(Self.colorKey, value: NSNumber(value: argb), range: r) }
             if case .link(let url) = range.style { styled.addAttribute(Self.linkKey, value: url, range: r) }
             if case .slashCommand(let command) = range.style { styled.addAttribute(Self.commandKey, value: command, range: r) }
+            if case .drive(let file) = range.style { styled.addAttribute(Self.driveKey, value: file, range: r) }
             if case .chip(let room, let emoji, let link) = range.style {   // an edited message's chip stays a chip
                 styled.addAttribute(Self.chipKey, value: MentionToken(userID: room, text: (text as NSString).substring(with: r), emoji: emoji, link: link), range: r)
             }
         }
         for range in formatting where range.start >= 0 && range.length > 0 && range.start + range.length <= styled.length {
-            guard case .mention(let id?) = range.style else { continue }
-            let r = NSRange(location: range.start, length: range.length)
-            styled.addAttribute(Self.mentionKey, value: MentionToken(userID: id, text: (text as NSString).substring(with: r)), range: r)
+            let r = NSRange(location: range.start, length: range.length), shown = (text as NSString).substring(with: r)
+            if case .mention(let id?) = range.style { styled.addAttribute(Self.mentionKey, value: MentionToken(userID: id, text: shown), range: r) }
+            if case .appMention(let id) = range.style { styled.addAttribute(Self.mentionKey, value: MentionToken(userID: id, text: shown, app: true), range: r) }
         }
         for range in formatting.reversed() where range.start >= 0 && range.length == 1 && range.start < styled.length {   // one character each
             guard case .customEmoji(let emoji) = range.style else { continue }
@@ -492,7 +504,7 @@ final class ComposerTextView: NSTextView {
         }
         visual[.font] = font
         visual[.foregroundColor] = NSColor.textColor
-        if visual[mentionKey] != nil || visual[chipKey] != nil || visual[commandKey] != nil { visual[.foregroundColor] = NSColor.controlAccentColor }
+        if visual[mentionKey] != nil || visual[chipKey] != nil || visual[commandKey] != nil || visual[driveKey] != nil { visual[.foregroundColor] = NSColor.controlAccentColor }
         if visual[customEmojiKey] != nil { visual[.attachment] = attributes[.attachment] }
         if has(.strike) { visual[.strikethroughStyle] = NSUnderlineStyle.single.rawValue }
         if has(.underline) { visual[.underlineStyle] = NSUnderlineStyle.single.rawValue }
@@ -519,10 +531,11 @@ final class ComposerTextView: NSTextView {
     // MARK: Mentions
 
     /// A picked mention: who, and the `@Name` text it was inserted as. A run whose text no longer matches is plain text again.
-    struct MentionToken: Hashable { let userID: String; let text: String; var emoji: String? = nil; var link: URL? = nil }
+    struct MentionToken: Hashable { let userID: String; let text: String; var emoji: String? = nil; var link: URL? = nil; var app = false }
     static let mentionKey = NSAttributedString.Key("Parley.composer.mention")
     /// A conversation chip: a `MentionToken` whose id is the conversation's.
     static let chipKey = NSAttributedString.Key("Parley.composer.chip")
+    static let driveKey = NSAttributedString.Key("Parley.composer.drive")   // a Drive file's chip: its `DriveFile`
     /// A picked slash command (a `SlashCommand`) over its name at the start.
     static let commandKey = NSAttributedString.Key("Parley.composer.command")
     /// The conversation's apps' commands, for a "/" at the start; `needSlashCommands` asks for those matching what's typed.
@@ -541,38 +554,38 @@ final class ComposerTextView: NSTextView {
     private let mentionPopup = MentionPopup()
 
     /// Replaces `range` (the `@` query) with an `@Name` token and a space, and puts the caret after them.
-    func insertMention(_ person: Person, replacing range: NSRange) {
-        guard let storage = textStorage else { return }
+    func insertMention(_ person: Person, replacing range: NSRange, app: Bool = false) {
         let text = "@" + person.name
         var attributes = typingAttributes
-        attributes[Self.mentionKey] = MentionToken(userID: person.id, text: text)
-        let token = NSMutableAttributedString(string: text, attributes: Self.visual(attributes))
-        token.append(NSAttributedString(string: " ", attributes: typingAttributes))
-        guard shouldChangeText(in: range, replacementString: token.string) else { return }
-        storage.replaceCharacters(in: range, with: token)
-        setSelectedRange(NSRange(location: range.location + token.length, length: 0))
-        didChangeText()
+        attributes[Self.mentionKey] = MentionToken(userID: person.id, text: text, app: app)
+        replace(range, with: NSAttributedString(string: text, attributes: Self.visual(attributes)), space: true)
     }
     /// Replaces `range` (a Chat link) with the conversation's chip: its name, as Google Chat's composer does.
-    func insertChip(_ room: Conversation, replacing range: NSRange) {
-        guard let storage = textStorage else { return }
+    /// `link`: the pasted link the chip replaces, sent with it as Google Chat's composer does (a message's link keeps its
+    /// message); nil for a space picked from the @ list, which sends the space's own link.
+    func insertChip(_ room: Conversation, replacing range: NSRange, link: URL?) {
         var attributes = typingAttributes
-        // The pasted link goes with the chip, as Google Chat's composer sends it (a message's link keeps its message).
-        let link = URL(string: (string as NSString).substring(with: range))
         attributes[Self.chipKey] = MentionToken(userID: room.id, text: room.name, emoji: room.emoji, link: link)
-        let token = NSAttributedString(string: room.name, attributes: Self.visual(attributes))
-        guard shouldChangeText(in: range, replacementString: token.string) else { return }
-        storage.replaceCharacters(in: range, with: token)
-        setSelectedRange(NSRange(location: range.location + token.length, length: 0))
-        didChangeText()
+        // A space picked from the list gets a space after it, as a mention does; a pasted link keeps what follows it.
+        replace(range, with: NSAttributedString(string: room.name, attributes: Self.visual(attributes)), space: link == nil)
+    }
+    /// Replaces `range` (an @ query) with the Drive file's title as its chip, and a space, as Google Chat's composer does.
+    func insertDrive(_ file: DriveFile, replacing range: NSRange) {
+        var attributes = typingAttributes
+        attributes[Self.driveKey] = file
+        replace(range, with: NSAttributedString(string: file.title, attributes: Self.visual(attributes)), space: true)
     }
     /// Replaces `range` (the "/" query) with the command's name and a space; the message then invokes the command.
     func insertCommand(_ command: SlashCommand, replacing range: NSRange) {
-        guard let storage = textStorage else { return }
         var attributes = typingAttributes
         attributes[Self.commandKey] = command
-        let token = NSMutableAttributedString(string: command.name, attributes: Self.visual(attributes))
-        token.append(NSAttributedString(string: " ", attributes: typingAttributes))
+        replace(range, with: NSAttributedString(string: command.name, attributes: Self.visual(attributes)), space: true)
+    }
+    /// Puts `token` in place of `range`, with a plain space after it when `space`, as one undoable edit, and the caret after.
+    private func replace(_ range: NSRange, with token: NSAttributedString, space: Bool) {
+        guard let storage = textStorage else { return }
+        let token = NSMutableAttributedString(attributedString: token)
+        if space { token.append(NSAttributedString(string: " ", attributes: typingAttributes)) }
         guard shouldChangeText(in: range, replacementString: token.string) else { return }
         storage.replaceCharacters(in: range, with: token)
         setSelectedRange(NSRange(location: range.location + token.length, length: 0))
@@ -582,7 +595,7 @@ final class ComposerTextView: NSTextView {
     override var typingAttributes: [NSAttributedString.Key: Any] {
         get { super.typingAttributes }
         set {
-            let tokens: Set<NSAttributedString.Key> = [Self.mentionKey, Self.chipKey, Self.commandKey, Self.customEmojiKey, .attachment]
+            let tokens: Set<NSAttributedString.Key> = [Self.mentionKey, Self.chipKey, Self.commandKey, Self.driveKey, Self.customEmojiKey, .attachment]
             super.typingAttributes = newValue.keys.contains(where: tokens.contains) ? Self.visual(newValue.filter { !tokens.contains($0.key) }) : newValue
         }
     }
@@ -600,18 +613,19 @@ final class ComposerTextView: NSTextView {
     private func mentionRange(at index: Int) -> NSRange? {
         guard let storage = textStorage, index < storage.length else { return nil }
         var range = NSRange()
-        for key in [Self.mentionKey, Self.chipKey, Self.commandKey]
+        for key in [Self.mentionKey, Self.chipKey, Self.commandKey, Self.driveKey]
         where storage.attribute(key, at: index, longestEffectiveRange: &range, in: NSRange(location: 0, length: storage.length)) != nil { return range }
         return nil
     }
     override func didChangeText() {
         defer { reportHeight() }
         if let storage = textStorage {   // a token edited inside, or cut in part, becomes plain text
-            for key in [Self.mentionKey, Self.chipKey, Self.commandKey] {
+            for key in [Self.mentionKey, Self.chipKey, Self.commandKey, Self.driveKey] {
                 var broken: [NSRange] = []
                 storage.enumerateAttribute(key, in: NSRange(location: 0, length: storage.length)) { value, range, _ in
                     // A command is one only as the message's first word.
-                    let text = (value as? MentionToken)?.text ?? (value as? SlashCommand).flatMap { range.location == 0 ? $0.name : nil }
+                    let text = (value as? MentionToken)?.text ?? (value as? DriveFile)?.title
+                        ?? (value as? SlashCommand).flatMap { range.location == 0 ? $0.name : nil }
                     if value != nil, (storage.string as NSString).substring(with: range) != text { broken.append(range) }
                 }
                 for range in broken {
@@ -663,6 +677,9 @@ final class ComposerTextView: NSTextView {
         if let query, query.command, mentionQuery?.command != true || mentionQuery?.text != query.text { needSlashCommands?(query.text) }
         else if let query, mentionQuery?.shortcode != query.shortcode || mentionQuery?.command == true { query.shortcode ? needCustomEmoji?() : needMembers?() }
         if let query, query.shortcode, !query.text.isEmpty, mentionQuery?.shortcode != true || mentionQuery?.text != query.text { searchCustomEmoji?(query.text) }
+        if let query, !query.shortcode, !query.command, query.chip == nil, mentionQuery?.text != query.text || mentionQuery?.shortcode == true || mentionQuery == nil {
+            needMentionResults?(query.text)   // the directory's people, the conversation's apps, Drive files
+        }
         if query == nil, caret.length == 0, let link = MentionQuery.chatLink(in: string, caret: caret.location, among: chipConversations),
            link.range.location != dismissedMention, textStorage?.attribute(Self.chipKey, at: link.range.location, effectiveRange: nil) == nil {
             query = link
@@ -672,11 +689,20 @@ final class ComposerTextView: NSTextView {
             if query.command { return SlashCommand.filter(slashCommands, by: query.text).map(Suggestion.command) }
             // Every match a workspace's thousands of emoji give (to 100), in a list that scrolls past 8 rows.
             return query.shortcode ? MentionQuery.filter(customEmoji, by: query.text, limit: 100).map(Suggestion.emoji) + Self.standardEmoji(query.text)
-                : MentionQuery.filter(mentionPeople, by: query.text).map(Suggestion.person)
+                : people(query.text).map(Suggestion.person)
+                    + mentionApps.matching(query.text, limit: 4) { MentionQuery.filter($0, by: query.text, limit: 4) }.map(Suggestion.app)
+                    + MentionQuery.filter(files: driveFiles, by: query.text).map(Suggestion.file)
+                    + MentionQuery.filter(spaces: chipConversations, by: query.text).map(Suggestion.room)
         } ?? []
         if query?.text != mentionQuery?.text || matches != mentionMatches { mentionSelection = 0 }
         mentionQuery = query; mentionMatches = matches
         showMentions()
+    }
+    /// The @ list's People: matching members first, then the directory's matches who aren't members, up to 8.
+    private func people(_ text: String) -> [Person] {
+        let members = MentionQuery.filter(mentionPeople, by: text), known = Set(mentionPeople.map(\.id))
+        let others = directoryPeople.matching(text, limit: 8) { MentionQuery.filter($0, by: text) }.filter { !known.contains($0.id) }
+        return Array((members + others).prefix(8))
     }
     private func showMentions() {
         guard let query = mentionQuery, !mentionMatches.isEmpty, let window, window.firstResponder === self else { mentionPopup.close(); return }
@@ -691,7 +717,10 @@ final class ComposerTextView: NSTextView {
         case .person(let person): insertMention(person, replacing: range)
         case .emoji(let emoji): insertCustomEmoji(emoji, replacing: range, space: true)
         case .unicode(let emoji): insertText(emoji.character + " ", replacementRange: range)
-        case .space(let room): insertChip(room, replacing: range)
+        case .space(let room): insertChip(room, replacing: range, link: URL(string: (string as NSString).substring(with: range)))
+        case .room(let room): insertChip(room, replacing: range, link: nil)
+        case .file(let file): insertDrive(file, replacing: range)
+        case .app(let app): insertMention(app, replacing: range, app: true)
         case .command(let command) where command.action != nil:   // runs now: the "/" query goes
             insertText("", replacementRange: range)
             runCommand?(command)
@@ -712,6 +741,10 @@ final class ComposerTextView: NSTextView {
     var customEmoji: [CustomEmoji] = [] { didSet { updateMention() } }
     var needCustomEmoji: (() -> Void)?
     var searchCustomEmoji: ((String) -> Void)?
+    var directoryPeople = Found<Person>() { didSet { updateMention() } }
+    var driveFiles = Found<DriveFile>() { didSet { updateMention() } }
+    var mentionApps = Found<Person>() { didSet { updateMention() } }
+    var needMentionResults: ((String) -> Void)?
     var loadImage: (Attachment, Bool) async throws -> Data = { _, _ in throw CancellationError() }
     private var imageTask: Task<Void, Never>?
     private lazy var emojiAnimation = EmojiAnimation(self) { [weak self] in self?.needsDisplay = true }
@@ -719,13 +752,7 @@ final class ComposerTextView: NSTextView {
 
     /// Replaces `range` (the selection, or a `:shortcode` query) with the emoji's picture, and a space after a query.
     func insertCustomEmoji(_ emoji: CustomEmoji, replacing range: NSRange, space: Bool = false) {
-        guard let storage = textStorage else { return }
-        let token = NSMutableAttributedString(attributedString: Self.customEmojiToken(emoji, attributes: typingAttributes))
-        if space { token.append(NSAttributedString(string: " ", attributes: typingAttributes)) }
-        guard shouldChangeText(in: range, replacementString: token.string) else { return }
-        storage.replaceCharacters(in: range, with: token)
-        setSelectedRange(NSRange(location: range.location + token.length, length: 0))
-        didChangeText()
+        replace(range, with: Self.customEmojiToken(emoji, attributes: typingAttributes), space: space)
         loadCustomEmojiImages()
     }
     /// One attachment character drawn as `MessageTextStyle` draws custom emoji; with no picture (deleted), the U+FFFD itself.
@@ -947,6 +974,8 @@ enum MessageTextStyle {
             case .strike: styled.addAttribute(.strikethroughStyle, value: NSUnderlineStyle.single.rawValue, range: r)
             case .underline: styled.addAttribute(.underlineStyle, value: NSUnderlineStyle.single.rawValue, range: r)
             case .link(let url): styled.addAttribute(.link, value: url, range: r)
+            case .drive(let file):   // a chip just sent: the server's copy links it to the file's own page
+                if let url = URL(string: "https://drive.google.com/open?id=\(file.id)") { styled.addAttribute(.link, value: url, range: r) }
             case .quote:
                 styled.addAttribute(.foregroundColor, value: secondary, range: r)
                 styled.addAttributes([.paragraphStyle: indented(12), quoteBarKey: secondary], range: paragraph)
@@ -960,6 +989,8 @@ enum MessageTextStyle {
                 indent.headIndent = indent.firstLineHeadIndent + (marker as NSString).size(withAttributes: [.font: font]).width
                 styled.addAttribute(.paragraphStyle, value: indent, range: paragraph)
                 inserts.append((paragraph.location, marker, paragraph.location))
+            case .appMention:   // an app's mention: tinted as a person's
+                if !own { styled.addAttribute(.foregroundColor, value: NSColor.controlAccentColor, range: r) }
             case .mention(let id):   // one person's mention carries their id, for the card a click shows
                 if !own { styled.addAttribute(.foregroundColor, value: NSColor.controlAccentColor, range: r) }
                 if let id, id != TextStyleRange.everyone { styled.addAttributes([mentionKey: id, .cursor: NSCursor.pointingHand], range: r) }

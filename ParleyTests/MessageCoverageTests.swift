@@ -83,7 +83,7 @@ struct MessageCoverageTests {
     /// Every gap the real messages below have, so that a new one fails the test. Remove an entry once Parley draws it.
     static let knownUnsupported: Set<String> = [
         // Annotations: Drive and link extras, Meet details, Gemini's agent fields (not decoded yet)
-        "11.4.?5", "11.4.?13", "11.4.?14", "11.4.?15", "11.4.?17", "11.10.?23", "11.16.6.1.1.?4", "11.16.6.?3", "11.?17",
+        "11.4.?5", "11.4.?13", "11.4.?15", "11.4.?17", "11.10.?23", "11.16.6.1.1.?4", "11.16.6.?3", "11.?17",
         // Quotes (not decoded yet)
         "37.?8", "37.?21", "37.17.?2",
     ]

@@ -152,14 +152,18 @@ struct ParleyApp: App {
                 ChatMenuCommands(store: store)
             }
         WindowGroup(for: ConversationID.self) { $id in
+            // The tab bar's + opens one without a conversation: it offers the palette, and the pick fills it.
             if let id = id { ChatView(store: store, fixedConversation: id).environment(signIn) }
+            else { NewTab(store: store) { id = $0 } }
         }
             .defaultSize(width: 520, height: 680)
+            .windowResizability(.contentMinSize)   // no narrower than the timeline and its open side pane
             .restorationBehavior(restoresWindows)
         WindowGroup(for: ThreadRef.self) { $ref in
             if let ref { ThreadWindow(store: store, ref: ref).environment(signIn) }
         }
             .defaultSize(width: 420, height: 640)
+            .windowResizability(.contentMinSize)
             .restorationBehavior(restoresWindows)
         Settings { SettingsView(store: store).environment(signIn) }
         // Opened from Settings ▸ Advanced and Help ▸ Report a Problem, not the Window menu.
@@ -190,6 +194,8 @@ struct ChatMenuCommands: Commands {
             Button("Smaller") { TextSize.set(TextSize.next(from: TextSize.scale, by: -1)) }.keyboardShortcut("-")
         }
         CommandGroup(after: .newItem) {
+            // As Safari's: a tab beside the conversation window in front, showing the conversation palette.
+            Button("New Tab") { NSApp.sendAction(#selector(NSResponder.newWindowForTab(_:)), to: nil, from: nil) }.keyboardShortcut("t")
             Divider()
             Button("Attach Files…") { chat?.attach?() }.keyboardShortcut("a", modifiers: [.command, .shift]).disabled(chat?.attach == nil)
         }

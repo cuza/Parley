@@ -145,6 +145,10 @@ message DriveMetadata {
   optional string mimetype = 4;
   optional int32 thumbnail_width = 7;
   optional int32 thumbnail_height = 8;
+  optional bool field9 = 9;          // false in a chip Google Chat's web sends; meaning not known
+  message Field12 {}
+  optional Field12 field12 = 12;     // empty in a chip Google Chat's web sends; meaning not known
+  optional string mime_type = 14;   // where Google Chat's web puts the type of a file picked from the @ list (field 4 empty)
 }
 message UrlMetadata {
   optional string title = 1;
@@ -1760,3 +1764,14 @@ message AppCommandDetails {
   message Kind { optional int32 kind = 1; optional int32 detail = 2; }   // kind 2 slash command, 1 quick command; {0, 1} a message action
   optional Kind kind = 7;
 }
+
+// autocomplete_bots: the @ list's Apps section, as Google Chat asks it. Filters: 2 every app (Marketplace ones too, which a
+// mention adds to the space), 3 only the conversation's own apps.
+message AutocompleteBotsRequest {
+  optional string query = 1;
+  optional int32 max_results = 3;
+  optional GroupId group_id = 4;
+  repeated int32 app_filters = 6;
+  optional RequestHeader request_header = 100;
+}
+message AutocompleteBotsResponse { repeated User bots = 1; }

@@ -1207,7 +1207,47 @@ nonisolated struct Dynamite_DriveMetadata: Sendable {
   /// Clears the value of `thumbnailHeight`. Subsequent reads from it will return its default value.
   mutating func clearThumbnailHeight() {self._thumbnailHeight = nil}
 
+  /// false in a chip Google Chat's web sends; meaning not known
+  var field9: Bool {
+    get {_field9 ?? false}
+    set {_field9 = newValue}
+  }
+  /// Returns true if `field9` has been explicitly set.
+  var hasField9: Bool {self._field9 != nil}
+  /// Clears the value of `field9`. Subsequent reads from it will return its default value.
+  mutating func clearField9() {self._field9 = nil}
+
+  /// empty in a chip Google Chat's web sends; meaning not known
+  var field12: Dynamite_DriveMetadata.Field12 {
+    get {_field12 ?? Dynamite_DriveMetadata.Field12()}
+    set {_field12 = newValue}
+  }
+  /// Returns true if `field12` has been explicitly set.
+  var hasField12: Bool {self._field12 != nil}
+  /// Clears the value of `field12`. Subsequent reads from it will return its default value.
+  mutating func clearField12() {self._field12 = nil}
+
+  /// where Google Chat's web puts the type of a file picked from the @ list (field 4 empty)
+  var mimeType: String {
+    get {_mimeType ?? String()}
+    set {_mimeType = newValue}
+  }
+  /// Returns true if `mimeType` has been explicitly set.
+  var hasMimeType: Bool {self._mimeType != nil}
+  /// Clears the value of `mimeType`. Subsequent reads from it will return its default value.
+  mutating func clearMimeType() {self._mimeType = nil}
+
   var unknownFields = SwiftProtobuf.UnknownStorage()
+
+  nonisolated struct Field12: Sendable {
+    // SwiftProtobuf.Message conformance is added in an extension below. See the
+    // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
+    // methods supported on all messages.
+
+    var unknownFields = SwiftProtobuf.UnknownStorage()
+
+    init() {}
+  }
 
   init() {}
 
@@ -1217,6 +1257,9 @@ nonisolated struct Dynamite_DriveMetadata: Sendable {
   fileprivate var _mimetype: String? = nil
   fileprivate var _thumbnailWidth: Int32? = nil
   fileprivate var _thumbnailHeight: Int32? = nil
+  fileprivate var _field9: Bool? = nil
+  fileprivate var _field12: Dynamite_DriveMetadata.Field12? = nil
+  fileprivate var _mimeType: String? = nil
 }
 
 nonisolated struct Dynamite_UrlMetadata: Sendable {
@@ -14850,6 +14893,73 @@ nonisolated struct Dynamite_AppCommandDetails: Sendable {
   fileprivate var _kind: Dynamite_AppCommandDetails.Kind? = nil
 }
 
+/// autocomplete_bots: the @ list's Apps section, as Google Chat asks it. Filters: 2 every app (Marketplace ones too, which a
+/// mention adds to the space), 3 only the conversation's own apps.
+nonisolated struct Dynamite_AutocompleteBotsRequest: Sendable {
+  // SwiftProtobuf.Message conformance is added in an extension below. See the
+  // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
+  // methods supported on all messages.
+
+  var query: String {
+    get {_query ?? String()}
+    set {_query = newValue}
+  }
+  /// Returns true if `query` has been explicitly set.
+  var hasQuery: Bool {self._query != nil}
+  /// Clears the value of `query`. Subsequent reads from it will return its default value.
+  mutating func clearQuery() {self._query = nil}
+
+  var maxResults: Int32 {
+    get {_maxResults ?? 0}
+    set {_maxResults = newValue}
+  }
+  /// Returns true if `maxResults` has been explicitly set.
+  var hasMaxResults: Bool {self._maxResults != nil}
+  /// Clears the value of `maxResults`. Subsequent reads from it will return its default value.
+  mutating func clearMaxResults() {self._maxResults = nil}
+
+  var groupID: Dynamite_GroupId {
+    get {_groupID ?? Dynamite_GroupId()}
+    set {_groupID = newValue}
+  }
+  /// Returns true if `groupID` has been explicitly set.
+  var hasGroupID: Bool {self._groupID != nil}
+  /// Clears the value of `groupID`. Subsequent reads from it will return its default value.
+  mutating func clearGroupID() {self._groupID = nil}
+
+  var appFilters: [Int32] = []
+
+  var requestHeader: Dynamite_RequestHeader {
+    get {_requestHeader ?? Dynamite_RequestHeader()}
+    set {_requestHeader = newValue}
+  }
+  /// Returns true if `requestHeader` has been explicitly set.
+  var hasRequestHeader: Bool {self._requestHeader != nil}
+  /// Clears the value of `requestHeader`. Subsequent reads from it will return its default value.
+  mutating func clearRequestHeader() {self._requestHeader = nil}
+
+  var unknownFields = SwiftProtobuf.UnknownStorage()
+
+  init() {}
+
+  fileprivate var _query: String? = nil
+  fileprivate var _maxResults: Int32? = nil
+  fileprivate var _groupID: Dynamite_GroupId? = nil
+  fileprivate var _requestHeader: Dynamite_RequestHeader? = nil
+}
+
+nonisolated struct Dynamite_AutocompleteBotsResponse: Sendable {
+  // SwiftProtobuf.Message conformance is added in an extension below. See the
+  // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
+  // methods supported on all messages.
+
+  var bots: [Dynamite_User] = []
+
+  var unknownFields = SwiftProtobuf.UnknownStorage()
+
+  init() {}
+}
+
 // MARK: - Code below here is support for the SwiftProtobuf runtime.
 
 fileprivate nonisolated let _protobuf_package = "dynamite"
@@ -16162,7 +16272,7 @@ nonisolated extension Dynamite_Dimension: SwiftProtobuf.Message, SwiftProtobuf._
 
 nonisolated extension Dynamite_DriveMetadata: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
   static let protoMessageName: String = _protobuf_package + ".DriveMetadata"
-  static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{1}id\0\u{1}title\0\u{3}thumbnail_url\0\u{1}mimetype\0\u{4}\u{3}thumbnail_width\0\u{3}thumbnail_height\0")
+  static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{1}id\0\u{1}title\0\u{3}thumbnail_url\0\u{1}mimetype\0\u{4}\u{3}thumbnail_width\0\u{3}thumbnail_height\0\u{1}field9\0\u{2}\u{3}field12\0\u{4}\u{2}mime_type\0")
 
   mutating func decodeMessage<D: SwiftProtobuf.Decoder>(decoder: inout D) throws {
     while let fieldNumber = try decoder.nextFieldNumber() {
@@ -16176,6 +16286,9 @@ nonisolated extension Dynamite_DriveMetadata: SwiftProtobuf.Message, SwiftProtob
       case 4: try { try decoder.decodeSingularStringField(value: &self._mimetype) }()
       case 7: try { try decoder.decodeSingularInt32Field(value: &self._thumbnailWidth) }()
       case 8: try { try decoder.decodeSingularInt32Field(value: &self._thumbnailHeight) }()
+      case 9: try { try decoder.decodeSingularBoolField(value: &self._field9) }()
+      case 12: try { try decoder.decodeSingularMessageField(value: &self._field12) }()
+      case 14: try { try decoder.decodeSingularStringField(value: &self._mimeType) }()
       default: break
       }
     }
@@ -16204,6 +16317,15 @@ nonisolated extension Dynamite_DriveMetadata: SwiftProtobuf.Message, SwiftProtob
     try { if let v = self._thumbnailHeight {
       try visitor.visitSingularInt32Field(value: v, fieldNumber: 8)
     } }()
+    try { if let v = self._field9 {
+      try visitor.visitSingularBoolField(value: v, fieldNumber: 9)
+    } }()
+    try { if let v = self._field12 {
+      try visitor.visitSingularMessageField(value: v, fieldNumber: 12)
+    } }()
+    try { if let v = self._mimeType {
+      try visitor.visitSingularStringField(value: v, fieldNumber: 14)
+    } }()
     try unknownFields.traverse(visitor: &visitor)
   }
 
@@ -16214,6 +16336,28 @@ nonisolated extension Dynamite_DriveMetadata: SwiftProtobuf.Message, SwiftProtob
     if lhs._mimetype != rhs._mimetype {return false}
     if lhs._thumbnailWidth != rhs._thumbnailWidth {return false}
     if lhs._thumbnailHeight != rhs._thumbnailHeight {return false}
+    if lhs._field9 != rhs._field9 {return false}
+    if lhs._field12 != rhs._field12 {return false}
+    if lhs._mimeType != rhs._mimeType {return false}
+    if lhs.unknownFields != rhs.unknownFields {return false}
+    return true
+  }
+}
+
+nonisolated extension Dynamite_DriveMetadata.Field12: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
+  static let protoMessageName: String = Dynamite_DriveMetadata.protoMessageName + ".Field12"
+  static let _protobuf_nameMap = SwiftProtobuf._NameMap()
+
+  mutating func decodeMessage<D: SwiftProtobuf.Decoder>(decoder: inout D) throws {
+    // Load everything into unknown fields
+    while try decoder.nextFieldNumber() != nil {}
+  }
+
+  func traverse<V: SwiftProtobuf.Visitor>(visitor: inout V) throws {
+    try unknownFields.traverse(visitor: &visitor)
+  }
+
+  static func ==(lhs: Dynamite_DriveMetadata.Field12, rhs: Dynamite_DriveMetadata.Field12) -> Bool {
     if lhs.unknownFields != rhs.unknownFields {return false}
     return true
   }
@@ -32774,6 +32918,90 @@ nonisolated extension Dynamite_AppCommandDetails.Kind: SwiftProtobuf.Message, Sw
   static func ==(lhs: Dynamite_AppCommandDetails.Kind, rhs: Dynamite_AppCommandDetails.Kind) -> Bool {
     if lhs._kind != rhs._kind {return false}
     if lhs._detail != rhs._detail {return false}
+    if lhs.unknownFields != rhs.unknownFields {return false}
+    return true
+  }
+}
+
+nonisolated extension Dynamite_AutocompleteBotsRequest: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
+  static let protoMessageName: String = _protobuf_package + ".AutocompleteBotsRequest"
+  static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{1}query\0\u{4}\u{2}max_results\0\u{3}group_id\0\u{4}\u{2}app_filters\0\u{4}^\u{1}request_header\0")
+
+  mutating func decodeMessage<D: SwiftProtobuf.Decoder>(decoder: inout D) throws {
+    while let fieldNumber = try decoder.nextFieldNumber() {
+      // The use of inline closures is to circumvent an issue where the compiler
+      // allocates stack space for every case branch when no optimizations are
+      // enabled. https://github.com/apple/swift-protobuf/issues/1034
+      switch fieldNumber {
+      case 1: try { try decoder.decodeSingularStringField(value: &self._query) }()
+      case 3: try { try decoder.decodeSingularInt32Field(value: &self._maxResults) }()
+      case 4: try { try decoder.decodeSingularMessageField(value: &self._groupID) }()
+      case 6: try { try decoder.decodeRepeatedInt32Field(value: &self.appFilters) }()
+      case 100: try { try decoder.decodeSingularMessageField(value: &self._requestHeader) }()
+      default: break
+      }
+    }
+  }
+
+  func traverse<V: SwiftProtobuf.Visitor>(visitor: inout V) throws {
+    // The use of inline closures is to circumvent an issue where the compiler
+    // allocates stack space for every if/case branch local when no optimizations
+    // are enabled. https://github.com/apple/swift-protobuf/issues/1034 and
+    // https://github.com/apple/swift-protobuf/issues/1182
+    try { if let v = self._query {
+      try visitor.visitSingularStringField(value: v, fieldNumber: 1)
+    } }()
+    try { if let v = self._maxResults {
+      try visitor.visitSingularInt32Field(value: v, fieldNumber: 3)
+    } }()
+    try { if let v = self._groupID {
+      try visitor.visitSingularMessageField(value: v, fieldNumber: 4)
+    } }()
+    if !self.appFilters.isEmpty {
+      try visitor.visitRepeatedInt32Field(value: self.appFilters, fieldNumber: 6)
+    }
+    try { if let v = self._requestHeader {
+      try visitor.visitSingularMessageField(value: v, fieldNumber: 100)
+    } }()
+    try unknownFields.traverse(visitor: &visitor)
+  }
+
+  static func ==(lhs: Dynamite_AutocompleteBotsRequest, rhs: Dynamite_AutocompleteBotsRequest) -> Bool {
+    if lhs._query != rhs._query {return false}
+    if lhs._maxResults != rhs._maxResults {return false}
+    if lhs._groupID != rhs._groupID {return false}
+    if lhs.appFilters != rhs.appFilters {return false}
+    if lhs._requestHeader != rhs._requestHeader {return false}
+    if lhs.unknownFields != rhs.unknownFields {return false}
+    return true
+  }
+}
+
+nonisolated extension Dynamite_AutocompleteBotsResponse: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
+  static let protoMessageName: String = _protobuf_package + ".AutocompleteBotsResponse"
+  static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{1}bots\0")
+
+  mutating func decodeMessage<D: SwiftProtobuf.Decoder>(decoder: inout D) throws {
+    while let fieldNumber = try decoder.nextFieldNumber() {
+      // The use of inline closures is to circumvent an issue where the compiler
+      // allocates stack space for every case branch when no optimizations are
+      // enabled. https://github.com/apple/swift-protobuf/issues/1034
+      switch fieldNumber {
+      case 1: try { try decoder.decodeRepeatedMessageField(value: &self.bots) }()
+      default: break
+      }
+    }
+  }
+
+  func traverse<V: SwiftProtobuf.Visitor>(visitor: inout V) throws {
+    if !self.bots.isEmpty {
+      try visitor.visitRepeatedMessageField(value: self.bots, fieldNumber: 1)
+    }
+    try unknownFields.traverse(visitor: &visitor)
+  }
+
+  static func ==(lhs: Dynamite_AutocompleteBotsResponse, rhs: Dynamite_AutocompleteBotsResponse) -> Bool {
+    if lhs.bots != rhs.bots {return false}
     if lhs.unknownFields != rhs.unknownFields {return false}
     return true
   }

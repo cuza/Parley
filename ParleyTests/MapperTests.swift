@@ -216,6 +216,18 @@ struct MapperTests {
         #expect(card.thumbnailURL == URL(string: "https://lh3.google.com/mail-doc-preview/f1?authuser=0&auditContext=thumbnail"))
         #expect(card.domain == "docs.google.com" && card.name == "Google Doc")
     }
+    /// A Drive file picked from Google Chat's @ list, as web sends it: its title in the text, an inline chip (format 1)
+    /// with the file's link, and the type in field 14. The title links to the file, and the card keeps its type.
+    @Test func aDriveChipLinksItsTitleInTheText() throws {
+        let chip = Dynamite_Annotation.with {
+            $0.type = .driveFile; $0.startIndex = 0; $0.length = 4; $0.chipRenderType = .renderIfPossible; $0.inlineRenderFormat = 1
+            $0.driveMetadata.id = "d1"; $0.driveMetadata.title = "Plan"; $0.driveMetadata.mimeType = "application/vnd.google-apps.document"
+            $0.interactionData.url.url = "https://docs.google.com/document/d/d1/edit"
+        }
+        let message = try attachments([chip], text: "Plan and QA")
+        #expect(message.formatting == [TextStyleRange(style: .link(URL(string: "https://docs.google.com/document/d/d1/edit")!), start: 0, length: 4)])
+        #expect(message.attachments.first?.contentType == "application/vnd.google-apps.document")
+    }
     /// A Drive link Google Chat marks "do not render" is a title linked in the text: web draws no chip or card for it.
     @Test func aDriveLinkMarkedDoNotRenderIsJustTheLinkedText() throws {
         let inline = Dynamite_Annotation.with { $0.type = .driveDoc; $0.chipRenderType = .doNotRender; $0.driveMetadata.id = "d1" }

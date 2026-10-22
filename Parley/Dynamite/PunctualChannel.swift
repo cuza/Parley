@@ -65,6 +65,15 @@ actor PunctualChannel {
     }
     private var session: Task<Void, any Error>?
     private var reopenNow = false
+    /// The network's state as the path monitor reports it: back after being down, reconnect now (`nudge`). macOS reports
+    /// the same state again every few seconds; reopening on those would cut a healthy channel. True when it nudged.
+    @discardableResult func network(up: Bool) -> Bool {
+        defer { networkUp = up }
+        guard up, !networkUp else { return false }
+        nudge()
+        return true
+    }
+    private var networkUp = true   // the channel opens with the network up; the monitor's first report confirms it
 
     /// The conversations whose typing to watch; added and cancelled on a live channel, all re-sent on reconnect.
     func subscribe(_ conversations: Set<ConversationID>) async {

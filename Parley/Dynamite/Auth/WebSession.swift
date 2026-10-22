@@ -184,9 +184,11 @@ actor WebSessionAuthorizer {
             self.session = URLSession(configuration: config, delegate: NoAuthRedirects(), delegateQueue: nil)
         }
     }
-    static func extractXSRF(_ page: String) -> String? {
+    static func extractXSRF(_ page: String) -> String? { pageValue("SMqcke", in: page) }
+    /// A string from a Google page's global data (`"<key>":"<value>"`), one line, not empty.
+    static func pageValue(_ key: String, in page: String) -> String? {
         // Accept JSON escapes and optional whitespace, without printing the HTML.
-        let pattern = #""SMqcke"\s*:\s*("(?:[^"\\]|\\.)*")"#
+        let pattern = "\"\(NSRegularExpression.escapedPattern(for: key))\"" + #"\s*:\s*("(?:[^"\\]|\\.)*")"#
         guard let regex = try? NSRegularExpression(pattern: pattern),
               let match = regex.firstMatch(in: page, range: NSRange(page.startIndex..., in: page)),
               let range = Range(match.range(at: 1), in: page),
@@ -194,8 +196,20 @@ actor WebSessionAuthorizer {
               let token = array.first, !token.isEmpty, !token.contains(where: { $0 == "\r" || $0 == "\n" }) else { return nil }
         return token
     }
+    /// How a host's requests are signed, as Google Chat's web signs them: Chat with its XSRF token, Google's API services
+    /// (`GoogleHost`) with the SAPISID hash, Google Contacts with cookies alone (its token goes in the body). Nil: never
+    /// sent a signed request. Only Chat's answers can end the session.
+    enum Signing { case chat, sapisid, cookies }
+    static func signing(_ host: String?) -> Signing? {
+        switch host {
+        case "chat.google.com": .chat
+        case GoogleContacts.host: .cookies
+        case let host? where GoogleHost(rawValue: host) != nil: .sapisid
+        default: nil
+        }
+    }
     static func validateDestination(_ url: URL?) throws {
-        guard let url, url.scheme == "https", url.host == "chat.google.com",
+        guard let url, url.scheme == "https", Self.signing(url.host) != nil,
               url.port == nil || url.port == 443, url.user == nil, url.password == nil else { throw AuthFailure.invalidDestination }
     }
     func signIn(cookies: [SessionCookie], userAgent: String) async throws {
@@ -336,11 +350,12 @@ actor WebSessionAuthorizer {
                 guard !header.isEmpty else { throw AuthFailure.signInRequired }
                 request.setValue(header, forHTTPHeaderField: "Cookie")
                 request.setValue(credentials.userAgent, forHTTPHeaderField: "User-Agent")
-                request.setValue(xsrf, forHTTPHeaderField: "X-Framework-XSRF-Token")
+                let signing = Self.signing(original.url!.host)
+                if signing == .chat { request.setValue(xsrf, forHTTPHeaderField: "X-Framework-XSRF-Token") }
                 request.setValue("https://chat.google.com", forHTTPHeaderField: "Origin")
                 request.setValue("https://chat.google.com/", forHTTPHeaderField: "Referer")
                 // The realtime channel also wants the SAPISID hash, as Google Chat sends it there.
-                if original.url!.path.hasPrefix("/punctual/"), let hash = Self.sapisidHash(credentials.cookies) {
+                if signing == .sapisid || original.url!.path.hasPrefix("/punctual/"), let hash = Self.sapisidHash(credentials.cookies) {
                     request.setValue(hash, forHTTPHeaderField: "Authorization")
                     request.setValue("0", forHTTPHeaderField: "X-Goog-AuthUser")
                 }
@@ -348,6 +363,11 @@ actor WebSessionAuthorizer {
                 guard current == generation else { throw CancellationError() }
                 guard let response = response as? HTTPURLResponse else { throw AuthFailure.unexpectedResponse }
                 saveCookies(from: response, generation: current)
+                // Another service's refusal or redirect is its own: Chat's token and session stay, and its client retries.
+                if signing != .chat, response.statusCode == 401 || response.statusCode == 403 || (300..<400).contains(response.statusCode) {
+                    authLog.error("\(original.url?.host ?? "?", privacy: .public) refused (\(response.statusCode, privacy: .public))")
+                    throw AuthFailure.http(response.statusCode)
+                }
                 if response.statusCode == 401 || response.statusCode == 403 {
                     if xsrf == sentToken { xsrf = nil }   // not one another request has just refreshed
                     if attempt == 0 { continue }

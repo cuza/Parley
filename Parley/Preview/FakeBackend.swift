@@ -237,6 +237,37 @@ actor FakeBackend: ChatBackend {
     static let customEmoji = [shipIt, CustomEmoji(id: "demo-lgtm", shortcode: "lgtm", imageURL: URL(string: "https://example.invalid/emoji/lgtm")),
                               CustomEmoji(id: "demo-party-parrot", shortcode: "party-parrot", imageURL: URL(string: "https://example.invalid/emoji/party-parrot"))]
     func customEmojis() -> [CustomEmoji] { Self.customEmoji }
+    /// The demo's apps in a space or group (Shipyard and Notebook), as autocomplete_bots answers for its own apps.
+    func apps(in conversation: ConversationID, matching query: String) -> [Person] {
+        guard rooms.first(where: { $0.id == conversation })?.kind != .direct else { return [] }
+        return [Self.shipyard, Self.notebook].filter { query.isEmpty || $0.name.localizedCaseInsensitiveContains(query) }
+    }
+    /// The demo's Drive: recent files first, as Google Chat suggests them for "@" alone.
+    static let driveFiles = [DriveFile(id: "demo-roadmap", title: "Roadmap", mimeType: "application/vnd.google-apps.document"),
+                             DriveFile(id: "demo-budget", title: "Budget 2027", mimeType: "application/vnd.google-apps.spreadsheet"),
+                             DriveFile(id: "demo-launch", title: "Launch deck", mimeType: "application/vnd.google-apps.presentation")]
+    func driveFiles(matching query: String) -> [DriveFile] {
+        query.isEmpty ? Array(Self.driveFiles.prefix(2)) : Self.driveFiles.filter { $0.title.localizedCaseInsensitiveContains(query) }
+    }
+    /// The demo directory: someone in no demo conversation, found only by name.
+    static let directoryPerson = Person(id: "sam", name: "Sam Okafor", presence: .away)
+    func directoryPeople(matching query: String) -> [Person] {
+        query.isEmpty ? [] : MentionQuery.filter([Self.directoryPerson], by: query)
+    }
+    /// The demo's people work in Lisbon; nobody else shares a calendar zone.
+    func timeZone(email: String) -> TimeZone? { email.hasSuffix("@example.com") ? TimeZone(identifier: "Europe/Lisbon") : nil }
+    func jobTitle(email: String, name: String) -> String? { email.hasSuffix("@example.com") ? "Product Designer" : nil }
+    /// Everyone in the demo reports to Maria, who has one report; each shares an event, an email and a file with me.
+    func personDetails(id: PersonID, email: String?) -> PersonDetails {
+        let maria = PersonDetails.Colleague(id: "maria", name: "Maria Chen", title: "Head of Design")
+        let day = Date(timeIntervalSince1970: 1_790_000_000)
+        return PersonDetails(reports: id == "maria" ? [.init(id: "sam", name: "Sam Okafor", title: "Product Designer")] : [],
+                             reportCount: id == "maria" ? 1 : 0, managers: id == "maria" ? [] : [maria],
+                             recent: [.init(kind: .event, title: "Design review", url: URL(string: "https://example.invalid/event")!, date: day),
+                                      .init(kind: .email, title: "Launch notes", url: URL(string: "https://example.invalid/mail")!, date: day)],
+                             files: [.init(kind: .file, title: "Roadmap", url: URL(string: "https://example.invalid/roadmap")!, date: day)],
+                             moreFiles: URL(string: "https://example.invalid/drive"))
+    }
     /// One the list leaves out, found only by searching: an organisation with more emoji than one read brings.
     static let searchOnlyEmoji = CustomEmoji(id: "demo-samba", shortcode: "samba", imageURL: URL(string: "https://example.invalid/emoji/samba"))
     func searchCustomEmoji(_ query: String) -> [CustomEmoji] { MentionQuery.filter(Self.customEmoji + [Self.searchOnlyEmoji], by: query) }

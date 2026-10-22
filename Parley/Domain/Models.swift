@@ -66,6 +66,36 @@ enum CustomStatusExpiry: String, CaseIterable, Identifiable {
         }
     }
 }
+/// What a person's card shows beyond their name and email; nil where they share nothing.
+struct PersonCardDetails: Equatable, Sendable {
+    var title: String?
+    var timeZone: TimeZone?
+}
+/// What a person's detailed view shows beyond their card, as Google Chat's does, from Google Contacts; an empty part is
+/// a section it leaves out.
+struct PersonDetails: Equatable, Sendable {
+    /// Someone in their reporting line.
+    struct Colleague: Identifiable, Hashable, Sendable {
+        let id: PersonID
+        var name: String
+        var avatarURL: URL?
+        var title: String?
+    }
+    /// A Calendar event or Gmail thread we share, or a Drive file they shared with me: opens in the browser.
+    struct Item: Hashable, Sendable {
+        enum Kind: Sendable { case event, email, file }
+        var kind: Kind
+        var title: String
+        var url: URL
+        var date: Date?
+    }
+    var reports: [Colleague] = []
+    var reportCount = 0   // can be more than `reports` lists
+    var managers: [Colleague] = []   // the management chain, as Google lists it
+    var recent: [Item] = []
+    var files: [Item] = []
+    var moreFiles: URL?   // Drive's search for everything they shared
+}
 struct Person: Identifiable, Hashable, Codable, Sendable {
     /// @all in a space's @ list: a mention of everyone, sent as Google Chat's MENTION_ALL.
     static let everyone = Person(id: TextStyleRange.everyone, name: "all")
@@ -163,6 +193,12 @@ struct Conversation: Identifiable, Hashable, Codable, Sendable {
     var activity: Date? = nil   // the server's last-activity time (its sidebar sort time), which Home orders by
     var hidden: Date? = nil     // when I hid it from my sidebar; listed in Settings ▸ Hidden conversations instead
     var external: Bool? = nil   // people outside my organisation take part; nil until the server says
+}
+/// A Google Drive file, as the @ list offers it and a message's Drive chip carries it.
+struct DriveFile: Hashable, Codable, Sendable {
+    var id: String
+    var title: String
+    var mimeType: String
 }
 struct Reaction: Hashable, Codable, Sendable {
     var emoji: String   // a custom emoji's is ":shortcode:"
@@ -387,6 +423,8 @@ struct TextStyleRange: Hashable, Codable, Sendable {
         // A space or DM chip over its name: the space's emoji when known, and the link it was made from (a message's, maybe).
         case chip(ConversationID, emoji: String? = nil, link: URL? = nil)
         case slashCommand(SlashCommand)   // over a picked command's name at the start: the message invokes it
+        case drive(DriveFile)             // a Drive file's chip over its title, picked from the @ list
+        case appMention(userID: String)   // an app's mention ("@Poll"), sent as a bot's
     }
     var style: Style
     var start: Int
@@ -510,6 +548,10 @@ struct MessageDraft: Sendable {
     var uploads: [Attachment] = []   // files already uploaded with `ChatBackend.upload` (each has an `uploadToken`)
     var quoting: QuotedMessage? = nil   // a quote reply: the quoted message, with its `id` and `lastUpdateMicros`
     var serverDraftID: String? = nil    // the server draft this message was, which the server drops on send
+    var outsiders: [PersonID: Outsider] = [:]   // mentioned people who aren't members; see `ChatStore.outsiders`
+    /// How a mention of someone outside the conversation goes, as Google Chat sends it: an invitation that adds them, or
+    /// a reference that only names them.
+    enum Outsider: Sendable { case invite, reference }
 }
 /// A composer's draft as Google Chat keeps it on the server, so it follows the user between devices.
 struct ServerDraft: Hashable, Codable, Sendable {
@@ -781,6 +823,18 @@ protocol ChatBackend: Sendable {
     func shared(_ category: SharedCategory, in conversation: ConversationID, after: SharedContent.Item?) async throws -> SharedPage
     /// The organisation's custom emoji that can be sent (enabled ones), every page.
     func customEmojis() async throws -> [CustomEmoji]
+    /// The conversation's own apps whose name matches `query`, for the @ list's Apps section.
+    func apps(in conversation: ConversationID, matching query: String) async throws -> [Person]
+    /// Drive files for the @ list's Files section: recent ones for an empty query, else ones matching it.
+    func driveFiles(matching query: String) async throws -> [DriveFile]
+    /// People in the organisation's directory matching `query`, members of the conversation or not, for the @ list.
+    func directoryPeople(matching query: String) async throws -> [Person]
+    /// The time zone `email`'s owner set in Google Calendar, which their card shows as local time; nil when not shared.
+    func timeZone(email: String) async throws -> TimeZone?
+    /// The job title of `email`'s owner, from Google Contacts, which their card shows; `name` helps the lookup.
+    func jobTitle(email: String, name: String) async throws -> String?
+    /// What `id`'s detailed view shows, from Google Contacts: their reporting line, what we recently shared, and their files.
+    func personDetails(id: PersonID, email: String?) async throws -> PersonDetails
     /// The organisation's enabled custom emoji whose shortcode matches `query` (typed after the ":"), as the server finds them.
     func searchCustomEmoji(_ query: String) async throws -> [CustomEmoji]
     /// The commands `conversation` offers whose name contains `query` (typed after the "/"; empty: the first page of all):
@@ -886,6 +940,7 @@ extension ChatBackend {
 
 /// A window's side pane: the info panel, an open thread, or the conversation's Threads list under the thread.
 struct SidePane: Equatable {
+    var person: Person?   // a person's details, over whatever else the pane shows
     var info = false
     var thread: ThreadID?
     var threads = false
