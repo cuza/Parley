@@ -266,6 +266,15 @@ struct CustomEmojiAnnotationTests {
         #expect(store.customEmoji == [Self.parrot])
         #expect(store.customEmojiNow() == [Self.parrot])   // and the read for this launch starts behind it
     }
+    /// Google Chat refuses custom emoji where people outside the organisation take part (a reaction answers HTTP 403, a
+    /// message loses the emoji): Parley offers none there. A conversation not known to be external offers them.
+    @Test func customEmojiAreLeftOutWherePeopleOutsideTheOrganisationTakePart() throws {
+        let inside = Conversation(id: "space/in", name: "In", kind: .space, members: [])
+        var outside = Conversation(id: "space/out", name: "Out", kind: .space, members: []); outside.external = true
+        let store = ChatStore(backend: FakeBackend(), cache: try Self.cache(LaunchSnapshot(accountID: "me", conversations: [inside, outside], customEmoji: [Self.parrot])))
+        #expect(store.allowsCustomEmoji(in: "space/in") && !store.allowsCustomEmoji(in: "space/out"))
+        #expect(store.allowsCustomEmoji(in: "space/unknown"))
+    }
     @Test func aCacheFromBeforeTheListDecodes() throws {
         let old = Data(#"{"drafts":{}}"#.utf8)
         #expect(try JSONDecoder().decode(LaunchSnapshot.self, from: old).customEmoji.isEmpty)
@@ -279,5 +288,46 @@ struct CustomEmojiAnnotationTests {
         #expect(store.customEmoji == FakeBackend.customEmoji)
         store.flush()
         #expect(cache.load().customEmoji == FakeBackend.customEmoji)   // kept for the next launch
+    }
+}
+
+/// Conversations and people from outside the organisation, as Google Chat marks them "External".
+@MainActor struct ExternalTests {
+    /// The conversation list's guest access (field 10) is ENABLED (2) where people outside the organisation take part.
+    @Test func aConversationWithGuestAccessIsExternal() {
+        let item = Dynamite_WorldItemLite.with { $0.groupID.spaceID.spaceID = "s"; $0.roomName = "S"; $0.guestAccess.state = .guestAccessEnabled }
+        #expect(DynamiteMapper.conversation(item, selfID: "me", people: [:])?.external == true)
+        let inside = Dynamite_WorldItemLite.with { $0.groupID.spaceID.spaceID = "s"; $0.roomName = "S"; $0.guestAccess.state = .guestAccessDisabled }
+        #expect(DynamiteMapper.conversation(inside, selfID: "me", people: [:])?.external == false)
+        let unstated = Dynamite_WorldItemLite.with { $0.groupID.spaceID.spaceID = "s"; $0.roomName = "S" }
+        #expect(DynamiteMapper.conversation(unstated, selfID: "me", people: [:])?.external == nil)
+    }
+    /// A person's organisation (User field 12): a personal account, or a Workspace customer.
+    @Test func aPersonCarriesTheirOrganisation() {
+        #expect(DynamiteMapper.person(.with { $0.userID.id = "a"; $0.organization.consumer = .init() }).organization == "consumer")
+        #expect(DynamiteMapper.person(.with { $0.userID.id = "a"; $0.organization.customer.customerID.customerID = "C1" }).organization == "customer:C1")
+        #expect(DynamiteMapper.person(.with { $0.userID.id = "a" }).organization == nil)
+    }
+    /// As Google Chat decides it: someone is external when their organisation isn't mine. Nobody is, to a personal
+    /// account; and an unknown organisation is not called external.
+    @Test func someoneFromAnotherOrganisationIsExternal() {
+        let me = Person(id: "me", name: "Me", organization: "customer:C1")
+        #expect(ChatStore.external(Person(id: "g", name: "Guest", organization: "consumer"), to: me))
+        #expect(ChatStore.external(Person(id: "o", name: "Other", organization: "customer:C2"), to: me))
+        #expect(!ChatStore.external(Person(id: "c", name: "Colleague", organization: "customer:C1"), to: me))
+        #expect(!ChatStore.external(Person(id: "u", name: "Unknown"), to: me))
+        #expect(!ChatStore.external(me, to: me))
+        #expect(!ChatStore.external(Person(id: "o", name: "Other", organization: "customer:C2"), to: Person(id: "me", name: "Me", organization: "consumer")))
+    }
+    /// Google Chat's own word wins: custom emoji follow the conversation's capability where it was read, and its
+    /// external mark until then.
+    @Test func theCapabilityDecidesCustomEmoji() async throws {
+        let fake = FakeBackend()
+        var outside = Conversation(id: "space/out", name: "Out", kind: .space, members: []); outside.external = true
+        let store = ChatStore(backend: fake, cache: try CustomEmojiLaunchTests.cache(LaunchSnapshot(accountID: "me", conversations: [outside])))
+        #expect(!store.allowsCustomEmoji(in: "space/out"))
+        await fake.simulateCustomEmoji(true, in: "space/out")
+        await store.loadPermissions("space/out")
+        #expect(store.allowsCustomEmoji(in: "space/out"))
     }
 }

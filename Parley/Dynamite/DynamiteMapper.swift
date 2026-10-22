@@ -79,9 +79,17 @@ enum DynamiteMapper {
         guard let url = URL(string: raw.hasPrefix("//") ? "https:" + raw : raw), url.scheme == "https", url.host() != nil else { return nil }
         return url
     }
+    /// "consumer" for a personal account, "customer:<id>" for a Workspace customer's, nil when not stated.
+    static func organization(_ info: Dynamite_OrganizationInfo) -> String? {
+        switch info.kind {
+        case .consumer: "consumer"
+        case .customer(let customer): customer.customerID.customerID.isEmpty ? nil : "customer:" + customer.customerID.customerID
+        case nil: nil
+        }
+    }
     static func person(_ user: Dynamite_User) -> Person {
         Person(id: user.userID.id, name: user.name.isEmpty ? "Unknown" : user.name, avatarURL: imageURL(user.avatarURL),
-               email: user.email.isEmpty ? nil : user.email)
+               email: user.email.isEmpty ? nil : user.email, organization: organization(user.organization))
     }
     /// A directory entry; its member count adds up the joined people (member type 1), as Google Chat counts them.
     static func space(_ entry: Dynamite_SpaceDirectoryEntry) -> SpaceListing? {
@@ -1164,7 +1172,8 @@ enum DynamiteMapper {
                             app: kind != .direct ? nil : item.groupType == 11 ? .gemini
                                 : item.groupType == 2 || item.dmMembers.members.contains { $0.type == .bot } ? .bot : nil,
                             activity: item.sortTimestamp > 0 ? date(item.sortTimestamp) : nil,
-                            hidden: item.readState.hideTimestamp > 0 ? date(item.readState.hideTimestamp) : nil)
+                            hidden: item.readState.hideTimestamp > 0 ? date(item.readState.hideTimestamp) : nil,
+                            external: item.hasGuestAccess ? item.guestAccess.state == .guestAccessEnabled : nil)
     }
 
     static func level(_ wire: Dynamite_GroupNotificationSettings.Level) -> NotificationLevel {

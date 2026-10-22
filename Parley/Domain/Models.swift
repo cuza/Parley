@@ -74,6 +74,7 @@ struct Person: Identifiable, Hashable, Codable, Sendable {
     var presence: Presence = .offline
     var avatarURL: URL? = nil   // public FIFE photo
     var email: String? = nil
+    var organization: String? = nil   // "consumer" (a personal account) or "customer:<id>" (a Workspace's); nil if unknown
 }
 extension Person {
     /// Someone known only by an email address: `ChatBackend.directMessage` invites them by email.
@@ -91,6 +92,7 @@ struct ConversationPermissions: Hashable, Sendable {
     var changeManagers = false  // change a manager's role
     var toggleHistory = false
     var reportMessages = false  // Workspace: report a message to the organisation's admin
+    var customEmoji: Bool? = nil  // false where people outside the organisation take part; nil when not stated
 }
 /// A sidebar section, as Google Chat keeps them for me: the default ones and the ones I made, in my order.
 struct SidebarSection: Identifiable, Hashable, Sendable {
@@ -160,6 +162,7 @@ struct Conversation: Identifiable, Hashable, Codable, Sendable {
     enum App: String, Codable, Sendable { case bot, gemini }   // gemini: Ask Gemini, a sidebar shortcut in Google Chat
     var activity: Date? = nil   // the server's last-activity time (its sidebar sort time), which Home orders by
     var hidden: Date? = nil     // when I hid it from my sidebar; listed in Settings ▸ Hidden conversations instead
+    var external: Bool? = nil   // people outside my organisation take part; nil until the server says
 }
 struct Reaction: Hashable, Codable, Sendable {
     var emoji: String   // a custom emoji's is ":shortcode:"

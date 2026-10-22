@@ -692,7 +692,8 @@ actor DynamiteBackend: ChatBackend {
                                        editDetails: caps?.canEditDescription == true || caps?.canEditGuidelines == true,
                                        deleteSpace: caps?.canDeleteGroup == true, changeRoles: caps?.canUpdateMemberRoles == true,
                                        changeManagers: caps?.canUpdateManagerRoles == true, toggleHistory: caps?.canToggleHistory == true,
-                                       reportMessages: caps?.canReportMessages == true)
+                                       reportMessages: caps?.canReportMessages == true,
+                                       customEmoji: caps.flatMap { $0.hasCanViewOrUseCustomEmojis ? $0.canViewOrUseCustomEmojis : nil })
     }
 
     func edit(_ id: MessageID, text: String, formatting: [TextStyleRange] = []) async throws {
@@ -1634,6 +1635,8 @@ actor DynamiteBackend: ChatBackend {
             guard !response.nextPageToken.isEmpty else { break }
             token = response.nextPageToken
         }
+        // Counts only: whether Google sent each person's organisation, which marks someone "External".
+        log.info("members: \(people.count, privacy: .public), \(people.filter { $0.organization != nil }.count, privacy: .public) with an organisation")
         let unnamed = people.filter { $0.name == "Unknown" }.map(\.id)
         await resolve(unnamed)   // the page may carry ids only
         for person in people where self.people[person.id] == nil || person.name != "Unknown" { self.people[person.id] = person }

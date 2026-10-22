@@ -118,6 +118,7 @@ struct InfoPanel: View {
                     }
             } else { avatar }
             Text(room.name).font(.title2.weight(.semibold)).multilineTextAlignment(.center)
+            if room.external == true { ExternalBadge() }
             if let partner {
                 if let email = partner.email { Text(email).foregroundStyle(.secondary).textSelection(.enabled) }
                 if let presence = store.presence[partner.id], let text = Self.text(presence) {
@@ -204,7 +205,10 @@ struct InfoPanel: View {
                 Avatar(name: person.name, size: 28, url: person.avatarURL)
                     .overlay(alignment: .bottomTrailing) { PresenceDot(presence: store.presence[person.id], size: 8).offset(x: 2, y: 2) }
                 VStack(alignment: .leading, spacing: 1) {
-                    Text(isMe ? "\(person.name) (you)" : person.name).lineLimit(1)
+                    HStack(spacing: 6) {
+                        Text(isMe ? "\(person.name) (you)" : person.name).lineLimit(1)
+                        if store.isExternal(person) { ExternalBadge() }
+                    }
                     if let email = person.email { Text(email).font(.caption).foregroundStyle(.secondary).lineLimit(1) }
                 }
                 Spacer(minLength: 0)
@@ -415,5 +419,17 @@ struct SpaceDetailsSheet: View {
         }
         .textFieldStyle(.roundedBorder).padding(18).frame(width: 420)
         .onAppear { description = room.description ?? ""; guidelines = room.guidelines ?? "" }
+    }
+}
+
+/// Google Chat's "External" mark: a conversation, or someone in it, from outside my organisation.
+struct ExternalBadge: View {
+    var body: some View {
+        Text("External").font(.caption2.weight(.semibold)).foregroundStyle(.orange)
+            .padding(.horizontal, 5).padding(.vertical, 1)
+            .background(.orange.opacity(0.15), in: RoundedRectangle(cornerRadius: 4))
+            .fixedSize()
+            .help("Includes people outside your organization")
+            .accessibilityLabel("External, includes people outside your organization")
     }
 }

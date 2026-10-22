@@ -260,6 +260,7 @@ struct ChatView: View {
                                     // The dot first, so it stays in one place whatever the name's length.
                                     if let partner = store.partner(in: room) { PresenceDot(presence: store.presence[partner]) }
                                     Text(room.name).font(.title3.weight(.semibold)).lineLimit(1)
+                                    if room.external == true { ExternalBadge() }
                                 }
                                 if room.kind != .direct, !room.members.isEmpty { Text("\(room.members.count) members").font(.caption).foregroundStyle(.secondary) }
                                 if let partner = store.partner(in: room), let status = store.statuses[partner] {
@@ -610,7 +611,7 @@ struct TimelineView: View {
                           dismissCard: { store.dismissCard(of: $0) },
                           clickCard: { message, card, action, inputs in await store.clickCard(message, card: card, action: action, inputs: inputs) },
                           reactCustom: { emoji, message in Task { await store.react(emoji.text, custom: emoji, to: message) } },
-                          customEmoji: { store.customEmojiNow() },
+                          customEmoji: store.allowsCustomEmoji(in: conversation.id) ? { store.customEmojiNow() } : nil,
                           reactors: { reaction, message in await store.reactorsLine(reaction, on: message.id) },
                           openThread: { message in Task { await store.openThread(message, window: paneWindow) } },
                           quote: { store.quote($0) },
@@ -942,8 +943,10 @@ struct ComposerBar: View {
                 }
             }, attach: attach,
                members: store.mentionSuggestions(conversation.id), spaces: store.conversations, needMembers: { Task { await store.loadMembers(conversation.id) } },
-               customEmoji: store.customEmoji, needCustomEmoji: { Task { await store.loadCustomEmoji() } },
-               searchCustomEmoji: { query in store.searchCustomEmoji(query) },
+               // None where people outside the organisation take part: Google Chat refuses them there.
+               customEmoji: store.allowsCustomEmoji(in: conversation.id) ? store.customEmoji : [],
+               needCustomEmoji: { if store.allowsCustomEmoji(in: conversation.id) { Task { await store.loadCustomEmoji() } } },
+               searchCustomEmoji: { query in if store.allowsCustomEmoji(in: conversation.id) { store.searchCustomEmoji(query) } },
                slashCommands: store.slashCommands[conversation.id] ?? [],
                needSlashCommands: { query in Task { await store.loadSlashCommands(conversation.id, query: query) } },
                runCommand: { command in Task { await store.run(command, in: conversation.id) } },
@@ -960,7 +963,7 @@ struct ComposerBar: View {
                 .buttonStyle(.plain).padding(.bottom, 13).help(formatBar ? "Hide formatting" : "Show formatting").accessibilityLabel("Formatting")
             Button { emojiPicker.toggle() } label: { Image(systemName: "face.smiling").font(.system(size: 18)).foregroundStyle(emojiPicker ? Color.accentColor : .secondary) }
                 .buttonStyle(.plain).padding(.bottom, 11).help("Emoji").accessibilityLabel("Emoji")
-                .popover(isPresented: $emojiPicker, arrowEdge: .top) { composerHandle.emojiPicker(custom: { store.customEmojiNow() },
+                .popover(isPresented: $emojiPicker, arrowEdge: .top) { composerHandle.emojiPicker(custom: store.allowsCustomEmoji(in: conversation.id) ? { store.customEmojiNow() } : nil,
                                                                                        loadImage: { try await store.attachmentData($0, thumbnail: $1) },
                                                                                        close: { emojiPicker = false }) }
             Button { gifPicker.toggle() } label: { Text("GIF").font(.system(size: 11, weight: .bold)).fixedSize().padding(.horizontal, 3).overlay(RoundedRectangle(cornerRadius: 3).stroke(lineWidth: 1.5)).foregroundStyle(gifPicker ? Color.accentColor : .secondary) }

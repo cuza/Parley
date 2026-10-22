@@ -36,7 +36,13 @@ actor FakeBackend: ChatBackend {
             Conversation(id: "engineering", name: "Engineering", kind: .space, members: [Self.me, alex], muted: true),
             Conversation(id: "notebook", name: "Notebook", kind: .direct, members: [Self.me, Self.notebook], unread: 1,
                          avatarURL: Self.notebookIcon, app: .bot),
-            Conversation(id: "gemini", name: "Ask Gemini", kind: .direct, members: [Self.me, Self.gemini], app: .gemini)
+            Conversation(id: "gemini", name: "Ask Gemini", kind: .direct, members: [Self.me, Self.gemini], app: .gemini),
+            // A space with a guest from a personal account: Google Chat marks it, and the guest, "External".
+            Conversation(id: "partners", name: "Partners", kind: .space,
+                         members: [Person(id: Self.me.id, name: Self.me.name, presence: .available, organization: "customer:demo"),
+                                   Person(id: "maria", name: "Maria Chen", presence: .available, organization: "customer:demo"),
+                                   Person(id: "sam", name: "Sam Okafor", email: "sam@example.com", organization: "consumer")],
+                         external: true)
         ]
         rooms += stride(from: 1, through: manyConversations, by: 1).map { i in
             let person = Person(id: "person\(i)", name: i % 7 == 0 ? "Person \(i) with a very long name that cannot fit in the sidebar" : "Person \(i)")
@@ -312,11 +318,13 @@ actor FakeBackend: ChatBackend {
     /// I manage every space and group but General, where I am a plain member.
     private var typingDisallowed: Set<ConversationID> = []
     func disallowTyping(in conversation: ConversationID) { typingDisallowed.insert(conversation) }
+    private var customEmojiAllowed: [ConversationID: Bool] = [:]
+    func simulateCustomEmoji(_ allowed: Bool, in conversation: ConversationID) { customEmojiAllowed[conversation] = allowed }
     func permissions(in conversation: ConversationID) -> ConversationPermissions {
-        let typing = !typingDisallowed.contains(conversation)
-        guard let room = rooms.first(where: { $0.id == conversation }), room.kind != .direct, room.id != "general" else { return .init(typing: typing) }
+        let typing = !typingDisallowed.contains(conversation), emoji = customEmojiAllowed[conversation]
+        guard let room = rooms.first(where: { $0.id == conversation }), room.kind != .direct, room.id != "general" else { return .init(typing: typing, customEmoji: emoji) }
         return ConversationPermissions(editProfile: true, manageMembers: true, typing: typing, editDetails: true, deleteSpace: true,
-                                       changeRoles: true, changeManagers: true, toggleHistory: true)
+                                       changeRoles: true, changeManagers: true, toggleHistory: true, customEmoji: emoji)
     }
     private var memberRoles: [ConversationID: [PersonID: MemberRole]] = [:]
     private var sections: [SidebarSection] = []

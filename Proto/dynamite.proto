@@ -29,6 +29,24 @@ message User {
   optional string name = 2;          // (purple)
   optional string avatar_url = 3;    // FIFE URL, may be scheme-relative
   optional string email = 4;
+  optional OrganizationInfo organization = 12;   // whose account: a personal one or a Workspace customer's
+}
+// Who an account or a conversation belongs to: a personal (consumer) account, or a Workspace customer.
+message OrganizationInfo {
+  message ConsumerInfo {}
+  message CustomerInfo {
+    message CustomerId { optional string customer_id = 1; }
+    optional CustomerId customer_id = 1;
+  }
+  oneof kind {
+    ConsumerInfo consumer = 1;
+    CustomerInfo customer = 2;
+  }
+}
+// Whether people outside the organisation can take part: Google Chat marks such a conversation "External".
+message GroupGuestAccessSettings {
+  enum State { GUEST_ACCESS_UNSPECIFIED = 0; GUEST_ACCESS_DISABLED = 1; GUEST_ACCESS_ENABLED = 2; }
+  optional State state = 1;
 }
 
 message SpaceId { optional string space_id = 1; }
@@ -430,6 +448,7 @@ message WorldItemLite {
     optional GroupDetails space_details = 8;   // a space's description and guidelines
   }
   optional GroupLite group_lite = 7;
+  optional GroupGuestAccessSettings guest_access = 10;   // ENABLED on a conversation with people from outside the organisation
   optional string avatar_url = 16;    // uploaded or monogram space image
   optional AvatarInfo avatar_info = 18; // space emoji, shown before avatar_url
   optional int32 group_type = 19;      // 2 a 1:1 DM with an app, 6 with a person, 4 a group DM or flat space, 11 Ask Gemini's session DM, 9 a shortcut
@@ -1279,6 +1298,7 @@ message GroupScopedCapabilities {
   optional bool can_trigger_typing_indicator = 15;   // Google answers set_typing_state with 403 where this is false
   optional bool can_toggle_history = 10;
   optional bool can_update_manager_roles = 60;
+  optional bool can_view_or_use_custom_emojis = 61;   // false where people outside the organisation take part
 }
 message GetGroupScopedCapabilitiesRequest {
   repeated MembershipId membership_ids = 1;   // mine in the group

@@ -74,6 +74,16 @@ extension AuthTests {
         let body = try #require(Self.sent(exchange, "get_group_scoped_capabilities").first)
         #expect(body.starts(with: Data([0x0A, 0x10, 0x0A, 0x06, 0x0A, 0x04, 0x0A, 0x02, 0x6D, 0x65, 0x1A, 0x06]) + Self.groupS1))
     }
+    /// Flag 61 says whether custom emoji can be used there: Google Chat sends false where people outside the
+    /// organisation take part, and refuses a custom emoji reaction there with HTTP 403.
+    @Test func customEmojiPermissionComesFromMyCapabilities() async throws {
+        let caps = Dynamite_GetGroupScopedCapabilitiesResponse.with { $0.entries = [.with { $0.capabilities.canViewOrUseCustomEmojis = false }] }
+        let (backend, _) = try await Self.connected([try Self.proto(caps)])
+        #expect(try await backend.permissions(in: "space/s1").customEmoji == false)
+        let unstated = try Self.proto(Dynamite_GetGroupScopedCapabilitiesResponse.with { $0.entries = [.with { $0.capabilities.canManageMembers = true }] })
+        let (other, _) = try await Self.connected([unstated])
+        #expect(try await other.permissions(in: "space/s1").customEmoji == nil)
+    }
     /// Flag 15 says whether I may send typing there; where it is false Google refuses set_typing_state with 403.
     @Test func typingPermissionComesFromMyCapabilities() async throws {
         let caps = Dynamite_GetGroupScopedCapabilitiesResponse.with { $0.entries = [.with { $0.capabilities.canTriggerTypingIndicator = false }] }

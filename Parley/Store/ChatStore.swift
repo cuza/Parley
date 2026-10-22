@@ -1388,6 +1388,24 @@ final class ChatStore {
         }
         return customEmoji
     }
+    /// Whether custom emoji can be used in `conversation`. Google Chat refuses them where people outside the organisation
+    /// take part: a reaction answers HTTP 403, a message loses the emoji.
+    /// The conversation's own capability where it was read (a space's or group's), its external mark until then.
+    func allowsCustomEmoji(in conversation: ConversationID) -> Bool {
+        permissions[conversation]?.customEmoji ?? (conversations.first { $0.id == conversation }?.external != true)
+    }
+    /// Whether `person` is from outside my organisation, as Google Chat marks them "External" in a member list.
+    func isExternal(_ person: Person) -> Bool {
+        var mine = me
+        if mine.organization == nil { mine.organization = members.values.lazy.flatMap { $0 }.first { $0.id == mine.id }?.organization }
+        return Self.external(person, to: mine)
+    }
+    /// As Google Chat decides it: someone whose organisation isn't mine. To a personal account nobody is; someone whose
+    /// organisation isn't known isn't called external.
+    nonisolated static func external(_ person: Person, to me: Person) -> Bool {
+        guard person.id != me.id, let theirs = person.organization, let mine = me.organization, mine != "consumer" else { return false }
+        return theirs != mine
+    }
     func loadCustomEmoji() async {
         if let customEmojiLoad { return await customEmojiLoad.value }
         let load = Task {
