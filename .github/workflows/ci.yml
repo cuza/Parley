@@ -1,10 +1,12 @@
 # Lints, builds and runs the unit tests on every push and pull request. UI tests need a signed-in desktop session and
-# stay local; the regression baseline tests skip themselves without PARLEY_BASELINE.
+# stay local; the regression baseline tests skip themselves without PARLEY_BASELINE. So do the suites that draw,
+# animate or live-resize windows: the runner's virtual display does none of those as a real screen does.
 name: CI
 
 # Changes that can't affect the build or the tests don't start a run.
 on:
   push:
+    branches: ['**']   # a release's tag points at a commit its branch push already tested
     paths-ignore: &no-code
       - '**.md'
       - 'Screenshots/**'
@@ -63,6 +65,9 @@ jobs:
             -scheme Parley \
             -destination 'platform=macOS' \
             -only-testing:ParleyTests \
+            -skip-testing:ParleyTests/AnimatedEmojiTests \
+            -skip-testing:ParleyTests/BlockDrawingTests \
+            -skip-testing:ParleyTests/MessageTableResizeTests \
             -derivedDataPath build/dd \
             -clonedSourcePackagesDirPath build/spm \
             CODE_SIGNING_ALLOWED=NO
