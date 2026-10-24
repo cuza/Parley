@@ -2,15 +2,8 @@ import XCTest
 
 /// Settings ▸ Notifications lists the demo's do not disturb schedule, and Edit opens its editor.
 @MainActor final class DndScheduleUITests: XCTestCase {
-    private func shot(_ window: XCUIElement, _ name: String) {
-        let attachment = XCTAttachment(screenshot: window.screenshot())
-        attachment.name = name; attachment.lifetime = .keepAlways
-        add(attachment)
-    }
     func testTheScheduleShowsInSettings() throws {
-        let app = XCUIApplication()
-        app.launchArguments = ["-uiTestingDemo"]
-        app.launch()
+        let app = launchDemo()
         XCTAssertTrue(app.windows.firstMatch.waitForExistence(timeout: 5))
         app.typeKey(",", modifierFlags: .command)
         let tab = app.toolbars.buttons["Notifications"].firstMatch

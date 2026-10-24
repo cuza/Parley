@@ -5,14 +5,13 @@ import XCTest
 /// that conversation's draft, unsent.
 @MainActor final class ShareSheetUITests: XCTestCase {
     func testSharedTextLandsInTheDraft() throws {
-        let app = XCUIApplication()
-        app.launchArguments = ["-uiTestingDemo"]
-        app.launch()
+        let app = launchDemo()
         XCTAssertTrue(app.windows.firstMatch.waitForExistence(timeout: 5))
         let text = "Lunch at 1 on Thursday?"
         let services = NSSharingService.sharingServices(forItems: [text])
         // Debug builds are "Parley Debug", so the installed Parley's own extension is never the one under test.
-        let parley = try XCTUnwrap(services.first { $0.title == "Parley Debug" }, "share services: \(services.map(\.title))")
+        let parley = try XCTUnwrap(
+            services.first { $0.title == "Parley Debug" }, "share services: \(services.map(\.title))")
         parley.perform(withItems: [text])
         let picker = app.textFields["Send to a conversation or person"]
         XCTAssertTrue(picker.waitForExistence(timeout: 10), "Parley asks for the conversation")
@@ -24,15 +23,15 @@ import XCTest
     }
     /// The hand-off alone: a pasteboard by name and the parley-debug://share link that names it.
     func testAShareLinkOpensThePicker() throws {
-        let app = XCUIApplication()
-        app.launchArguments = ["-uiTestingDemo"]
-        app.launch()
+        let app = launchDemo()
         XCTAssertTrue(app.windows.firstMatch.waitForExistence(timeout: 5))
         let name = "dev.cuza.Parley.share.uitest-\(UUID().uuidString)"
         let pasteboard = NSPasteboard(name: .init(name))
         pasteboard.clearContents()
         pasteboard.setString("From the share link", forType: .string)
         NSWorkspace.shared.open(URL(string: "parley-debug://share?pasteboard=\(name)")!)
-        XCTAssertTrue(app.textFields["Send to a conversation or person"].waitForExistence(timeout: 10), "Parley asks for the conversation")
+        XCTAssertTrue(
+            app.textFields["Send to a conversation or person"].waitForExistence(timeout: 10),
+            "Parley asks for the conversation")
     }
 }

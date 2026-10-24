@@ -11,30 +11,43 @@ final class ShareViewController: NSViewController {
     }
     private func handOff() async {
         let items = extensionContext?.inputItems as? [NSExtensionItem] ?? []
-        var texts: [String] = [], files: [URL] = []
+        var texts: [String] = []
+        var files: [URL] = []
         for item in items {
             for provider in item.attachments ?? [] {
-                if let url = await Self.url(provider, .fileURL) { files.append(url) }
-                else if let url = await Self.url(provider, .url) {
+                if let url = await Self.url(provider, .fileURL) {
+                    files.append(url)
+                } else if let url = await Self.url(provider, .url) {
                     // A page from Safari comes with its title: the title, then the link, as Messages shares it.
-                    let title = (item.attributedTitle ?? item.attributedContentText)?.string.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-                    texts.append(title.isEmpty || title == url.absoluteString ? url.absoluteString : title + "\n" + url.absoluteString)
+                    let title =
+                        (item.attributedTitle ?? item.attributedContentText)?.string.trimmingCharacters(
+                            in: .whitespacesAndNewlines) ?? ""
+                    texts.append(
+                        title.isEmpty || title == url.absoluteString
+                            ? url.absoluteString : title + "\n" + url.absoluteString)
+                } else if provider.hasItemConformingToTypeIdentifier(UTType.plainText.identifier),
+                    let text = try? await provider.loadItem(forTypeIdentifier: UTType.plainText.identifier) as? String
+                {
+                    texts.append(text)
+                } else if let file = await Self.file(provider) {
+                    files.append(file)
                 }
-                else if provider.hasItemConformingToTypeIdentifier(UTType.plainText.identifier),
-                        let text = try? await provider.loadItem(forTypeIdentifier: UTType.plainText.identifier) as? String { texts.append(text) }
-                else if let file = await Self.file(provider) { files.append(file) }
             }
-            if texts.isEmpty, files.isEmpty, let text = item.attributedContentText?.string, !text.isEmpty { texts.append(text) }
+            if texts.isEmpty, files.isEmpty, let text = item.attributedContentText?.string, !text.isEmpty {
+                texts.append(text)
+            }
         }
-        let name = "dev.cuza.Parley.share.\(UUID().uuidString)"
+        let name = "\(ShareHandOff.pasteboardPrefix).\(UUID().uuidString)"
         let pasteboard = NSPasteboard(name: .init(name))
         pasteboard.clearContents()
-        if files.isEmpty { pasteboard.setString(texts.joined(separator: "\n"), forType: .string) } else {
-            // Words beside files on a type of their own (the app's `Shared.textType`): the files' plain text is their names.
+        if files.isEmpty {
+            pasteboard.setString(texts.joined(separator: "\n"), forType: .string)
+        } else {
+            // Words beside files on a type of their own: the files' plain text is their names.
             var objects: [any NSPasteboardWriting] = files as [NSURL]
             if !texts.isEmpty {
                 let words = NSPasteboardItem()
-                words.setString(texts.joined(separator: "\n"), forType: .init("dev.cuza.Parley.shared-text"))
+                words.setString(texts.joined(separator: "\n"), forType: ShareHandOff.textType)
                 objects.append(words)
             }
             pasteboard.writeObjects(objects)
@@ -45,7 +58,8 @@ final class ShareViewController: NSViewController {
     }
     private static func url(_ provider: NSItemProvider, _ type: UTType) async -> URL? {
         guard provider.hasItemConformingToTypeIdentifier(type.identifier),
-              let item = try? await provider.loadItem(forTypeIdentifier: type.identifier) else { return nil }
+            let item = try? await provider.loadItem(forTypeIdentifier: type.identifier)
+        else { return nil }
         if let url = item as? URL { return url.isFileURL == (type == .fileURL) ? url : nil }
         if let data = item as? Data { return URL(dataRepresentation: data, relativeTo: nil) }
         return nil
@@ -56,9 +70,13 @@ final class ShareViewController: NSViewController {
         return await withCheckedContinuation { done in
             _ = provider.loadFileRepresentation(forTypeIdentifier: type) { url, _ in
                 guard let url else { return done.resume(returning: nil) }
-                let copy = FileManager.default.temporaryDirectory.appending(path: "\(UUID().uuidString)/\(provider.suggestedName.map { $0 + "." + url.pathExtension } ?? url.lastPathComponent)")
+                let copy = FileManager.default.temporaryDirectory.appending(
+                    path:
+                        "\(UUID().uuidString)/\(provider.suggestedName.map { $0 + "." + url.pathExtension } ?? url.lastPathComponent)"
+                )
                 do {
-                    try FileManager.default.createDirectory(at: copy.deletingLastPathComponent(), withIntermediateDirectories: true)
+                    try FileManager.default.createDirectory(
+                        at: copy.deletingLastPathComponent(), withIntermediateDirectories: true)
                     try FileManager.default.copyItem(at: url, to: copy)
                     done.resume(returning: copy)
                 } catch { done.resume(returning: nil) }

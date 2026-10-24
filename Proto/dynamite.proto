@@ -1,7 +1,7 @@
 // Parley's minimal Dynamite schema: only messages Parley uses.
 // Field numbers match current Google Chat traffic (2026-09) and purple-googlechat-cli @03eebe1.
 // "(purple)" = known only from purple-googlechat.
-// Regenerate: protoc --proto_path=Proto --swift_out=Parley/Dynamite/Proto Proto/dynamite.proto
+// Regenerate: protoc --proto_path=Proto --swift_out=ParleyKit/Sources/ParleyData/Dynamite/Proto Proto/dynamite.proto
 syntax = "proto2";
 package dynamite;
 
@@ -956,7 +956,7 @@ message EventBody {
     TOPIC_VIEWED = 4;                                 // a thread's read time moved: read here or on another device
     MARK_TOPIC_AS_UNREAD_UPDATED = 86;                // a thread marked unread, or the mark cleared (time 0), here or elsewhere
     MARK_AS_UNREAD = 37;                              // a conversation marked unread here or on another device
-    // Pushed to every session; see Research/PUSH_NOTIFY_AND_UNREAD_COUNTS.md and TOPIC_WORLD_AND_SETTINGS_EVENTS.md.
+    // Pushed to every session.
     TOPIC_MUTE_CHANGED = 9;                           // a thread muted or unmuted (Parley follows labels instead)
     WEB_PUSH_NOTIFICATION = 12;                       // Google Chat would alert for this message
     GROUP_UNREAD_SUBSCRIBED_TOPIC_COUNT_UPDATED = 13; // a conversation's unread followed threads changed

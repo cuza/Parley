@@ -26,32 +26,54 @@ import XCTest
     func testOpenConversation() async throws {
         let launch = definitions.entities["ConversationEntity"].makeReference(identifier: "launch")
         _ = try await definitions.intents["OpenConversationIntent"].makeIntent(target: launch).run()
-        // What Siri sees on screen afterwards: Launch crew's messages.
-        try await Task.sleep(for: .seconds(1))
-        let annotations = try await definitions.entities["SiriMessage"].viewAnnotations()
+        // What Siri sees on screen afterwards: Launch crew's messages, once the conversation has opened.
+        var annotations = try await definitions.entities["SiriMessage"].viewAnnotations()
+        for _ in 0..<50 {
+            if let first = annotations.first,
+                let shown = try? (first.entity.conversation as AnyAppEntity).displayName as String,
+                shown == "Launch crew"
+            {
+                break
+            }
+            try await Task.sleep(for: .milliseconds(100))
+            annotations = try await definitions.entities["SiriMessage"].viewAnnotations()
+        }
         let conversation: AnyAppEntity = try XCTUnwrap(annotations.first).entity.conversation
         XCTAssertEqual(try conversation.displayName as String, "Launch crew")
     }
     /// The Conversation menu's Mark as Read, Pin and Mute, as Shortcuts actions on a conversation.
     func testConversationActions() async throws {
         let sidebar = app.descendants(matching: .any)["sidebar"].firstMatch
-        func row(_ name: String) -> XCUIElement { sidebar.descendants(matching: .any).matching(NSPredicate(format: "label BEGINSWITH %@", name)).firstMatch }
+        func row(_ name: String) -> XCUIElement {
+            sidebar.descendants(matching: .any).matching(NSPredicate(format: "label BEGINSWITH %@", name)).firstMatch
+        }
         let entity = definitions.entities["ConversationEntity"]
         XCTAssertTrue(row("Alex Rivera").label.contains("unread"))
-        _ = try await definitions.intents["MarkConversationReadIntent"].makeIntent(conversation: entity.makeReference(identifier: "alex")).run()
-        let unread = sidebar.descendants(matching: .any).matching(NSPredicate(format: "label BEGINSWITH %@ AND label CONTAINS %@", "Alex Rivera", "unread")).firstMatch
+        _ = try await definitions.intents["MarkConversationReadIntent"].makeIntent(
+            conversation: entity.makeReference(identifier: "alex")
+        ).run()
+        let unread = sidebar.descendants(matching: .any).matching(
+            NSPredicate(format: "label BEGINSWITH %@ AND label CONTAINS %@", "Alex Rivera", "unread")
+        ).firstMatch
         XCTAssertTrue(unread.waitForNonExistence(timeout: 5), "Mark as Read")
 
         XCTAssertGreaterThan(row("General").frame.minY, row("Alex Rivera").frame.minY)
-        _ = try await definitions.intents["PinConversationIntent"].makeIntent(conversation: entity.makeReference(identifier: "general"), pinned: true).run()
-        let pinned = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in row("General").frame.minY < row("Alex Rivera").frame.minY }, object: nil)
-        XCTAssertEqual(XCTWaiter.wait(for: [pinned], timeout: 5), .completed, "Pin moves it into Pinned, above the direct messages")
+        _ = try await definitions.intents["PinConversationIntent"].makeIntent(
+            conversation: entity.makeReference(identifier: "general"), pinned: true
+        ).run()
+        let pinned = XCTNSPredicateExpectation(
+            predicate: NSPredicate { _, _ in row("General").frame.minY < row("Alex Rivera").frame.minY }, object: nil)
+        XCTAssertEqual(
+            XCTWaiter.wait(for: [pinned], timeout: 5), .completed, "Pin moves it into Pinned, above the direct messages"
+        )
 
         row("Engineering").click()
         app.menuBars.menuBarItems["Conversation"].click()
         XCTAssertTrue(app.menuItems["Unmute"].exists)
         app.typeKey(.escape, modifierFlags: [])
-        _ = try await definitions.intents["MuteConversationIntent"].makeIntent(conversation: entity.makeReference(identifier: "engineering"), muted: false).run()
+        _ = try await definitions.intents["MuteConversationIntent"].makeIntent(
+            conversation: entity.makeReference(identifier: "engineering"), muted: false
+        ).run()
         app.menuBars.menuBarItems["Conversation"].click()
         XCTAssertTrue(app.menuItems["Mute"].waitForExistence(timeout: 5), "Unmute")
         app.typeKey(.escape, modifierFlags: [])
@@ -60,7 +82,9 @@ import XCTest
     func testSiriDraftFillsTheComposer() async throws {
         let alex = try await definitions.entities["SiriPerson"].entities(matching: "Alex Rivera")
         let person = try XCTUnwrap(alex.first)
-        _ = try await definitions.intents["SiriDraftMessageIntent"].makeIntent(destination: person, content: "Lunch at 1?").run()
+        _ = try await definitions.intents["SiriDraftMessageIntent"].makeIntent(
+            destination: person, content: "Lunch at 1?"
+        ).run()
         let composer = app.textViews["composer"]
         XCTAssertTrue(composer.waitForExistence(timeout: 5))
         XCTAssertEqual(composer.value as? String, "Lunch at 1?")
@@ -74,16 +98,21 @@ import XCTest
     func testSendToASpace() async throws {
         let spaces = try await definitions.entities["ConversationEntity"].entities(matching: "Engineering")
         let engineering = try XCTUnwrap(spaces.first)
-        _ = try await definitions.intents["SendMessageIntent"].makeIntent(text: "Deploy at 3", conversation: engineering).run()
+        _ = try await definitions.intents["SendMessageIntent"].makeIntent(
+            text: "Deploy at 3", conversation: engineering
+        ).run()
         _ = try await definitions.intents["OpenConversationIntent"].makeIntent(target: engineering).run()
-        let sent = app.descendants(matching: .any).matching(NSPredicate(format: "value CONTAINS %@ OR label CONTAINS %@", "Deploy at 3", "Deploy at 3"))
+        let sent = app.descendants(matching: .any).matching(
+            NSPredicate(format: "value CONTAINS %@ OR label CONTAINS %@", "Deploy at 3", "Deploy at 3"))
         XCTAssertTrue(sent.firstMatch.waitForExistence(timeout: 5), "the message is in the space")
     }
     /// A space named to Siri is a recipient: the draft opens the space with the words in its composer.
     func testSiriDraftToASpace() async throws {
         let found = try await definitions.entities["SiriPerson"].entities(matching: "Engineering")
         let engineering = try XCTUnwrap(found.first)
-        _ = try await definitions.intents["SiriDraftMessageIntent"].makeIntent(destination: engineering, content: "Deploy at 3").run()
+        _ = try await definitions.intents["SiriDraftMessageIntent"].makeIntent(
+            destination: engineering, content: "Deploy at 3"
+        ).run()
         // The demo's Engineering has no messages to annotate; the open composer, Engineering's, holds the draft.
         XCTAssertTrue(app.textViews["composer"].waitForExistence(timeout: 5))
         XCTAssertEqual(app.textViews["composer"].value as? String, "Deploy at 3")

@@ -12,8 +12,12 @@ import SwiftUI
     nonisolated static func shouldStart(live: Bool, debug: Bool) -> Bool { live && !debug }
 
     init(start: Bool) {
-        guard start else { controller = nil; return }
-        let controller = SPUStandardUpdaterController(startingUpdater: true, updaterDelegate: nil, userDriverDelegate: nil)
+        guard start else {
+            controller = nil
+            return
+        }
+        let controller = SPUStandardUpdaterController(
+            startingUpdater: true, updaterDelegate: nil, userDriverDelegate: nil)
         self.controller = controller
         controller.updater.publisher(for: \.canCheckForUpdates).receive(on: RunLoop.main).assign(to: &$canCheck)
     }

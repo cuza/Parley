@@ -15,8 +15,8 @@ settings:
     STRING_CATALOG_GENERATE_SYMBOLS: YES
     ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS: YES
     # The app's and the share extension's version, each alone on its line.
-    MARKETING_VERSION: "1.7.20"
-    CURRENT_PROJECT_VERSION: "81"
+    MARKETING_VERSION: "1.8.0"
+    CURRENT_PROJECT_VERSION: "82"
     PARLEY_URL_SCHEME: parley   # the share extension's hand-off link
     PARLEY_DISPLAY_NAME: Parley   # the app's and the share extension's name
   configs:
@@ -24,12 +24,11 @@ settings:
       PARLEY_URL_SCHEME: parley-debug   # so a Debug build's share sheet never reaches the installed copy
       PARLEY_DISPLAY_NAME: Parley Debug
 packages:
-  SwiftProtobuf:
-    url: https://github.com/apple/swift-protobuf
-    exactVersion: 1.38.1
   Sparkle:
     url: https://github.com/sparkle-project/Sparkle
     exactVersion: 2.10.0
+  ParleyKit:
+    path: ParleyKit   # Domain and Data, as modules of their own; Data brings in SwiftProtobuf
 targets:
   Parley:
     type: application
@@ -37,8 +36,12 @@ targets:
     sources:
       - path: Parley
         type: syncedFolder
+      - ParleyShare/ShareHandOff.swift   # shared with the share extension
     dependencies:
-      - package: SwiftProtobuf
+      - package: ParleyKit
+        product: ParleyDomain
+      - package: ParleyKit
+        product: ParleyData
       - package: Sparkle
       - target: ParleyShare
         embed: true

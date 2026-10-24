@@ -3,13 +3,13 @@ import XCTest
 /// Two conversations opened in new windows share one window as tabs; the main window stays apart.
 @MainActor final class ConversationTabsUITests: XCTestCase {
     func testConversationWindowsOpenAsTabs() throws {
-        let app = XCUIApplication()
-        app.launchArguments = ["-uiTestingDemo"]
-        app.launch()
+        let app = launchDemo()
         XCTAssertTrue(app.windows.firstMatch.waitForExistence(timeout: 5))
         // Windows restored from an earlier run would cover the sidebar: keep only the main one.
         for _ in 0..<10 {
-            guard let extra = app.windows.allElementsBoundByIndex.first(where: { $0.identifier != "main" }) else { break }
+            guard let extra = app.windows.allElementsBoundByIndex.first(where: { $0.identifier != "main" }) else {
+                break
+            }
             extra.buttons["_XCUI:CloseWindow"].click()
         }
         let settingsWindow = app.windows.matching(identifier: "com_apple_SwiftUI_Settings_window").firstMatch
@@ -18,16 +18,23 @@ import XCTest
             app.menuBars.menuBarItems["Window"].click()
             app.menuItems["Parley"].firstMatch.click()
             let sidebar = app.descendants(matching: .any)["sidebar"].firstMatch
-            sidebar.descendants(matching: .any).matching(NSPredicate(format: "label BEGINSWITH %@", name)).firstMatch.click()
+            sidebar.descendants(matching: .any).matching(NSPredicate(format: "label BEGINSWITH %@", name)).firstMatch
+                .click()
             let menu = app.menuBars.menuBarItems["Conversation"]
             menu.click()
             menu.menuItems["Open in New Window"].click()
-            sleep(1)
+            let tab = app.windows.firstMatch.descendants(matching: .any).matching(
+                NSPredicate(format: "title == %@ OR label == %@", name, name)
+            ).firstMatch
+            XCTAssertTrue(tab.waitForExistence(timeout: 5), "\(name) opened in a window")
         }
-        let shot = XCTAttachment(screenshot: app.windows.firstMatch.screenshot()); shot.name = "tabs"; shot.lifetime = .keepAlways; add(shot)
+        shot(app.windows.firstMatch, "tabs")
         // Two conversation tabs named after their conversations, in one window beside the main window.
         for name in ["Maria Chen", "Alex Rivera"] {
-            XCTAssertTrue(app.windows.firstMatch.descendants(matching: .any).matching(NSPredicate(format: "title == %@ OR label == %@", name, name)).firstMatch.exists, "a tab named \(name)")
+            XCTAssertTrue(
+                app.windows.firstMatch.descendants(matching: .any).matching(
+                    NSPredicate(format: "title == %@ OR label == %@", name, name)
+                ).firstMatch.exists, "a tab named \(name)")
         }
         XCTAssertEqual(app.windows.count, 2, "the main window and the tabbed conversation window")
         // A tab moved out to its own window merges back with Window ▸ Merge All Windows; the main window stays apart.
@@ -38,15 +45,19 @@ import XCTest
         app.menuItems["Merge All Windows"].click()
         // The merge animates; on a busy run it takes longer than a fixed pause.
         let merged = XCTNSPredicateExpectation(predicate: NSPredicate(format: "count == 2"), object: app.windows)
-        XCTAssertEqual(XCTWaiter.wait(for: [merged], timeout: 5), .completed, "merged back into one tabbed window, beside the main window")
+        XCTAssertEqual(
+            XCTWaiter.wait(for: [merged], timeout: 5), .completed,
+            "merged back into one tabbed window, beside the main window")
         // Settings ▸ Appearance has the switch, on by default.
         app.typeKey(",", modifierFlags: .command)
         app.toolbars.buttons["Appearance"].firstMatch.click()
-        let title = NSPredicate(format: "value == %@ OR label == %@", "Open conversation windows as tabs", "Open conversation windows as tabs")
+        let title = NSPredicate(
+            format: "value == %@ OR label == %@", "Open conversation windows as tabs",
+            "Open conversation windows as tabs")
         let row = app.groups.containing(title).firstMatch
         XCTAssertTrue(row.waitForExistence(timeout: 5))
         let settings = app.windows.containing(title).firstMatch
-        let page = XCTAttachment(screenshot: settings.screenshot()); page.name = "settings"; page.lifetime = .keepAlways; add(page)
+        shot(settings, "settings")
         settingsWindow.buttons["_XCUI:CloseWindow"].click()
     }
 }

@@ -7,17 +7,19 @@ import XCTest
         let app = XCUIApplication()
         app.launchArguments = ["-uiTestingFormattedThread"]
         app.launch()
-        app.descendants(matching: .any).matching(NSPredicate(format: "label BEGINSWITH %@", "Assistant")).firstMatch.click()
-        let replies = app.descendants(matching: .any).matching(NSPredicate(format: "label CONTAINS %@", "1 reply")).firstMatch
+        app.descendants(matching: .any).matching(NSPredicate(format: "label BEGINSWITH %@", "Assistant")).firstMatch
+            .click()
+        let replies = app.descendants(matching: .any).matching(NSPredicate(format: "label CONTAINS %@", "1 reply"))
+            .firstMatch
         XCTAssertTrue(replies.waitForExistence(timeout: 5), "the thread link never showed")
         replies.click()
         XCTAssertTrue(app.staticTexts["Thread"].waitForExistence(timeout: 5), "the thread panel never opened")
-        sleep(3)   // the crash came a moment after the panel laid out
+        sleep(3)  // nothing to wait for: the crash came a moment after the panel laid out, so this gives it the time
         XCTAssertEqual(app.state, .runningForeground, "the app quit after opening the thread")
         // The pane widens the window instead of squeezing the conversation.
         let timeline = app.scrollViews["timeline"]
         XCTAssertTrue(timeline.exists)
-        XCTAssertGreaterThanOrEqual(timeline.frame.width, 380, "the conversation was squeezed to \(timeline.frame.width) pt")
+        XCTAssertGreaterThanOrEqual(
+            timeline.frame.width, 380, "the conversation was squeezed to \(timeline.frame.width) pt")
     }
 }
-

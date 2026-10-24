@@ -79,20 +79,74 @@ xcodebuild test -project Parley.xcodeproj -scheme Parley -only-testing:ParleyTes
 
 Unit tests use Swift Testing and run against a fake backend with stubbed network requests, so they never reach Google. UI tests (`ParleyUITests`) launch the app with the fake backend through launch arguments such as `-uiTestingLongHistory`, `-uiTestingManyConversations` and `-uiTestingFormattedThread`.
 
+### Continuous integration
+
+GitHub Actions runs `.github/workflows/ci.yml` on every push and pull request. It checks that the code is formatted, lints with SwiftLint (errors fail, warnings don't), generates the project and runs the unit tests without code signing. UI tests need a signed-in desktop session, so CI doesn't run them. The workflow uses GitHub's Xcode 27 runner image, which is still a preview, so treat its result as informational for now.
+
+## Formatting and linting
+
+[swift-format](https://github.com/swiftlang/swift-format), which comes with Xcode, formats the code: 4-space indentation and 120 columns, configured in `.swift-format`. [SwiftLint](https://github.com/realm/SwiftLint) then checks it with its default rules, configured in `.swiftlint.yml`, and leaves layout to the formatter. A pre-commit hook formats the Swift files each commit changes, then lints them. Lint errors stop the commit, and warnings are listed. A file with unstaged changes is checked instead of reformatted, so the commit never picks up unstaged edits. Turn the hook on once per clone:
+
+```sh
+brew install swiftlint
+git config core.hooksPath .githooks
+```
+
+To format everything by hand, as CI checks it (protoc generates the files under `Proto/`, so they're left alone):
+
+```sh
+xcrun swift-format format -i --parallel $(git ls-files '*.swift' | grep -v '/Proto/')
+```
+
+Run `swiftlint` in the repository to lint everything.
+
+## Architecture
+
+Parley follows Clean Architecture in SwiftUI's own terms. Views read state from `@Observable` models and call actions on `ChatStore`. The store calls Google through the backend protocols in Domain, and Google's answers and pushed events come back as `ChatEvent`s, which the store routes to the model that owns them.
+
+The code is in layers, and each layer only uses the ones inside it:
+
+| Layer | Holds | Uses |
+|---|---|---|
+| `Domain` | Models, errors, the backend protocols | Foundation only |
+| `Data` | The Google Chat client, Google's other services, sign-in, the launch cache | Domain |
+| `Store` | `ChatStore` and the models it owns: presence, lookups, drafting, navigation, history, rooms | Domain |
+| `Shared` | Views and helpers several features use | Domain |
+| `Features` | One folder per feature: its views and its `ChatStore+<Feature>.swift` actions | Domain, Store, Shared, Intents |
+| `App`, `Intents` | The entry point, menus, notifications, App Intents | Everything |
+
+Domain and Data are modules of the local package `ParleyKit` (`ParleyDomain`, `ParleyData`), so the compiler enforces the rule for them: Domain can't see Data or the app, and Data sees only Domain. The other layers share the app target, where `ParleyTests/Architecture/DependencyRuleTests` checks the rule on every test run.
+
+Two exceptions are deliberate. The sign-in feature works with the session directly, and the fake backend, in `Parley/Fake`, may use any layer.
+
+A store model holds one area's state and the logic that needs nothing else. Actions that need the backend or several models are `ChatStore` extensions in the feature they serve. Switching accounts replaces the models.
+
+To check that a refactor changes nothing, `ParleyTests/Regression/RegressionBaselineTests` records the demo workspace's screens, message layouts and a scripted session, then compares later runs. Record before the change, compare after, and run it on its own:
+
+```sh
+TEST_RUNNER_PARLEY_BASELINE=/path/to/baselines TEST_RUNNER_PARLEY_BASELINE_RECORD=1 xcodebuild test -project Parley.xcodeproj -scheme Parley -destination 'platform=macOS' -only-testing:ParleyTests/RegressionBaselineTests
+TEST_RUNNER_PARLEY_BASELINE=/path/to/baselines xcodebuild test -project Parley.xcodeproj -scheme Parley -destination 'platform=macOS' -only-testing:ParleyTests/RegressionBaselineTests
+```
+
 ## Project layout
 
 | Path | Contents |
 |---|---|
-| `Parley/App` | App entry point, scenes and Sparkle updates |
-| `Parley/Domain` | Models and the `ChatBackend` protocol |
-| `Parley/Dynamite` | The Google Chat API client, with requests, the realtime channel, mapping and sign-in |
-| `Parley/Store` | `ChatStore`, notifications, sign-in flow, launch cache, diagnostics |
-| `Parley/UI` | SwiftUI views and the AppKit timeline |
+| `Parley/App` | App entry point, scenes, menu commands, notifications and Sparkle updates |
+| `ParleyKit` | The local package with the inner layers as modules: `ParleyDomain` and `ParleyData` |
+| `ParleyKit/Sources/ParleyDomain` | Models, errors and the backend protocols. Foundation only |
+| `ParleyKit/Sources/ParleyData/Session` | Sign-in, the stored session and request signing |
+| `ParleyKit/Sources/ParleyData/Dynamite` | The Google Chat client: backend, mapping, realtime channel and the generated protobuf code |
+| `ParleyKit/Sources/ParleyData/Google` | Google's other services (Drive suggestions, People, Contacts) |
+| `ParleyKit/Sources/ParleyData/Cache` | The launch cache |
+| `Parley/Fake` | `FakeBackend`: the demo workspace and the tests' backend |
+| `Parley/Store` | `ChatStore` and the models it owns (presence, lookups, drafts, navigation, history, conversations) |
+| `Parley/Shared` | Views and helpers several features use |
+| `Parley/Features/<Name>` | One folder per feature: its views and its `ChatStore+<Name>.swift` actions |
 | `Parley/Intents` | App Intents for Shortcuts, Spotlight and Siri |
 | `ParleyShare` | The Share menu extension |
-| `Parley/Preview` | `FakeBackend`, used by previews and tests |
-| `Proto` | The protobuf schema; regenerate the Swift code with `protoc --proto_path=Proto --swift_out=Parley/Dynamite/Proto Proto/dynamite.proto` |
-| `ParleyTests`, `ParleyUITests` | Unit and UI tests |
+| `Proto` | The protobuf schema; regenerate the Swift code with `protoc --proto_path=Proto --swift_out=ParleyKit/Sources/ParleyData/Dynamite/Proto Proto/dynamite.proto` |
+| `ParleyTests`, `ParleyUITests` | Unit and UI tests; unit tests mirror `Parley/`'s folders |
 
 ## Acknowledgments
 

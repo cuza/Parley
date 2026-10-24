@@ -1,20 +1,17 @@
 import AppIntents
+import ParleyData
+import ParleyDomain
 import SwiftUI
 
 @main
 struct ParleyApp: App {
-    // The test host launches this app; keep it off the network and away from the real cache.
-    // UI tests launch it with -uiTestingLongHistory: a long, paged fake history for scroll tests;
-    // -uiTestingManyConversations: 320 more conversations, for sidebar tests.
-    // -uiTestingDemo: the demo workspace (README screenshots), with -uiTestingDark for dark mode, -uiTestingHome to
-    // open on Home, as a real launch does, and -uiTestingTyping for someone typing.
     @State private var store: ChatStore
     @NSApplicationDelegateAdaptor private var appDelegate: AppDelegate
     @State private var signIn: SignInFlow
     private let authorizer: WebSessionAuthorizer
     private let webSignIn: WebViewSignIn
     private let updates: Updates
-    private let spotlight: ConversationSpotlight?   // the signed-in account's conversations; none for demo and test runs
+    private let spotlight: ConversationSpotlight?  // the signed-in account's conversations; none for demo and test runs
     /// Conversation and thread windows come back at launch, except in test runs: a window left by an earlier test would
     /// cover the main window the next test clicks in.
     private let restoresWindows: SceneRestorationBehavior
@@ -22,64 +19,29 @@ struct ParleyApp: App {
         AppearanceMode.apply()
         let authorizer = WebSessionAuthorizer()
         self.authorizer = authorizer
-        let store: ChatStore
-        var live = false
-        // The test and demo switches exist in Debug builds only: a release build always runs the real account.
-        #if DEBUG
-        let arguments = ProcessInfo.processInfo.arguments, testHost = ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil
-        #else
-        let arguments: [String] = [], testHost = false
-        #endif
-        restoresWindows = testHost || arguments.contains(where: { $0.hasPrefix("-uiTesting") }) ? .disabled : .automatic
-        // Tests and the demo workspaces keep no pictures on disk: they'd share the Debug build's folder.
-        if testHost
-            || arguments.contains(where: { $0.hasPrefix("-uiTesting") }) { ImageCache.directory = nil; CardLayout.sizesFile = nil }
-        if arguments.contains("-uiTestingLongHistory") {
-            store = ChatStore(backend: FakeBackend(longHistory: 600, latency: .milliseconds(300)))
-        } else if arguments.contains("-uiTestingFormattedThread") {
-            store = ChatStore(backend: FakeBackend(formattedThread: true))
-        } else if arguments.contains("-uiTestingManyConversations") {
-            for key in ["collapsedSidebarSections", SidebarLimit.enabledKey] { UserDefaults.standard.removeObject(forKey: key) }
-            store = ChatStore(backend: FakeBackend(manyConversations: 320))
-        } else if testHost || arguments.contains("-uiTestingDemo") {
-            let fake = FakeBackend()
-            store = ChatStore(backend: fake)
-            // Maria keeps typing in Design studio, Maria and Alex in Launch crew, and Gemini keeps working, as their pushes repeat.
-            if arguments.contains("-uiTestingTyping") {
-                Task {
-                    while true {
-                        await fake.simulateTyping("maria", in: "design")
-                        await fake.simulateTyping("maria", in: "launch")
-                        await fake.simulateTyping("alex", in: "launch")
-                        await fake.simulateActivity("gemini", in: "gemini", label: "Collecting info")
-                        try? await Task.sleep(for: .seconds(3))
-                    }
-                }
-            }
-            RemoteImage.preload(FakeBackend.demoIcons)
-            if arguments.contains("-uiTestingDemo") {   // the README shots don't follow the Mac's appearance
-                NSApplication.shared.appearance = NSAppearance(named: arguments.contains("-uiTestingDark") ? .darkAqua : .aqua)
-            }
-            if arguments.contains("-uiTestingHome") { store.shortcut = .home }   // as a real launch opens
-        } else {
-            live = true
-            store = ChatStore(backend: DynamiteBackend(authorizer: authorizer), cache: .dynamite)
-            store.shortcut = LaunchLanding.current.shortcut   // the UI-testing workspaces keep opening a conversation
-            _ = SystemNotifier(store: store)   // the store keeps it; registering now catches the click that launched the app
-        }
+        let (store, live, restoresWindows) = Self.launchStore(authorizer: authorizer)
+        self.restoresWindows = restoresWindows
         store.onBadge = { NSApplication.shared.dockTile.badgeLabel = $0 }
-        NotificationCenter.default.addObserver(forName: NSApplication.didBecomeActiveNotification, object: nil, queue: .main) { _ in
+        store.undoManager = { NSApplication.shared.keyWindow?.undoManager }  // Edit ▸ Undo in the window the user acted in
+        store.clearDiskCaches = {
+            for folder in [AttachmentFiles.defaultFolder, ImageCache.directory].compactMap({ $0 }) {
+                try? FileManager.default.removeItem(at: folder)
+            }
+        }
+        NotificationCenter.default.addObserver(
+            forName: NSApplication.didBecomeActiveNotification, object: nil, queue: .main
+        ) { _ in
             Task { @MainActor in await store.appBecameActive() }
         }
         _store = State(initialValue: store)
         spotlight = live ? ConversationSpotlight() : nil
         if live, #available(macOS 27, *) {
             store.sent = { [weak store] id in
-                guard let store, let room = store.conversations.first(where: { $0.id == id }) else { return }
+                guard let store, let room = store.rooms.conversations.first(where: { $0.id == id }) else { return }
                 SiriDonation.donate(room, me: store.me.id)
             }
         }
-        AppDependencyManager.shared.add(dependency: store)   // what Shortcuts' and Siri's actions act on
+        AppDependencyManager.shared.add(dependency: store)  // what Shortcuts' and Siri's actions act on
         let webSignIn = WebViewSignIn()
         self.webSignIn = webSignIn
         let signIn = SignInFlow(browser: webSignIn, importer: authorizer)
@@ -99,245 +61,107 @@ struct ParleyApp: App {
             }
         }
         _signIn = State(initialValue: signIn)
-        // A mouse's side buttons (3 back, 4 forward) walk the Go menu's history, as they do in Safari and Finder.
-        NSEvent.addLocalMonitorForEvents(matching: .otherMouseDown) { event in
-            guard let forward = [3: false, 4: true][event.buttonNumber] else { return event }
-            Task { forward ? await store.goForward() : await store.goBack() }
+        NSEvent.addLocalMonitorForEvents(matching: [.otherMouseDown, .swipe]) { event in
+            guard let step = HistoryStep(event) else { return event }
+            Task { step == .forward ? await store.goForward() : await store.goBack() }
             return nil
         }
         // Since macOS 13 tables estimate unmeasured row heights, which moves rows when older pages land above;
         // MessageTable caches real heights, so opt out as Apple's AppKit release notes describe.
         UserDefaults.standard.set(false, forKey: "NSTableViewCanEstimateRowHeights")
         #if DEBUG
-        let debug = true
+            let debug = true
         #else
-        let debug = false
+            let debug = false
         #endif
         updates = Updates(start: Updates.shouldStart(live: live, debug: debug))
     }
     var body: some Scene {
         Window("Parley", id: "main") {
-            ChatView(store: store)
+            ChatView()
+                .environment(store)
                 .environment(signIn)
                 .modifier(WebSignInPresenter(flow: signIn, web: webSignIn))
-                .onReceive(NotificationCenter.default.publisher(for: NSApplication.willTerminateNotification)) { _ in signIn.cancel(); store.flush() }
+                .onReceive(NotificationCenter.default.publisher(for: NSApplication.willTerminateNotification)) { _ in
+                    signIn.cancel()
+                    store.flush()
+                }
                 // Leaving the composer, as Google Chat's web client saves its draft when you click away.
-                .onReceive(NotificationCenter.default.publisher(for: NSApplication.didResignActiveNotification)) { _ in store.saveDrafts() }
-                .onReceive(NotificationCenter.default.publisher(for: NSWindow.didResignKeyNotification)) { _ in store.saveDrafts() }
-                .onChange(of: store.conversations, initial: true) { _, rooms in Task { await spotlight?.update(rooms, me: store.me.id) } }
+                .onReceive(NotificationCenter.default.publisher(for: NSApplication.didResignActiveNotification)) { _ in
+                    store.saveDrafts()
+                }
+                .onReceive(NotificationCenter.default.publisher(for: NSWindow.didResignKeyNotification)) { _ in
+                    store.saveDrafts()
+                }
+                .onChange(of: store.rooms.conversations, initial: true) { _, rooms in
+                    Task { await spotlight?.update(rooms, me: store.me.id) }
+                }
                 .onAppear {
                     appDelegate.beforeQuit = { store.saveDrafts() }
                     appDelegate.openURL = { url in
-                        if let shared = Shared(link: url) { store.sharing = shared } else { Task { await store.open(url: url) } }
+                        if let shared = Shared(link: url) {
+                            store.sharing = shared
+                        } else {
+                            Task { await store.open(url: url) }
+                        }
                     }
                     appDelegate.shareService.received = { store.sharing = $0 }
                     appDelegate.dockMenu = {
-                        DockMenu.make(store.dockConversations,
-                                      open: { id in NSApp.activate(); Task { await store.select(id) } },
-                                      markAllRead: { Task { await store.markAllRead() } })
+                        DockMenu.make(
+                            store.dockConversations,
+                            open: { id in
+                                NSApp.activate()
+                                Task { await store.select(id) }
+                            },
+                            markAllRead: { Task { await store.markAllRead() } })
                     }
                 }
         }
-            .defaultSize(width: 1000, height: 650)
-            .commands {
-                SidebarCommands()   // View ▸ Show/Hide Sidebar (⌃⌘S): the sidebar can always come back, whatever the toolbar shows
-                ToolbarCommands()   // View ▸ Show/Hide Toolbar and Customize Toolbar…, as Mail has them
-                CommandGroup(after: .appInfo) { CheckForUpdatesItem(updates: updates) }
-                CommandGroup(replacing: .newItem) {
-                    Button("New Chat") { store.newChatRequests += 1 }.keyboardShortcut("n")
-                    Button("New Space…") { store.newSpaceRequests += 1 }.keyboardShortcut("n", modifiers: [.command, .shift])
-                    MeetLinkMenuItem(store: store)
-                }
-                CommandGroup(replacing: .help) { DiagnosticsMenuItem() }
-                ChatMenuCommands(store: store)
+        .defaultSize(width: 1000, height: 650)
+        .commands {
+            SidebarCommands()  // View ▸ Show/Hide Sidebar (⌃⌘S): the sidebar can always come back, whatever the toolbar shows
+            ToolbarCommands()  // View ▸ Show/Hide Toolbar and Customize Toolbar…, as Mail has them
+            CommandGroup(after: .appInfo) { CheckForUpdatesItem(updates: updates) }
+            CommandGroup(replacing: .newItem) {
+                Button("New Chat") { store.newChatRequests += 1 }.keyboardShortcut("n")
+                Button("New Space…") { store.newSpaceRequests += 1 }.keyboardShortcut(
+                    "n", modifiers: [.command, .shift])
+                MeetLinkMenuItem().environment(store)
             }
+            CommandGroup(replacing: .help) { DiagnosticsMenuItem() }
+            ChatMenuCommands(store: store)
+        }
         WindowGroup(for: ConversationID.self) { $id in
             // The tab bar's + opens one without a conversation: it offers the palette, and the pick fills it.
-            if let id = id { ChatView(store: store, fixedConversation: id).environment(signIn) }
-            else { NewTab(store: store) { id = $0 } }
+            if let id = id {
+                ChatView(fixedConversation: id).environment(store).environment(signIn)
+            } else {
+                NewTab { id = $0 }.environment(store)
+            }
         }
-            .defaultSize(width: 520, height: 680)
-            .windowResizability(.contentMinSize)   // no narrower than the timeline and its open side pane
-            .restorationBehavior(restoresWindows)
+        .defaultSize(width: 520, height: 680)
+        .windowResizability(.contentMinSize)  // no narrower than the timeline and its open side pane
+        .restorationBehavior(restoresWindows)
         WindowGroup(for: ThreadRef.self) { $ref in
-            if let ref { ThreadWindow(store: store, ref: ref).environment(signIn) }
+            if let ref { ThreadWindow(ref: ref).environment(store).environment(signIn) }
         }
-            .defaultSize(width: 420, height: 640)
-            .windowResizability(.contentMinSize)
-            .restorationBehavior(restoresWindows)
-        Settings { SettingsView(store: store).environment(signIn) }
+        .defaultSize(width: 420, height: 640)
+        .windowResizability(.contentMinSize)
+        .restorationBehavior(restoresWindows)
+        Settings { SettingsView().environment(store).environment(signIn) }
         // Opened from Settings ▸ Advanced and Help ▸ Report a Problem, not the Window menu.
         Window("Connection Diagnostics", id: "connection-diagnostics") {
-            ConnectionDiagnosticsView(store: store, authorizer: authorizer).environment(signIn)
+            ConnectionDiagnosticsView(model: ConnectionDiagnostics(authorizer: authorizer)).environment(store)
+                .environment(signIn)
         }
-            .defaultSize(width: 560, height: 720)
-            .commandsRemoved()
+        .defaultSize(width: 560, height: 720)
+        .commandsRemoved()
     }
 }
 
-/// The window's shortcuts as menu items, so the menus and Help's search list them.
-struct ChatMenuCommands: Commands {
-    let store: ChatStore
-    @FocusedValue(\.chatCommands) private var chat
-    @FocusedValue(\.openFocusedInWindow) private var openFocused
-    var body: some Commands {
-        CommandGroup(after: .textEditing) {
-            Button("Search Messages…") { chat?.find?() }.keyboardShortcut("f").disabled(chat?.find == nil)
-            Button("Edit Last Message") { chat?.editLast() }.keyboardShortcut("e").disabled(chat == nil)
-        }
-        CommandGroup(after: .sidebar) {
-            Button("Conversation Info") { chat?.info() }.keyboardShortcut("i", modifiers: [.command, .shift]).disabled(chat == nil)
-            Divider()
-            // As Mail's: message text in the timeline and composer, saved as a setting.
-            Button("Actual Size") { TextSize.set(1) }.keyboardShortcut("0")
-            Button("Bigger") { TextSize.set(TextSize.next(from: TextSize.scale, by: 1)) }.keyboardShortcut("+")
-            Button("Smaller") { TextSize.set(TextSize.next(from: TextSize.scale, by: -1)) }.keyboardShortcut("-")
-        }
-        CommandGroup(after: .newItem) {
-            // As Safari's: a tab beside the conversation window in front, showing the conversation palette.
-            Button("New Tab") { NSApp.sendAction(#selector(NSResponder.newWindowForTab(_:)), to: nil, from: nil) }.keyboardShortcut("t")
-            Divider()
-            Button("Attach Files…") { chat?.attach?() }.keyboardShortcut("a", modifiers: [.command, .shift]).disabled(chat?.attach == nil)
-        }
-        CommandMenu("Go") {
-            Button("Back") { Task { await store.goBack() } }.keyboardShortcut("[").disabled(!store.canGoBack)
-            Button("Forward") { Task { await store.goForward() } }.keyboardShortcut("]").disabled(!store.canGoForward)
-            Divider()
-            Button("Jump to Conversation…") { chat?.jump() }.keyboardShortcut("k").disabled(chat == nil)
-            // ⌥⌘, not ⌥: ⌥↑/⌥↓ move by paragraph in every text field.
-            Button("Next Unread") { chat?.unread(true) }.keyboardShortcut(.downArrow, modifiers: [.option, .command]).disabled(chat == nil)
-            Button("Previous Unread") { chat?.unread(false) }.keyboardShortcut(.upArrow, modifiers: [.option, .command]).disabled(chat == nil)
-        }
-        ConversationMenu(store: store, chat: chat, openFocused: openFocused)
-        FormatMenu(composer: ComposerFocus.shared.composer)
-    }
-}
-
-/// Conversation: what the sidebar's menu does to a conversation, for the one on screen, as Mail's Mailbox and Message
-/// menus act on what is open. Leave and Block ask first, in the window.
-struct ConversationMenu: Commands {
-    let store: ChatStore
-    let chat: ChatCommands?
-    var openFocused: FocusedOpen? = nil   // what has the keyboard: rows selected in Home, Mentions or Starred, or the thread pane
-    var body: some Commands {
-        CommandMenu("Conversation") {
-            let room = chat?.room
-            Button(room.map { $0.unread > 0 } == true ? "Mark as Read" : "Mark as Unread") {
-                guard let room else { return }
-                Task { if room.unread > 0 { await store.markRead(room.id) } else { await store.markUnread(room.id) } }
-            }.keyboardShortcut("u", modifiers: [.command, .shift]).disabled(room == nil)
-            Button("Mark All as Read") { Task { await store.markAllRead() } }
-                .keyboardShortcut("u", modifiers: [.command, .shift, .option]).disabled(store.unreadCount == 0)
-            Divider()
-            Button(room?.pinned == true ? "Unpin" : "Pin") { if let room { Task { await store.setPinned(!room.pinned, room.id) } } }.disabled(room == nil)
-            Button(room?.muted == true ? "Unmute" : "Mute") { if let room { Task { await store.setMuted(!room.muted, room.id) } } }.disabled(room == nil)
-            if let room { NotificationLevelPicker(store: store, room: room) } else { Menu("Notifications") {}.disabled(true) }
-            Divider()
-            Button(chat?.threadsShown == true ? "Hide Threads" : "Show Threads") { chat?.threads?() }
-                .keyboardShortcut("t", modifiers: [.command, .shift]).disabled(chat?.threads == nil)
-            let open = openFocused?.open ?? chat?.openInWindow
-            Button(openFocused?.title ?? "Open in New Window") { open?() }.keyboardShortcut("o").disabled(open == nil)
-            Button("Copy Link") { if let room { ChatLink.copy(ChatLink.url(room.id)) } }.disabled(room == nil)
-            Divider()
-            Menu("Move To") {
-                if let room {
-                    if room.section != nil { Button(room.kind == .space ? "Spaces" : room.app != nil ? "Apps" : "Direct messages") { Task { await store.moveConversation(room.id, to: nil) } } }
-                    ForEach(store.sections.filter { $0.kind == .custom && $0.key != room.section }) { section in
-                        Button(section.name) { Task { await store.moveConversation(room.id, to: section.key) } }
-                    }
-                    Divider()
-                    Button("New Section…") { chat?.newSection?() }
-                }
-            }.disabled(room == nil || room?.app == .gemini)
-            Button("Hide") { if let room { Task { await store.hide(room.id) } } }.disabled(room == nil)
-            Button("Leave…") { chat?.leave?() }.disabled(chat?.leave == nil)
-            Button("Block…") { chat?.block?() }.disabled(chat?.block == nil)
-        }
-    }
-}
-
-/// Format: the composer's formatting, as Mail's Format menu, with the keys the composer already takes. Off unless a
-/// composer is being typed in.
-struct FormatMenu: Commands {
-    let composer: ComposerTextView?
-    var body: some Commands {
-        CommandMenu("Format") {
-            Group {
-                Button("Bold") { composer?.formatBold(nil) }.keyboardShortcut("b")
-                Button("Italic") { composer?.formatItalic(nil) }.keyboardShortcut("i")
-                Button("Underline") { composer?.formatUnderline(nil) }.keyboardShortcut("u")
-                Button("Strikethrough") { composer?.formatStrike(nil) }.keyboardShortcut("x", modifiers: [.command, .shift])
-                Menu("Text Color") {
-                    Button("Default") { composer?.color(nil) }
-                    ForEach(TextColor.allCases, id: \.self) { color in Button(color.name) { composer?.color(color) } }
-                }
-                Divider()
-                Button("Bulleted List") { composer?.formatList(nil) }.keyboardShortcut("8", modifiers: [.command, .shift])
-                Button("Quote") { composer?.formatQuote(nil) }.keyboardShortcut("'")
-                Button("Link…") { composer?.formatLink(nil) }.keyboardShortcut("k", modifiers: [.command, .shift])
-                Divider()
-                Button("Code") { composer?.formatCode(nil) }.keyboardShortcut("c", modifiers: [.command, .shift])
-                Button("Code Block") { composer?.formatCodeBlock(nil) }.keyboardShortcut("c", modifiers: [.command, .shift, .option])
-                Divider()
-                Button("Clear Formatting") { composer?.formatClear(nil) }
-            }.disabled(composer == nil)
-        }
-    }
-}
-
-/// Help ▸ Report a Problem…: the diagnostics window, whose Save Log… makes the file to send.
-private struct DiagnosticsMenuItem: View {
-    @Environment(\.openWindow) private var openWindow
-    var body: some View {
-        Button("Report a Problem…") { openWindow(id: "connection-diagnostics") }
-    }
-}
-
-
-/// Quitting waits (up to 3 s) for the drafts to reach Google; unsaved ones are also kept for the next launch.
-@MainActor final class AppDelegate: NSObject, NSApplicationDelegate {
-    var beforeQuit: (() -> Task<Void, Never>)?
-    var dockMenu: (() -> NSMenu)?
-    func applicationDockMenu(_ sender: NSApplication) -> NSMenu? { dockMenu?() }
-    let shareService = ShareService()
-    func applicationDidFinishLaunching(_ notification: Notification) {
-        NSApp.servicesProvider = shareService
-        // The emoji catalog walks ~130,000 code points: build it now, in the background, not on the first `:` typed.
-        Task.detached(priority: .utility) { _ = EmojiCatalog.categories }
-    }
-    /// Links sent to Parley; ones that arrive before the window (the link launched Parley) wait for it.
-    var openURL: ((URL) -> Void)? { didSet { if let openURL { waitingURLs.forEach(openURL); waitingURLs = [] } } }
-    private var waitingURLs: [URL] = []
-    func application(_ application: NSApplication, open urls: [URL]) {
-        NSApp.activate()
-        if let openURL { urls.forEach(openURL) } else { waitingURLs += urls }
-    }
-    private var replied = false
-    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
-        guard let save = beforeQuit?() else { return .terminateNow }
-        replied = false
-        Task { await save.value; reply(sender) }
-        Task { try? await Task.sleep(for: .seconds(3)); reply(sender) }
-        return .terminateLater
-    }
-    private func reply(_ app: NSApplication) {
-        guard !replied else { return }
-        replied = true
-        app.reply(toApplicationShouldTerminate: true)
-    }
-}
-
-/// The Dock icon's menu: unread conversations with their counts, then Mark All as Read.
-@MainActor enum DockMenu {
-    static func make(_ conversations: [Conversation], open: @escaping (ConversationID) -> Void, markAllRead: @escaping () -> Void) -> NSMenu {
-        let menu = NSMenu()
-        for room in conversations {
-            let item = ClosureMenuItem(room.name) { open(room.id) }
-            item.badge = NSMenuItemBadge(count: room.unread)
-            menu.addItem(item)
-        }
-        if !conversations.isEmpty { menu.addItem(.separator()) }
-        menu.addItem(ClosureMenuItem("Mark All as Read") { markAllRead() })
-        return menu
+extension ConnectionDiagnostics {
+    /// The app's own authorizer, so a check that finds the session gone signs the app out too.
+    convenience init(authorizer: WebSessionAuthorizer) {
+        self.init(vault: KeychainSessionVault(), probe: { try await DynamiteReadProbe(authorizer: authorizer).run() })
     }
 }

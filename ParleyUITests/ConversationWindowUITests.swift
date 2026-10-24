@@ -5,16 +5,17 @@ import XCTest
     private var app: XCUIApplication!
     /// The demo with Maria Chen open in her own window, the other windows closed.
     private func openMariasWindow() -> XCUIElement {
-        app = XCUIApplication()
-        app.launchArguments = ["-uiTestingDemo"]
-        app.launch()
+        app = launchDemo()
         XCTAssertTrue(app.windows.firstMatch.waitForExistence(timeout: 5))
         for _ in 0..<10 {
-            guard let extra = app.windows.allElementsBoundByIndex.first(where: { $0.identifier != "main" }) else { break }
+            guard let extra = app.windows.allElementsBoundByIndex.first(where: { $0.identifier != "main" }) else {
+                break
+            }
             extra.buttons["_XCUI:CloseWindow"].click()
         }
         let sidebar = app.descendants(matching: .any)["sidebar"].firstMatch
-        sidebar.descendants(matching: .any).matching(NSPredicate(format: "label BEGINSWITH %@", "Maria Chen")).firstMatch.click()
+        sidebar.descendants(matching: .any).matching(NSPredicate(format: "label BEGINSWITH %@", "Maria Chen"))
+            .firstMatch.click()
         let menu = app.menuBars.menuBarItems["Conversation"]
         menu.click()
         menu.menuItems["Open in New Window"].click()
@@ -31,7 +32,7 @@ import XCTest
         menu.click()
         menu.menuItems["Show Threads"].click()
         let wide = expectation(for: NSPredicate { _, _ in window.frame.width >= 720 }, evaluatedWith: nil)
-        wait(for: [wide], timeout: 5)   // the window animates to its new width
+        wait(for: [wide], timeout: 5)  // the window animates to its new width
     }
 
     /// File ▸ New Tab (⌘T), as the tab bar's + does, opens a tab with the conversation palette, ready for typing; the
@@ -39,11 +40,15 @@ import XCTest
     func testNewTabOffersThePalette() throws {
         _ = openMariasWindow()
         app.typeKey("t", modifierFlags: .command)
-        let field = app.textFields.matching(NSPredicate(format: "placeholderValue == %@", "Jump to a conversation, person or space")).firstMatch
+        let field = app.textFields.matching(
+            NSPredicate(format: "placeholderValue == %@", "Jump to a conversation, person or space")
+        ).firstMatch
         XCTAssertTrue(field.waitForExistence(timeout: 5), "the palette in the new tab")
         app.typeText("gene")
         app.typeKey(.return, modifierFlags: [])
-        let tab = app.tabGroups["tab bar"].descendants(matching: .any).matching(NSPredicate(format: "title == %@", "General")).firstMatch
+        let tab = app.tabGroups["tab bar"].descendants(matching: .any).matching(
+            NSPredicate(format: "title == %@", "General")
+        ).firstMatch
         XCTAssertTrue(tab.waitForExistence(timeout: 5), "the new tab became General")
         XCTAssertFalse(field.exists, "the palette gave way to the conversation")
     }

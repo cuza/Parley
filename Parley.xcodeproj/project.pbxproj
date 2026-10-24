@@ -7,8 +7,10 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
-		12130BED6EEBB662B58E428B /* SwiftProtobuf in Frameworks */ = {isa = PBXBuildFile; productRef = 8739E517DD53175A60385AB9 /* SwiftProtobuf */; };
-		188A763D55CCA3D3B4EDDE1C /* Sparkle in Frameworks */ = {isa = PBXBuildFile; productRef = 3823B0153EB2C5F3A9BD226A /* Sparkle */; };
+		12130BED6EEBB662B58E428B /* ParleyDomain in Frameworks */ = {isa = PBXBuildFile; productRef = E82F65DA472653DF2670C9FC /* ParleyDomain */; };
+		188A763D55CCA3D3B4EDDE1C /* ParleyData in Frameworks */ = {isa = PBXBuildFile; productRef = BD6E8C3873250E6FE075CF70 /* ParleyData */; };
+		88A883AF9CD76B871BDFEF51 /* ShareHandOff.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1E40B4C0687DB78C90926BE1 /* ShareHandOff.swift */; };
+		9B0D59E4D43E2CD917AD1839 /* Sparkle in Frameworks */ = {isa = PBXBuildFile; productRef = 3823B0153EB2C5F3A9BD226A /* Sparkle */; };
 		E1BB06CCCA2E2E46633D9548 /* ParleyShare.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = 48FFD3DE1AB27B26CEDC676E /* ParleyShare.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
 /* End PBXBuildFile section */
 
@@ -51,10 +53,12 @@
 /* End PBXCopyFilesBuildPhase section */
 
 /* Begin PBXFileReference section */
+		1E40B4C0687DB78C90926BE1 /* ShareHandOff.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ShareHandOff.swift; sourceTree = "<group>"; };
 		2566E61926555FC1B44EDC09 /* Parley.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Parley.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		48FFD3DE1AB27B26CEDC676E /* ParleyShare.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = ParleyShare.appex; sourceTree = BUILT_PRODUCTS_DIR; };
 		705F447DEB72AB8F1B77FE45 /* ParleyUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = ParleyUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		B2E626F61AEEEE947B011F9E /* ParleyTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = ParleyTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		E5A7E7F8E9FA62CADE73D9CD /* ParleyKit */ = {isa = PBXFileReference; lastKnownFileType = folder; name = ParleyKit; path = ParleyKit; sourceTree = SOURCE_ROOT; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
@@ -124,8 +128,9 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				12130BED6EEBB662B58E428B /* SwiftProtobuf in Frameworks */,
-				188A763D55CCA3D3B4EDDE1C /* Sparkle in Frameworks */,
+				12130BED6EEBB662B58E428B /* ParleyDomain in Frameworks */,
+				188A763D55CCA3D3B4EDDE1C /* ParleyData in Frameworks */,
+				9B0D59E4D43E2CD917AD1839 /* Sparkle in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -146,12 +151,30 @@
 		46F9805D8C75FC01E69061AF = {
 			isa = PBXGroup;
 			children = (
+				99236FEB0D1DEBD81E7A8A46 /* Packages */,
 				26273F999C26A48789ADDF1E /* Parley */,
 				49BB7D574DD32857D3469421 /* ParleyShare */,
+				841A95CEA3BB6812C6CD0DA3 /* ParleyShare */,
 				900F4B750DBD3CDF89D0718C /* ParleyTests */,
 				7D6CF91B5827AC9D7DD61F17 /* ParleyUITests */,
 				29D2794AEE33E5C69458B358 /* Products */,
 			);
+			sourceTree = "<group>";
+		};
+		841A95CEA3BB6812C6CD0DA3 /* ParleyShare */ = {
+			isa = PBXGroup;
+			children = (
+				1E40B4C0687DB78C90926BE1 /* ShareHandOff.swift */,
+			);
+			path = ParleyShare;
+			sourceTree = "<group>";
+		};
+		99236FEB0D1DEBD81E7A8A46 /* Packages */ = {
+			isa = PBXGroup;
+			children = (
+				E5A7E7F8E9FA62CADE73D9CD /* ParleyKit */,
+			);
+			name = Packages;
 			sourceTree = "<group>";
 		};
 /* End PBXGroup section */
@@ -219,7 +242,8 @@
 			);
 			name = Parley;
 			packageProductDependencies = (
-				8739E517DD53175A60385AB9 /* SwiftProtobuf */,
+				E82F65DA472653DF2670C9FC /* ParleyDomain */,
+				BD6E8C3873250E6FE075CF70 /* ParleyData */,
 				3823B0153EB2C5F3A9BD226A /* Sparkle */,
 			);
 			productName = Parley;
@@ -287,7 +311,7 @@
 			minimizedProjectReferenceProxies = 1;
 			packageReferences = (
 				8E60D0930D2DE3950966A434 /* XCRemoteSwiftPackageReference "Sparkle" */,
-				3CE98E872CBF588623725F42 /* XCRemoteSwiftPackageReference "swift-protobuf" */,
+				0D76F052AD431B8B50AC91A0 /* XCLocalSwiftPackageReference "ParleyKit" */,
 			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = 29D2794AEE33E5C69458B358 /* Products */;
@@ -359,6 +383,7 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				88A883AF9CD76B871BDFEF51 /* ShareHandOff.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -438,7 +463,7 @@
 				CODE_SIGN_IDENTITY = "Apple Development";
 				CODE_SIGN_STYLE = Manual;
 				COPY_PHASE_STRIP = NO;
-				CURRENT_PROJECT_VERSION = 81;
+				CURRENT_PROJECT_VERSION = 82;
 				DEAD_CODE_STRIPPING = YES;
 				DEBUG_INFORMATION_FORMAT = dwarf;
 				DEVELOPMENT_TEAM = ECKB9WN282;
@@ -461,7 +486,7 @@
 				GCC_WARN_UNUSED_FUNCTION = YES;
 				GCC_WARN_UNUSED_VARIABLE = YES;
 				MACOSX_DEPLOYMENT_TARGET = 15.0;
-				MARKETING_VERSION = 1.7.20;
+				MARKETING_VERSION = 1.8.0;
 				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
 				MTL_FAST_MATH = YES;
 				ONLY_ACTIVE_ARCH = YES;
@@ -612,7 +637,7 @@
 				CODE_SIGN_IDENTITY = "Apple Development";
 				CODE_SIGN_STYLE = Manual;
 				COPY_PHASE_STRIP = NO;
-				CURRENT_PROJECT_VERSION = 81;
+				CURRENT_PROJECT_VERSION = 82;
 				DEAD_CODE_STRIPPING = YES;
 				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
 				DEVELOPMENT_TEAM = ECKB9WN282;
@@ -629,7 +654,7 @@
 				GCC_WARN_UNUSED_FUNCTION = YES;
 				GCC_WARN_UNUSED_VARIABLE = YES;
 				MACOSX_DEPLOYMENT_TARGET = 15.0;
-				MARKETING_VERSION = 1.7.20;
+				MARKETING_VERSION = 1.8.0;
 				MTL_ENABLE_DEBUG_INFO = NO;
 				MTL_FAST_MATH = YES;
 				PARLEY_DISPLAY_NAME = Parley;
@@ -710,15 +735,14 @@
 		};
 /* End XCConfigurationList section */
 
-/* Begin XCRemoteSwiftPackageReference section */
-		3CE98E872CBF588623725F42 /* XCRemoteSwiftPackageReference "swift-protobuf" */ = {
-			isa = XCRemoteSwiftPackageReference;
-			repositoryURL = "https://github.com/apple/swift-protobuf";
-			requirement = {
-				kind = exactVersion;
-				version = 1.38.1;
-			};
+/* Begin XCLocalSwiftPackageReference section */
+		0D76F052AD431B8B50AC91A0 /* XCLocalSwiftPackageReference "ParleyKit" */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = ParleyKit;
 		};
+/* End XCLocalSwiftPackageReference section */
+
+/* Begin XCRemoteSwiftPackageReference section */
 		8E60D0930D2DE3950966A434 /* XCRemoteSwiftPackageReference "Sparkle" */ = {
 			isa = XCRemoteSwiftPackageReference;
 			repositoryURL = "https://github.com/sparkle-project/Sparkle";
@@ -735,10 +759,13 @@
 			package = 8E60D0930D2DE3950966A434 /* XCRemoteSwiftPackageReference "Sparkle" */;
 			productName = Sparkle;
 		};
-		8739E517DD53175A60385AB9 /* SwiftProtobuf */ = {
+		BD6E8C3873250E6FE075CF70 /* ParleyData */ = {
 			isa = XCSwiftPackageProductDependency;
-			package = 3CE98E872CBF588623725F42 /* XCRemoteSwiftPackageReference "swift-protobuf" */;
-			productName = SwiftProtobuf;
+			productName = ParleyData;
+		};
+		E82F65DA472653DF2670C9FC /* ParleyDomain */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = ParleyDomain;
 		};
 /* End XCSwiftPackageProductDependency section */
 	};

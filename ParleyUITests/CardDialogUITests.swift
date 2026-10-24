@@ -5,22 +5,20 @@ import XCTest
     /// The toggle is a disclosure button, as Google Chat draws it with a chevron: VoiceOver reads its words and its state,
     /// and a click shows what it hides.
     func testACollapsibleSectionOpensFromItsDisclosureButton() throws {
-        let app = XCUIApplication()
-        app.launchArguments = ["-uiTestingDemo"]
-        app.launch()
+        let app = launchDemo()
         let create = app.buttons["Create issue"].firstMatch
         XCTAssertTrue(create.waitForExistence(timeout: 10))
         create.click()
         let toggle = app.buttons["More fields"].firstMatch
         XCTAssertTrue(toggle.waitForExistence(timeout: 5))
         XCTAssertEqual(toggle.value as? String, "collapsed")
-        let assignee = app.descendants(matching: .any).matching(NSPredicate(format: "label == %@ OR placeholderValue == %@", "Assignee", "Who takes it?")).firstMatch
+        let assignee = app.descendants(matching: .any).matching(
+            NSPredicate(format: "label == %@ OR placeholderValue == %@", "Assignee", "Who takes it?")
+        ).firstMatch
         XCTAssertFalse(assignee.exists)
         toggle.click()
         XCTAssertTrue(assignee.waitForExistence(timeout: 5))
         XCTAssertEqual(toggle.value as? String, "expanded")
-        let attachment = XCTAttachment(screenshot: app.windows.firstMatch.screenshot())
-        attachment.name = "dialog expanded"; attachment.lifetime = .keepAlways
-        add(attachment)
+        shot(app.windows.firstMatch, "dialog expanded")
     }
 }
