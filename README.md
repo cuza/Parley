@@ -154,7 +154,7 @@ TEST_RUNNER_PARLEY_BASELINE=/path/to/baselines xcodebuild test -project Parley.x
 - [XcodeGen](https://github.com/yonaskolb/XcodeGen) (MIT License), which generates the Xcode project.
 - [Sparkle](https://github.com/sparkle-project/Sparkle) (MIT License), which updates the app.
 - [purple-googlechat](https://github.com/EionRobb/purple-googlechat) (GPL-3.0) and [mautrix-googlechat](https://github.com/mautrix/googlechat) (AGPL-3.0), open-source Google Chat clients consulted as references for request and message formats.
-- [Telegram for macOS](https://github.com/overtake/TelegramSwift), which inspired the timeline's design and swipe to reply.
+- [Telegram for macOS](https://github.com/TelegramOrg/Telegram-macos-Swift), which inspired the timeline's design and swipe to reply.
 - GIF search is [Powered by GIPHY](https://developers.giphy.com).
 
 ## License
