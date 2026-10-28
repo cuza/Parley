@@ -47,10 +47,11 @@ public struct Card: Hashable, Codable, Sendable {
         public var limit: Int?  // characters at most
         public var kind: Kind?  // what it must hold; nil: any text
         public var required: Bool?  // an action needs it filled
+        public var change: Data?  // an action to send with the card's inputs as the text changes
         public init(
             name: String, label: String, value: String, hint: String? = nil, placeholder: String? = nil,
             multiline: Bool? = nil,
-            limit: Int? = nil, kind: Kind? = nil, required: Bool? = nil
+            limit: Int? = nil, kind: Kind? = nil, required: Bool? = nil, change: Data? = nil
         ) {
             self.name = name
             self.label = label
@@ -61,6 +62,7 @@ public struct Card: Hashable, Codable, Sendable {
             self.limit = limit
             self.kind = kind
             self.required = required
+            self.change = change
         }
         public enum Kind: String, Codable, Sendable { case integer, number, email }
     }
@@ -69,9 +71,10 @@ public struct Card: Hashable, Codable, Sendable {
         public var name: String, label: String?, style: Style, options: [Option]
         public var limit: Int?  // a multiple choice's most picks
         public var required: Bool?
+        public var change: Data?  // an action to send with the card's inputs when the choice changes
         public init(
             name: String, label: String? = nil, style: Style, options: [Option], limit: Int? = nil,
-            required: Bool? = nil
+            required: Bool? = nil, change: Data? = nil
         ) {
             self.name = name
             self.label = label
@@ -79,6 +82,7 @@ public struct Card: Hashable, Codable, Sendable {
             self.options = options
             self.limit = limit
             self.required = required
+            self.change = change
         }
         public enum Style: String, Codable, Sendable { case checkbox, radio, switches, menu, multiple }
         public struct Option: Hashable, Codable, Sendable {

@@ -298,4 +298,33 @@ extension NetworkTests.DialogBackendTests {
             #expect(frame.minY >= 0 && frame.maxY <= height, "\(frame)")
         }
     }
+    /// Typing in a field that asks to hear about changes sends its action with the inputs once typing pauses, as
+    /// Google Chat does.
+    @Test func typingInALiveFieldAsksTheApp() async throws {
+        let action = Data([1, 2, 3])
+        let card = Card(sections: [
+            [.field(Card.Field(name: "search", label: "Search user", value: "", change: action))]
+        ])
+        let open = ChatStore.OpenDialog(
+            context: DialogContext(message: "m", app: "a"), conversation: "c", app: "App",
+            dialog: AppDialog(title: "Create", card: card))
+        var sent: [(Data, [Card.Input])] = []
+        let host = NSHostingView(rootView: DialogSheet(open: open, submit: { sent.append(($0, $1)) }))
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: DialogLayout.width, height: 300), styleMask: [.titled],
+            backing: .buffered, defer: false)
+        window.contentView = host
+        host.layoutSubtreeIfNeeded()
+        func all(_ view: NSView) -> [NSView] { [view] + view.subviews.flatMap(all) }
+        let fields = all(host).compactMap { $0 as? NSTextField }.filter(\.isEditable)
+        let field = try #require(fields.first)
+        window.makeFirstResponder(field)
+        let editor = try #require(field.currentEditor() as? NSTextView)
+        editor.insertText("a", replacementRange: editor.selectedRange())
+        editor.insertText("ra", replacementRange: editor.selectedRange())
+        await eventually { sent.count == 1 }
+        try await Task.sleep(for: .milliseconds(600))
+        #expect(sent.count == 1)  // one request once typing pauses, not one per letter
+        #expect(sent.first?.0 == action && sent.first?.1 == [Card.Input(name: "search", value: "ara")])
+    }
 }

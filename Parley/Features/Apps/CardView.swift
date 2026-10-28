@@ -18,17 +18,27 @@ struct CardView: View {
     @State private var dates: [String: Date] = [:]  // a date picker's moment, once chosen here
     @State private var missing: Set<String> = []  // required inputs left empty when an action was tried
     @State private var pending: Card.Link?  // a button whose action is on its way
+    @State private var typed: Set<String> = []  // inputs changed since the card last sent them, kept when the app answers
+    @State private var changing: Task<Void, Never>?  // an input's on-change action, waiting for typing to pause
     @Environment(\.openURL) private var openURL
     var body: some View {
-        if let footer {
-            sheet(primary: footer.primary, secondary: footer.secondary)
-        } else {
-            GeometryReader { geometry in
-                VStack(alignment: .leading, spacing: CardLayout.gap) {
-                    box.frame(height: CardLayout.boxHeight(card, width: geometry.size.width, expanded: expanded))
-                    if let by = card.by { byline(by) }
+        Group {
+            if let footer {
+                sheet(primary: footer.primary, secondary: footer.secondary)
+            } else {
+                GeometryReader { geometry in
+                    VStack(alignment: .leading, spacing: CardLayout.gap) {
+                        box.frame(height: CardLayout.boxHeight(card, width: geometry.size.width, expanded: expanded))
+                        if let by = card.by { byline(by) }
+                    }
                 }
             }
+        }
+        // The app's next card starts with its own values, but what was typed while it was on its way stays.
+        .onChange(of: card) {
+            values = values.filter { typed.contains($0.key) }
+            dates = [:]
+            missing = []
         }
     }
     /// As a dialog: the card scrolling, what's wrong, and the buttons fixed under it (secondary leading, primary the
@@ -169,6 +179,8 @@ struct CardView: View {
                         set: {
                             values[choice.name] = $0
                             missing.remove(choice.name)
+                            typed.insert(choice.name)
+                            if let change = choice.change { changed(change, after: .zero) }
                         }))
             }
         case .date(let date):
@@ -262,6 +274,8 @@ extension CardView {
                 set: {
                     values[field.name] = [$0]
                     missing.remove(field.name)
+                    typed.insert(field.name)
+                    if let change = field.change { changed(change, after: .milliseconds(400)) }
                 })
             if field.multiline == true {  // one line high, growing with what's typed
                 TextField(field.placeholder ?? "", text: text, axis: .vertical).lineLimit(
@@ -333,7 +347,8 @@ extension CardView {
             }.map(\.name))
         let fields = card.allItems.compactMap { if case .field(let field) = $0 { field } else { nil } }
         guard missing.isEmpty, !fields.contains(where: { problem($0) != nil }) else { return }
-        let sent = form.flatMap { name, values in values.map { Card.Input(name: name, value: $0) } }
+        let sent = self.inputs
+        typed = []
         pending = link
         // A dialog keeps what was typed (the app may say what's wrong with it); its next step is a new card.
         Task {
@@ -343,6 +358,20 @@ extension CardView {
                 values = [:]
                 dates = [:]
             }
+        }
+    }
+    private var inputs: [Card.Input] {
+        form.flatMap { name, values in values.map { Card.Input(name: name, value: $0) } }
+    }
+    /// Sends an input's on-change action with the card's inputs once typing pauses, as Google Chat does: the app answers
+    /// with the card's next version (a "Search user" field listing who matches).
+    private func changed(_ action: Data, after delay: Duration) {
+        changing?.cancel()
+        changing = Task {
+            try? await Task.sleep(for: delay)
+            guard !Task.isCancelled else { return }
+            typed = []
+            await click(action, inputs)
         }
     }
     /// What's wrong with a text field's value, in Google Chat's words; nil: nothing.

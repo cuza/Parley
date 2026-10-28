@@ -531,3 +531,32 @@ extension NetworkTests.CardFormBackendTests {
         #expect(narrow[0].maxY <= narrow[1].minY + 0.5)
     }
 }
+
+extension CardFormTests {
+    /// A field or a choice can ask to hear about each change (an app's "Search user" filling its list as you type):
+    /// its action is kept to send with the card's inputs.
+    @Test func anInputsOnChangeActionIsKept() throws {
+        let proto = message([
+            .with {
+                $0.textInput = .with {
+                    $0.name = "q"
+                    $0.onChangeAction = Self.send
+                }
+            },
+            .with {
+                $0.selectionInput = .with {
+                    $0.name = "c"
+                    $0.items = [option("a")]
+                    $0.onChangeAction = Self.send
+                }
+            },
+        ])
+        let items = try card(proto).allItems
+        guard case .field(let field) = items.first, case .choice(let choice) = items.last else {
+            Issue.record("\(items)")
+            return
+        }
+        #expect(field.change == Self.send && choice.change == Self.send)
+        #expect(gaps(proto).isEmpty)
+    }
+}

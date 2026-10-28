@@ -114,14 +114,17 @@ enum MessageCoverage {
             + textInput("5")).map { "\(path).\($0)" }
             + button("\(path).7")
     }
-    /// A text field: name, label, value, hint, one line or several, placeholder, its limit and kind. Not used: Google
-    /// Chat's own hints (2, 5, 12, 14, 18, 20–22).
+    /// A text field: name, label, value, hint, one line or several, its on-change action, placeholder, its limit and
+    /// kind. Not used: Google Chat's own hints (2, 5, 12, 14, 18, 20–22).
     private static func textInput(_ path: String) -> [String] {
-        ["1", "2", "3", "4", "5", "6", "7", "12", "13.*", "14", "15", "18", "20", "21", "22"].map { "\(path).\($0)" }
+        ["1", "2", "3", "4", "5", "6", "7", "8", "12", "13.*", "14", "15", "18", "20", "21", "22"].map {
+            "\(path).\($0)"
+        }
     }
-    /// A selection: name, kind, items (text, value, picked, the line under it), label, a multiple choice's limit.
+    /// A selection: name, kind, items (text, value, picked, the line under it), its on-change action, label, a
+    /// multiple choice's limit.
     private static func selection(_ path: String) -> [String] {
-        ["1", "2", "3.1", "3.2", "3.3", "3.6", "5", "7"].map { "\(path).\($0)" }
+        ["1", "2", "3.1", "3.2", "3.3", "3.6", "4", "5", "7"].map { "\(path).\($0)" }
     }
     /// A date or time picker: name, label, kind, the moment, its zone offset.
     private static func date(_ path: String) -> [String] {

@@ -12174,6 +12174,16 @@ nonisolated struct Dynamite_TextInput: Sendable {
   /// Clears the value of `type`. Subsequent reads from it will return its default value.
   mutating func clearType() {self._type = nil}
 
+  /// a CardAction sent with the dialog's inputs as the text changes
+  var onChangeAction: Data {
+    get {_onChangeAction ?? Data()}
+    set {_onChangeAction = newValue}
+  }
+  /// Returns true if `onChangeAction` has been explicitly set.
+  var hasOnChangeAction: Bool {self._onChangeAction != nil}
+  /// Clears the value of `onChangeAction`. Subsequent reads from it will return its default value.
+  mutating func clearOnChangeAction() {self._onChangeAction = nil}
+
   var validation: Dynamite_InputValidation {
     get {_validation ?? Dynamite_InputValidation()}
     set {_validation = newValue}
@@ -12201,6 +12211,7 @@ nonisolated struct Dynamite_TextInput: Sendable {
   fileprivate var _value: String? = nil
   fileprivate var _hintText: String? = nil
   fileprivate var _type: Int32? = nil
+  fileprivate var _onChangeAction: Data? = nil
   fileprivate var _validation: Dynamite_InputValidation? = nil
   fileprivate var _placeholderText: String? = nil
 }
@@ -12263,6 +12274,16 @@ nonisolated struct Dynamite_SelectionInput: Sendable {
 
   var items: [Dynamite_SelectionItem] = []
 
+  /// a CardAction sent with the dialog's inputs when the choice changes
+  var onChangeAction: Data {
+    get {_onChangeAction ?? Data()}
+    set {_onChangeAction = newValue}
+  }
+  /// Returns true if `onChangeAction` has been explicitly set.
+  var hasOnChangeAction: Bool {self._onChangeAction != nil}
+  /// Clears the value of `onChangeAction`. Subsequent reads from it will return its default value.
+  mutating func clearOnChangeAction() {self._onChangeAction = nil}
+
   var label: String {
     get {_label ?? String()}
     set {_label = newValue}
@@ -12287,6 +12308,7 @@ nonisolated struct Dynamite_SelectionInput: Sendable {
 
   fileprivate var _name: String? = nil
   fileprivate var _type: Int32? = nil
+  fileprivate var _onChangeAction: Data? = nil
   fileprivate var _label: String? = nil
   fileprivate var _multiSelectMaxSelectedItems: Int32? = nil
 }
@@ -29739,7 +29761,7 @@ nonisolated extension Dynamite_CardWidget: SwiftProtobuf.Message, SwiftProtobuf.
 
 nonisolated extension Dynamite_TextInput: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
   static let protoMessageName: String = _protobuf_package + ".TextInput"
-  static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{1}name\0\u{2}\u{2}label\0\u{1}value\0\u{4}\u{2}hint_text\0\u{1}type\0\u{2}\u{6}validation\0\u{4}\u{2}placeholder_text\0")
+  static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{1}name\0\u{2}\u{2}label\0\u{1}value\0\u{4}\u{2}hint_text\0\u{1}type\0\u{3}on_change_action\0\u{2}\u{5}validation\0\u{4}\u{2}placeholder_text\0")
 
   mutating func decodeMessage<D: SwiftProtobuf.Decoder>(decoder: inout D) throws {
     while let fieldNumber = try decoder.nextFieldNumber() {
@@ -29752,6 +29774,7 @@ nonisolated extension Dynamite_TextInput: SwiftProtobuf.Message, SwiftProtobuf._
       case 4: try { try decoder.decodeSingularStringField(value: &self._value) }()
       case 6: try { try decoder.decodeSingularStringField(value: &self._hintText) }()
       case 7: try { try decoder.decodeSingularInt32Field(value: &self._type) }()
+      case 8: try { try decoder.decodeSingularBytesField(value: &self._onChangeAction) }()
       case 13: try { try decoder.decodeSingularMessageField(value: &self._validation) }()
       case 15: try { try decoder.decodeSingularStringField(value: &self._placeholderText) }()
       default: break
@@ -29779,6 +29802,9 @@ nonisolated extension Dynamite_TextInput: SwiftProtobuf.Message, SwiftProtobuf._
     try { if let v = self._type {
       try visitor.visitSingularInt32Field(value: v, fieldNumber: 7)
     } }()
+    try { if let v = self._onChangeAction {
+      try visitor.visitSingularBytesField(value: v, fieldNumber: 8)
+    } }()
     try { if let v = self._validation {
       try visitor.visitSingularMessageField(value: v, fieldNumber: 13)
     } }()
@@ -29794,6 +29820,7 @@ nonisolated extension Dynamite_TextInput: SwiftProtobuf.Message, SwiftProtobuf._
     if lhs._value != rhs._value {return false}
     if lhs._hintText != rhs._hintText {return false}
     if lhs._type != rhs._type {return false}
+    if lhs._onChangeAction != rhs._onChangeAction {return false}
     if lhs._validation != rhs._validation {return false}
     if lhs._placeholderText != rhs._placeholderText {return false}
     if lhs.unknownFields != rhs.unknownFields {return false}
@@ -29842,7 +29869,7 @@ nonisolated extension Dynamite_InputValidation: SwiftProtobuf.Message, SwiftProt
 
 nonisolated extension Dynamite_SelectionInput: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
   static let protoMessageName: String = _protobuf_package + ".SelectionInput"
-  static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{1}name\0\u{1}type\0\u{1}items\0\u{2}\u{2}label\0\u{4}\u{2}multi_select_max_selected_items\0")
+  static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{1}name\0\u{1}type\0\u{1}items\0\u{3}on_change_action\0\u{1}label\0\u{4}\u{2}multi_select_max_selected_items\0")
 
   mutating func decodeMessage<D: SwiftProtobuf.Decoder>(decoder: inout D) throws {
     while let fieldNumber = try decoder.nextFieldNumber() {
@@ -29853,6 +29880,7 @@ nonisolated extension Dynamite_SelectionInput: SwiftProtobuf.Message, SwiftProto
       case 1: try { try decoder.decodeSingularStringField(value: &self._name) }()
       case 2: try { try decoder.decodeSingularInt32Field(value: &self._type) }()
       case 3: try { try decoder.decodeRepeatedMessageField(value: &self.items) }()
+      case 4: try { try decoder.decodeSingularBytesField(value: &self._onChangeAction) }()
       case 5: try { try decoder.decodeSingularStringField(value: &self._label) }()
       case 7: try { try decoder.decodeSingularInt32Field(value: &self._multiSelectMaxSelectedItems) }()
       default: break
@@ -29874,6 +29902,9 @@ nonisolated extension Dynamite_SelectionInput: SwiftProtobuf.Message, SwiftProto
     if !self.items.isEmpty {
       try visitor.visitRepeatedMessageField(value: self.items, fieldNumber: 3)
     }
+    try { if let v = self._onChangeAction {
+      try visitor.visitSingularBytesField(value: v, fieldNumber: 4)
+    } }()
     try { if let v = self._label {
       try visitor.visitSingularStringField(value: v, fieldNumber: 5)
     } }()
@@ -29887,6 +29918,7 @@ nonisolated extension Dynamite_SelectionInput: SwiftProtobuf.Message, SwiftProto
     if lhs._name != rhs._name {return false}
     if lhs._type != rhs._type {return false}
     if lhs.items != rhs.items {return false}
+    if lhs._onChangeAction != rhs._onChangeAction {return false}
     if lhs._label != rhs._label {return false}
     if lhs._multiSelectMaxSelectedItems != rhs._multiSelectMaxSelectedItems {return false}
     if lhs.unknownFields != rhs.unknownFields {return false}

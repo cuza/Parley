@@ -23,7 +23,6 @@ struct DialogSheet: View {
                 card: DialogLayout.card(open.dialog), expanded: expanded, toggle: { expanded.toggle() }, click: submit,
                 footer: (open.dialog.primary, open.dialog.secondary), problem: open.problem
             )
-            .id(open.dialog)  // the app's next step starts with its own values
         }
         .frame(width: width, height: DialogLayout.height(open, width: width, expanded: expanded))
     }

@@ -319,7 +319,8 @@ extension DynamiteMapper {
         return Card.Field(
             name: input.name, label: input.label, value: input.value, hint: input.hintText.nilIfEmpty,
             placeholder: input.placeholderText.nilIfEmpty, multiline: input.type == 1 ? true : nil,
-            limit: validation.characterLimit > 0 ? Int(validation.characterLimit) : nil, kind: kind)
+            limit: validation.characterLimit > 0 ? Int(validation.characterLimit) : nil, kind: kind,
+            change: input.hasOnChangeAction ? input.onChangeAction : nil)
     }
     private static func choice(_ input: Dynamite_SelectionInput) -> Card.Choice {
         let style: Card.Choice.Style =
@@ -337,7 +338,8 @@ extension DynamiteMapper {
         }
         return Card.Choice(
             name: input.name, label: input.label.nilIfEmpty, style: style, options: options,
-            limit: input.multiSelectMaxSelectedItems > 0 ? Int(input.multiSelectMaxSelectedItems) : nil)
+            limit: input.multiSelectMaxSelectedItems > 0 ? Int(input.multiSelectMaxSelectedItems) : nil,
+            change: input.hasOnChangeAction ? input.onChangeAction : nil)
     }
     /// The card with each input an action needs marked required, so it keeps room to say so.
     private static func required(_ sections: [[Card.Item]]) -> [[Card.Item]] {

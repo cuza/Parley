@@ -1472,6 +1472,7 @@ message TextInput {
   optional string value = 4;
   optional string hint_text = 6;               // under the field
   optional int32 type = 7;                     // 0 one line, 1 several lines
+  optional bytes on_change_action = 8;         // a CardAction sent with the dialog's inputs as the text changes
   optional InputValidation validation = 13;
   optional string placeholder_text = 15;
 }
@@ -1483,6 +1484,7 @@ message SelectionInput {
   optional string name = 1;
   optional int32 type = 2;                     // 0 check boxes, 1 radio buttons, 2 switches, 3 a drop-down, 4 multi-select
   repeated SelectionItem items = 3;
+  optional bytes on_change_action = 4;         // a CardAction sent with the dialog's inputs when the choice changes
   optional string label = 5;
   optional int32 multi_select_max_selected_items = 7;
 }
