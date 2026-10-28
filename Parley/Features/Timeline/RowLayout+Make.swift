@@ -101,6 +101,12 @@ extension RowLayout {
             }
             lastLine = cardOnly ? line.map { ($0.width, $0.maxY) } : nil  // the time follows the name
         }
+        // A message only I can see says so on a line of its own where no name is shown, as Google Chat marks it.
+        if layout.via == nil, let via = message.via, via.hasSuffix(privateNote) {
+            let text = measure(viaText(via), width: inner)
+            layout.via = place(
+                CGSize(width: text.width + 2 * viaInset.width, height: text.height + 2 * viaInset.height))
+        }
         if !message.thinking.isEmpty {
             layout.thinking = place(measure(thinkingText(), width: inner))
             lastLine = nil

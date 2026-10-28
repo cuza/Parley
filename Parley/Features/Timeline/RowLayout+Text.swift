@@ -11,8 +11,24 @@ extension RowLayout {
     static func nameText(_ name: String, color: NSColor = .labelColor) -> NSAttributedString {
         styled(name, .systemFont(ofSize: 13 * TextSize.scale, weight: .semibold), color, oneLine: true)
     }
+    /// What the mapper says after the sender of a message only I can see.
+    static let privateNote = "Only visible to you"
+    /// The badge after the sender's name; a private message's starts with an eye, as Google Chat's does.
     static func viaText(_ app: String, color: NSColor = .secondaryLabelColor) -> NSAttributedString {
-        styled(app, .systemFont(ofSize: 10, weight: .medium), color, oneLine: true)
+        let font = NSFont.systemFont(ofSize: 10, weight: .medium)
+        let text = styled(app, font, color, oneLine: true)
+        guard app.hasSuffix(privateNote),
+            let eye = NSImage(systemSymbolName: "eye", accessibilityDescription: nil)?
+                .withSymbolConfiguration(.init(pointSize: 10, weight: .medium))
+        else { return text }
+        let attachment = NSTextAttachment()
+        attachment.image = eye
+        attachment.bounds = CGRect(x: 0, y: font.descender, width: eye.size.width, height: eye.size.height)
+        let badge = NSMutableAttributedString(attachment: attachment)
+        badge.addAttributes([.foregroundColor: color, .font: font], range: NSRange(location: 0, length: 1))
+        badge.append(NSAttributedString(string: " ", attributes: [.font: font]))
+        badge.append(text)
+        return badge
     }
     static func quoteSenderText(_ quote: QuotedMessage, color: NSColor = .labelColor) -> NSAttributedString {
         styled(

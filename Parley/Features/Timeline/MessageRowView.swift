@@ -111,7 +111,6 @@ final class MessageRowView: NSTableRowView {
         textView.isVerticallyResizable = false
         textView.isHorizontallyResizable = false
         serviceLabel.inset = RowLayout.serviceInset
-        viaLabel.background = .labelColor.withAlphaComponent(0.08)
         viaLabel.inset = RowLayout.viaInset
         wantsLayer = true
         flash.backgroundColor = NSColor.controlAccentColor.cgColor  // set again as it flashes, for the current accent
@@ -319,9 +318,13 @@ extension MessageRowView {
         bubbleView.fill = lone ? .clear : own ? BubblePalette.own : BubblePalette.incoming
         bubbleView.own = own
         nameLabel.text = RowLayout.nameText(message.sender.name, color: Self.color(for: message.sender.id.rawValue))
-        viaLabel.text = RowLayout.viaText(message.via ?? "")
+        viaLabel.text = RowLayout.viaText(
+            message.via ?? "", color: own ? BubblePalette.ownInk.withAlphaComponent(0.8) : .secondaryLabelColor)
+        viaLabel.background = (own ? BubblePalette.ownInk : .labelColor).withAlphaComponent(own ? 0.15 : 0.08)
         // Only an app that posted for a person says so; "App" and "Only visible to you" say it themselves.
-        let acting = message.via?.components(separatedBy: " · ").first { $0 != "App" && $0 != "Only visible to you" }
+        let acting = message.via?.components(separatedBy: " · ").first {
+            $0 != "App" && $0 != RowLayout.privateNote
+        }
         viaLabel.toolTip = acting.map { "Posted by \($0) on \(message.sender.name)’s behalf" }
         if let quote = message.quote {
             let quoteColor = own ? accent : Self.color(for: quote.sender)

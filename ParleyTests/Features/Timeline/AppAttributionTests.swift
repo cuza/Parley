@@ -76,6 +76,16 @@ struct AppAttributionTests {
         #expect(RowLayout.make(row(), width: 700, own: false, kind: .direct).via == nil)
         #expect(RowLayout.make(row(via: nil), width: 700, own: false, kind: .space).via == nil)
     }
+    /// A message only I can see says so even where no name is shown: my own slash command, an app's later message.
+    @Test func aPrivateMessageAlwaysSaysOnlyYouSeeIt() throws {
+        for (own, begins) in [(true, true), (false, false)] {
+            let layout = RowLayout.make(
+                row(via: "Only visible to you", begins: begins), width: 700, own: own, kind: .space)
+            let badge = try #require(layout.via, "own \(own)")
+            #expect(try layout.bubble.contains(badge) && badge.minY < #require(layout.text).minY)
+        }
+        #expect(RowLayout.viaText("App · Only visible to you").containsAttachments(in: NSRange(location: 0, length: 1)))
+    }
     @MainActor @Test func theRowViewShowsTheBadgeWithATooltip() {
         let view = MessageRowView(frame: NSRect(x: 0, y: 0, width: 700, height: 60))
         view.configure(row(), own: false, kind: .space, meID: "me", actions: MessageRowActions())
