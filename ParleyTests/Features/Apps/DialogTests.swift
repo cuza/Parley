@@ -298,9 +298,9 @@ extension NetworkTests.DialogBackendTests {
             #expect(frame.minY >= 0 && frame.maxY <= height, "\(frame)")
         }
     }
-    /// Typing in a field that asks to hear about changes sends its action with the inputs once typing pauses, as
-    /// Google Chat does.
-    @Test func typingInALiveFieldAsksTheApp() async throws {
+    /// A field that asks to hear about changes sends its action with the inputs when its text is committed, with Return
+    /// or by leaving the field, as Google Chat does; typing alone sends nothing.
+    @Test func committingALiveFieldAsksTheApp() async throws {
         let action = Data([1, 2, 3])
         let card = Card(sections: [
             [.field(Card.Field(name: "search", label: "Search user", value: "", change: action))]
@@ -322,9 +322,20 @@ extension NetworkTests.DialogBackendTests {
         let editor = try #require(field.currentEditor() as? NSTextView)
         editor.insertText("a", replacementRange: editor.selectedRange())
         editor.insertText("ra", replacementRange: editor.selectedRange())
-        await eventually { sent.count == 1 }
         try await Task.sleep(for: .milliseconds(600))
-        #expect(sent.count == 1)  // one request once typing pauses, not one per letter
+        #expect(sent.isEmpty)  // typing alone asks nothing
+        editor.insertNewline(nil)
+        await eventually { sent.count == 1 }
         #expect(sent.first?.0 == action && sent.first?.1 == [Card.Input(name: "search", value: "ara")])
+        window.makeFirstResponder(nil)  // leaving the field unchanged asks nothing more
+        try await Task.sleep(for: .milliseconds(300))
+        #expect(sent.count == 1)
+        window.makeFirstResponder(field)
+        let again = try #require(field.currentEditor() as? NSTextView)
+        again.insertText("b", replacementRange: NSRange(location: 3, length: 0))
+        try await Task.sleep(for: .milliseconds(100))  // SwiftUI learns of the focus on the next turn
+        window.makeFirstResponder(nil)  // leaving it changed asks again
+        await eventually { sent.count == 2 }
+        #expect(sent.last?.1 == [Card.Input(name: "search", value: "arab")])
     }
 }

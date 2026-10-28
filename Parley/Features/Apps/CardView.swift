@@ -19,7 +19,8 @@ struct CardView: View {
     @State private var missing: Set<String> = []  // required inputs left empty when an action was tried
     @State private var pending: Card.Link?  // a button whose action is on its way
     @State private var typed: Set<String> = []  // inputs changed since the card last sent them, kept when the app answers
-    @State private var changing: Task<Void, Never>?  // an input's on-change action, waiting for typing to pause
+    @FocusState private var focused: String?  // the text field being typed in, by name
+    @State private var committed: [String: String] = [:]  // a text field's text as its on-change action last sent it
     @Environment(\.openURL) private var openURL
     var body: some View {
         Group {
@@ -39,6 +40,7 @@ struct CardView: View {
             values = values.filter { typed.contains($0.key) }
             dates = [:]
             missing = []
+            committed = [:]
         }
     }
     /// As a dialog: the card scrolling, what's wrong, and the buttons fixed under it (secondary leading, primary the
@@ -180,7 +182,7 @@ struct CardView: View {
                             values[choice.name] = $0
                             missing.remove(choice.name)
                             typed.insert(choice.name)
-                            if let change = choice.change { changed(change, after: .zero) }
+                            if let change = choice.change { changed(change) }
                         }))
             }
         case .date(let date):
@@ -275,17 +277,22 @@ extension CardView {
                     values[field.name] = [$0]
                     missing.remove(field.name)
                     typed.insert(field.name)
-                    if let change = field.change { changed(change, after: .milliseconds(400)) }
                 })
-            if field.multiline == true {  // one line high, growing with what's typed
-                TextField(field.placeholder ?? "", text: text, axis: .vertical).lineLimit(
-                    1...CardLayout.lines(field, width: width)
-                )
-                .modifier(CardFieldStyle(height: CardLayout.fieldHeight(field, width: width)))
-            } else {
-                TextField(field.placeholder ?? "", text: text).modifier(
-                    CardFieldStyle(height: CardLayout.fieldControl))
+            Group {
+                if field.multiline == true {  // one line high, growing with what's typed
+                    TextField(field.placeholder ?? "", text: text, axis: .vertical).lineLimit(
+                        1...CardLayout.lines(field, width: width)
+                    )
+                    .modifier(CardFieldStyle(height: CardLayout.fieldHeight(field, width: width)))
+                } else {
+                    TextField(field.placeholder ?? "", text: text).modifier(
+                        CardFieldStyle(height: CardLayout.fieldControl))
+                }
             }
+            // An app that asks to hear about changes hears about the text once it's committed, as in Google Chat.
+            .focused($focused, equals: field.name)
+            .onSubmit { commit(field) }
+            .onChange(of: focused) { old, _ in if old == field.name { commit(field) } }
         }
     }
     /// Columns side by side, or one over the other when the card is narrow.
@@ -363,16 +370,20 @@ extension CardView {
     private var inputs: [Card.Input] {
         form.flatMap { name, values in values.map { Card.Input(name: name, value: $0) } }
     }
-    /// Sends an input's on-change action with the card's inputs once typing pauses, as Google Chat does: the app answers
-    /// with the card's next version (a "Search user" field listing who matches).
-    private func changed(_ action: Data, after delay: Duration) {
-        changing?.cancel()
-        changing = Task {
-            try? await Task.sleep(for: delay)
-            guard !Task.isCancelled else { return }
-            typed = []
-            await click(action, inputs)
-        }
+    /// Sends an input's on-change action with the card's inputs: the app answers with the card's next version (a
+    /// "Search user" field listing who matches).
+    private func changed(_ action: Data) {
+        let sent = inputs
+        typed = []
+        Task { await click(action, sent) }
+    }
+    /// A text field's text was committed (Return, or leaving the field): its on-change action goes out if it changed.
+    private func commit(_ field: Card.Field) {
+        let text = values[field.name]?.first ?? field.value
+        let arrived = card.form.first { $0.name == field.name }?.values.first ?? ""  // `field` is as drawn, typed text in
+        guard let change = field.change, text != committed[field.name, default: arrived] else { return }
+        committed[field.name] = text
+        changed(change)
     }
     /// What's wrong with a text field's value, in Google Chat's words; nil: nothing.
     private func problem(_ field: Card.Field) -> String? {
