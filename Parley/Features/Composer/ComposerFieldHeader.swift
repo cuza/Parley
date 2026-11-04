@@ -32,7 +32,7 @@ struct ComposerFieldHeader: View {
                     {
                         _ = await store.open(link)
                     } else {
-                        await store.showQuoted(id, in: conversation.id, window: paneWindow)
+                        await store.showQuoted(id, in: conversation.id, window: paneWindow, viewing: thread)
                     }
                 }
             })
@@ -46,7 +46,7 @@ struct ComposerFieldHeader: View {
             media: message.attachments.first { $0.kind == .image || $0.kind == .video }, closeHelp: "Cancel editing",
             close: { store.endEdit(conversation: conversation.id, thread: thread) }
         ) {
-            Task { await store.showQuoted(message.id, in: conversation.id, window: paneWindow) }
+            Task { await store.showQuoted(message.id, in: conversation.id, window: paneWindow, viewing: thread) }
         }
     }
     private func accessoryHeader(

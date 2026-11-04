@@ -31,10 +31,14 @@ extension ChatStore {
         await refreshPresence()
     }
     /// A click on a quote: highlights the quoted message. One not loaded brings the page around it, as web Chat does.
-    func showQuoted(_ id: MessageID, in conversation: ConversationID, window: ConversationID? = nil) async {
+    /// `viewing`: the thread the click came from. A reply in it is highlighted there, without opening its thread in
+    /// `window`'s pane (a thread window has none of its own, so `window` is the main window's).
+    func showQuoted(
+        _ id: MessageID, in conversation: ConversationID, window: ConversationID? = nil, viewing: ThreadID? = nil
+    ) async {
         if !history.messages.contains(where: { $0.id == id }) { await loadAround(id, in: conversation) }
         guard let quoted = history.messages.first(where: { $0.id == id }) else { return }
-        if let thread = quoted.threadID, thread != navigation.pane(window).thread {
+        if let thread = quoted.threadID, thread != viewing, thread != navigation.pane(window).thread {
             await openThread(quoted, window: window)
         }
         history.highlightedID = id

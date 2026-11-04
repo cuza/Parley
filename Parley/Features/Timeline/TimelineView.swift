@@ -94,7 +94,7 @@ struct TimelineView: View {
                     {
                         _ = await store.open(link)
                     } else {
-                        await store.showQuoted(id, in: conversation.id, window: paneWindow)
+                        await store.showQuoted(id, in: conversation.id, window: paneWindow, viewing: thread)
                     }
                 }
             },

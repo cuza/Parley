@@ -195,6 +195,17 @@ extension NetworkTests.QuoteReplyTests {
         await store.showQuoted(loaded.id, in: "engineering")
         #expect(store.history.highlightedID == loaded.id)
     }
+    /// A thread in its own window has no side pane: a quote of its own reply highlights it there and leaves the main
+    /// window's pane alone.
+    @Test func aQuoteInAThreadWindowStaysInThatWindow() async throws {
+        let store = ChatStore(backend: FakeBackend())
+        await store.start()
+        let reply = Message.fixture("reply", id: "engineering/t9/r1", in: "engineering", thread: "t9")
+        store.history.messages.append(reply)
+        await store.showQuoted(reply.id, in: "engineering", viewing: "t9")
+        #expect(store.navigation.pane(nil).thread == nil)
+        #expect(store.history.highlightedID == reply.id)
+    }
     @Test func showingAnOlderQuotedMessageLoadsBackToIt() async throws {
         let store = ChatStore(backend: FakeBackend(longHistory: 200))
         await store.start()
