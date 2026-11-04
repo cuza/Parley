@@ -71,3 +71,16 @@ jobs:
             -derivedDataPath build/dd \
             -clonedSourcePackagesDirPath build/spm \
             CODE_SIGNING_ALLOWED=NO
+
+  # ParleyKit also builds on Linux, for Parley-Qt. This catches a change that breaks it there.
+  parleykit-linux:
+    runs-on: ubuntu-latest
+    container: swift:6.4
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: ParleyKit
+    steps:
+      - uses: actions/checkout@v4
+      - run: swift build
+      - run: swift test

@@ -12,8 +12,8 @@
             "/one-chunk": (200, ["x"]),
             "/denied": (403, ["denied"]),
         ]
-        override class func canInit(with request: URLRequest) -> Bool { request.url?.host == "stub.test" }
-        override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
+        override static func canInit(with request: URLRequest) -> Bool { request.url?.host == "stub.test" }
+        override static func canonicalRequest(for request: URLRequest) -> URLRequest { request }
         override func startLoading() {
             guard let url = request.url, let script = Self.scripts[url.path] else { return }
             let response = HTTPURLResponse(
