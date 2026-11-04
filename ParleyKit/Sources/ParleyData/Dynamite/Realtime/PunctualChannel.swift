@@ -133,20 +133,27 @@ actor PunctualChannel {
         await update(added, cancelled: cancelled)
     }
 
-    /// Network back or Mac awake: reconnect now instead of waiting out the backoff. Watched while `run` runs.
+    /// Network back or Mac awake: reconnect now instead of waiting out the backoff. Watched while `run` runs. Other
+    /// platforms report these through `DynamiteBackend.networkChanged(isUp:)` and `systemDidWake()`.
     private func watchNetworkAndWake() -> () -> Void {
-        let monitor = NWPathMonitor()
-        monitor.pathUpdateHandler = { [weak self] path in Task { await self?.network(up: path.status == .satisfied) } }
-        monitor.start(queue: .global(qos: .utility))
-        let center = NSWorkspace.shared.notificationCenter
-        let wake = center.addObserver(forName: NSWorkspace.didWakeNotification, object: nil, queue: nil) {
-            [weak self] _ in
-            Task { await self?.nudge() }
-        }
-        return {
-            monitor.cancel()
-            center.removeObserver(wake)
-        }
+        #if !os(macOS)
+            return {}
+        #else
+            let monitor = NWPathMonitor()
+            monitor.pathUpdateHandler = { [weak self] path in
+                Task { await self?.network(up: path.status == .satisfied) }
+            }
+            monitor.start(queue: .global(qos: .utility))
+            let center = NSWorkspace.shared.notificationCenter
+            let wake = center.addObserver(forName: NSWorkspace.didWakeNotification, object: nil, queue: nil) {
+                [weak self] _ in
+                Task { await self?.nudge() }
+            }
+            return {
+                monitor.cancel()
+                center.removeObserver(wake)
+            }
+        #endif
     }
 
     func run() async {

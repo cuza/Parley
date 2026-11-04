@@ -132,6 +132,13 @@ extension SessionCookie {
 #endif
 
 /// Never follows redirects with manually attached cookies. No shared browser cookie jar.
+/// The realtime channel's response body as it arrives.
+#if canImport(Darwin)
+    typealias ByteStream = URLSession.AsyncBytes
+#else
+    typealias ByteStream = AsyncThrowingStream<UInt8, any Error>
+#endif
+
 final class NoAuthRedirects: NSObject, URLSessionTaskDelegate, Sendable {
     func urlSession(
         _ session: URLSession, task: URLSessionTask,
@@ -324,9 +331,16 @@ public actor WebSessionAuthorizer {
             text: { String(decoding: $0, as: UTF8.self) })
     }
     /// Streaming variant for the realtime channel: same checks, credentials and retry as `data(for:)`; returns once headers arrive.
-    func bytes(for original: URLRequest) async throws -> (URLSession.AsyncBytes, HTTPURLResponse) {
+    func bytes(for original: URLRequest) async throws -> (ByteStream, HTTPURLResponse) {
         try await perform(
-            original, { [session] in try await session.bytes(for: $0) },
+            original,
+            { [session] in
+                #if canImport(Darwin)
+                    try await session.bytes(for: $0)
+                #else
+                    try await streamBytes($0, configuration: session.configuration)
+                #endif
+            },
             text: { bytes in
                 var data = Data()
                 do {

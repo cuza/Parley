@@ -52,6 +52,15 @@ extension DynamiteBackend {
         #endif
     }
 
+    /// The network went down or came back, for platforms where the realtime channel can't watch it itself (all but macOS).
+    public func networkChanged(isUp: Bool) async {
+        await realtimeChannel?.network(up: isUp)
+    }
+    /// The computer woke from sleep, for platforms where the realtime channel can't watch for it itself.
+    public func systemDidWake() async {
+        await realtimeChannel?.nudge()
+    }
+
     public func watch(_ conversations: Set<ConversationID>) async {
         watched = conversations
         await realtimeChannel?.subscribe(conversations)
