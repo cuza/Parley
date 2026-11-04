@@ -39,14 +39,17 @@ extension DynamiteBackend {
         realtimeChannel = nil
         continuation.yield(.connectionChanged(.offline))
     }
+    /// Keeps the Mac from idling the app's networking while connected. Other platforms don't throttle it this way.
     func stayAwake(_ on: Bool) {
-        if on, awake == nil {
-            awake = ProcessInfo.processInfo.beginActivity(
-                options: .userInitiatedAllowingIdleSystemSleep, reason: "Google Chat connection")
-        } else if !on, let token = awake {
-            ProcessInfo.processInfo.endActivity(token)
-            awake = nil
-        }
+        #if canImport(Darwin)
+            if on, awake == nil {
+                awake = ProcessInfo.processInfo.beginActivity(
+                    options: .userInitiatedAllowingIdleSystemSleep, reason: "Google Chat connection")
+            } else if !on, let token = awake {
+                ProcessInfo.processInfo.endActivity(token)
+                awake = nil
+            }
+        #endif
     }
 
     public func watch(_ conversations: Set<ConversationID>) async {

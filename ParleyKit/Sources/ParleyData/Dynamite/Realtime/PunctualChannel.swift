@@ -1,8 +1,11 @@
-import AppKit
 import Foundation
-import Network
 import ParleyDomain
 import SwiftProtobuf
+
+#if os(macOS)
+    import AppKit
+    import Network
+#endif
 
 #if canImport(FoundationNetworking)
     import FoundationNetworking

@@ -1,6 +1,9 @@
 import Foundation
 import ParleyDomain
-import Security
+
+#if canImport(Security)
+    import Security
+#endif
 
 #if canImport(CryptoKit)
     import CryptoKit
@@ -80,51 +83,53 @@ extension SessionCookie {
     }
 }
 
-public struct KeychainSessionVault: SessionVault {
-    // Xcode's Debug builds keep their own session: an entry saved by one signature locks the other build out of it,
-    // so a Debug build and the installed app running side by side would keep signing each other out.
-    // What an installed copy reads after an update: change these only with a migration (a test pins them).
-    static let releaseService = "dev.cuza.Parley", debugService = "dev.cuza.Parley.debug",
-        account = "dynamite.web-session"
-    #if DEBUG
-        var service = Self.debugService
-    #else
-        var service = Self.releaseService
-    #endif
-    private var query: [String: Any] {
-        [
-            kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: service, kSecAttrAccount as String: Self.account,
-        ]
-    }
-    public init() {}
-    public func read() throws -> Data? {
-        var search = query
-        search[kSecReturnData as String] = true
-        search[kSecMatchLimit as String] = kSecMatchLimitOne
-        var result: CFTypeRef?
-        let status = SecItemCopyMatching(search as CFDictionary, &result)
-        if status == errSecItemNotFound { return nil }
-        guard status == errSecSuccess else { throw AuthFailure.keychain(status) }
-        return result as? Data
-    }
-    public func write(_ data: Data) throws {
-        let status = SecItemUpdate(query as CFDictionary, [kSecValueData as String: data] as CFDictionary)
-        if status == errSecItemNotFound {
-            var item = query
-            item[kSecValueData as String] = data
-            item[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
-            let added = SecItemAdd(item as CFDictionary, nil)
-            guard added == errSecSuccess else { throw AuthFailure.keychain(added) }
-        } else if status != errSecSuccess {
-            throw AuthFailure.keychain(status)
+#if canImport(Security)
+    public struct KeychainSessionVault: SessionVault {
+        // Xcode's Debug builds keep their own session: an entry saved by one signature locks the other build out of it,
+        // so a Debug build and the installed app running side by side would keep signing each other out.
+        // What an installed copy reads after an update: change these only with a migration (a test pins them).
+        static let releaseService = "dev.cuza.Parley", debugService = "dev.cuza.Parley.debug",
+            account = "dynamite.web-session"
+        #if DEBUG
+            var service = Self.debugService
+        #else
+            var service = Self.releaseService
+        #endif
+        private var query: [String: Any] {
+            [
+                kSecClass as String: kSecClassGenericPassword,
+                kSecAttrService as String: service, kSecAttrAccount as String: Self.account,
+            ]
+        }
+        public init() {}
+        public func read() throws -> Data? {
+            var search = query
+            search[kSecReturnData as String] = true
+            search[kSecMatchLimit as String] = kSecMatchLimitOne
+            var result: CFTypeRef?
+            let status = SecItemCopyMatching(search as CFDictionary, &result)
+            if status == errSecItemNotFound { return nil }
+            guard status == errSecSuccess else { throw AuthFailure.keychain(status) }
+            return result as? Data
+        }
+        public func write(_ data: Data) throws {
+            let status = SecItemUpdate(query as CFDictionary, [kSecValueData as String: data] as CFDictionary)
+            if status == errSecItemNotFound {
+                var item = query
+                item[kSecValueData as String] = data
+                item[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
+                let added = SecItemAdd(item as CFDictionary, nil)
+                guard added == errSecSuccess else { throw AuthFailure.keychain(added) }
+            } else if status != errSecSuccess {
+                throw AuthFailure.keychain(status)
+            }
+        }
+        public func delete() throws {
+            let status = SecItemDelete(query as CFDictionary)
+            guard status == errSecSuccess || status == errSecItemNotFound else { throw AuthFailure.keychain(status) }
         }
     }
-    public func delete() throws {
-        let status = SecItemDelete(query as CFDictionary)
-        guard status == errSecSuccess || status == errSecItemNotFound else { throw AuthFailure.keychain(status) }
-    }
-}
+#endif
 
 /// Never follows redirects with manually attached cookies. No shared browser cookie jar.
 final class NoAuthRedirects: NSObject, URLSessionTaskDelegate, Sendable {
@@ -160,7 +165,16 @@ public actor WebSessionAuthorizer {
     private var xsrfFetch: Task<(String, HTTPURLResponse), any Error>?
     private var generation = 0
     private var punctualBlock: String?  // the realtime registration from the last bootstrap page
-    public init(vault: any SessionVault = KeychainSessionVault(), session: URLSession? = nil) {
+    #if canImport(Security)
+        public init(vault: any SessionVault = KeychainSessionVault(), session: URLSession? = nil) {
+            self.init(storingIn: vault, session: session)
+        }
+    #else
+        public init(vault: any SessionVault, session: URLSession? = nil) {
+            self.init(storingIn: vault, session: session)
+        }
+    #endif
+    private init(storingIn vault: any SessionVault, session: URLSession?) {
         self.vault = vault
         if let session {
             self.session = session

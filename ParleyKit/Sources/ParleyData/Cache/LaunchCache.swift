@@ -6,11 +6,15 @@ public struct LaunchCache: LaunchCaching {
     let url: URL
     #if DEBUG  // its own file, as with the Keychain: a debug build signed into another account doesn't swap the installed app's
         public static let dynamite = LaunchCache(
-            url: URL.applicationSupportDirectory.appending(path: "Parley/cache-debug.json"))
+            url: Self.applicationSupport.appending(path: "Parley/cache-debug.json"))
     #else
         public static let dynamite = LaunchCache(
-            url: URL.applicationSupportDirectory.appending(path: "Parley/cache.json"))
+            url: Self.applicationSupport.appending(path: "Parley/cache.json"))
     #endif
+    /// `~/Library/Application Support` on the Mac, `~/.local/share` on Linux.
+    static var applicationSupport: URL {
+        FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+    }
     /// A file this build can't read at all is moved aside (`.unreadable`) rather than overwritten by the next save.
     public func load() -> LaunchSnapshot {
         guard let data = try? Data(contentsOf: url) else { return LaunchSnapshot() }

@@ -202,6 +202,14 @@ extension DynamiteMapper {
     /// BotResponse type on a slash command's own message: the command went to the app; nothing to draw.
     static let slashCommandEcho: Int32 = 5
     private static let log = Logger(subsystem: "dev.cuza.Parley", category: "dynamite")
+    /// "A, B and C" in the user's language on Apple platforms; English elsewhere, as the rest of these lines are.
+    static func joinedList(_ items: [String]) -> String {
+        #if canImport(Darwin)
+            ListFormatter.localizedString(byJoining: items)
+        #else
+            items.count < 2 ? items.joined() : items.dropLast().joined(separator: ", ") + " and " + items.last!
+        #endif
+    }
 
     /// Annotation kinds that only system events carry.
     private static let systemKinds: Set<Dynamite_Annotation.TypeEnum> = [
@@ -258,8 +266,8 @@ extension DynamiteMapper {
                 func affected(first: Bool) -> String? {
                     ids.isEmpty
                         ? nil
-                        : ListFormatter.localizedString(
-                            byJoining: ids.enumerated().map { name($1, snapshots[$1] ?? "", first: first && $0 == 0) })
+                        : Self.joinedList(
+                            ids.enumerated().map { name($1, snapshots[$1] ?? "", first: first && $0 == 0) })
                 }
                 // An admin is not named, as for a room update.
                 let actor =
