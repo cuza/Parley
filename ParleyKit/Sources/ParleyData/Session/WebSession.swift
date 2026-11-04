@@ -131,7 +131,6 @@ extension SessionCookie {
     }
 #endif
 
-/// Never follows redirects with manually attached cookies. No shared browser cookie jar.
 /// The realtime channel's response body as it arrives.
 #if canImport(Darwin)
     typealias ByteStream = URLSession.AsyncBytes
@@ -139,6 +138,7 @@ extension SessionCookie {
     typealias ByteStream = AsyncThrowingStream<UInt8, any Error>
 #endif
 
+/// Never follows redirects with manually attached cookies. No shared browser cookie jar.
 final class NoAuthRedirects: NSObject, URLSessionTaskDelegate, Sendable {
     func urlSession(
         _ session: URLSession, task: URLSessionTask,

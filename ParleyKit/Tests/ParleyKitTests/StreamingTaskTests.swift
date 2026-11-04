@@ -12,10 +12,17 @@
             "/one-chunk": (200, ["x"]),
             "/denied": (403, ["denied"]),
         ]
+        /// `/hang` sends its headers and then nothing, as a long poll waiting for news does.
         override static func canInit(with request: URLRequest) -> Bool { request.url?.host == "stub.test" }
         override static func canonicalRequest(for request: URLRequest) -> URLRequest { request }
         override func startLoading() {
-            guard let url = request.url, let script = Self.scripts[url.path] else { return }
+            guard let url = request.url else { return }
+            if url.path == "/hang" {
+                let response = HTTPURLResponse(url: url, statusCode: 200, httpVersion: "HTTP/1.1", headerFields: [:])!
+                client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
+                return
+            }
+            guard let script = Self.scripts[url.path] else { return }
             let response = HTTPURLResponse(
                 url: url, statusCode: script.status, httpVersion: "HTTP/1.1", headerFields: [:])!
             client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
@@ -54,5 +61,20 @@
         let (bytes, response) = try await stream("denied")
         #expect((response as? HTTPURLResponse)?.statusCode == 403)
         #expect(String(decoding: try await collect(bytes), as: UTF8.self) == "denied")
+    }
+
+    @Test(.timeLimit(.minutes(1))) func cancellingTheReaderEndsAHangingStream() async throws {
+        let reader = Task { try await collect(try await stream("hang").0) }
+        try await Task.sleep(for: .milliseconds(200))
+        reader.cancel()
+        _ = try? await reader.value  // returns instead of waiting for the server
+    }
+
+    @Test(.timeLimit(.minutes(1))) func alreadyCancelledCallerDoesNotHang() async throws {
+        let caller = Task {
+            withUnsafeCurrentTask { $0?.cancel() }
+            return try await stream("hang")
+        }
+        await #expect(throws: (any Error).self) { try await caller.value }
     }
 #endif
