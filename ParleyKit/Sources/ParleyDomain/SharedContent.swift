@@ -36,13 +36,27 @@ public struct SharedContent: Equatable {
         }
     }
     /// Web links in the text: annotated ones, then any the server left bare.
-    private static let detector = try? NSDataDetector(types: NSTextCheckingResult.CheckingType.link.rawValue)
+    #if canImport(Darwin)
+        private static let detector = try? NSDataDetector(types: NSTextCheckingResult.CheckingType.link.rawValue)
+        static func bareLinks(in text: String) -> [URL] {
+            detector?.matches(in: text, range: NSRange(text.startIndex..., in: text)).compactMap(\.url) ?? []
+        }
+    #else
+        /// Foundation off Apple platforms has no link detector: web addresses up to the next space, without the
+        /// punctuation that ends a sentence.
+        static func bareLinks(in text: String) -> [URL] {
+            text.matches(of: /https?:\/\/\S+/).compactMap { match in
+                var link = Substring(match.output)
+                while let last = link.last, ".,;:!?)\"'".contains(last) { link = link.dropLast() }
+                return URL(string: String(link))
+            }
+        }
+    #endif
     private static func links(in message: Message) -> [Attachment] {
         let annotated = message.formatting.compactMap { range -> URL? in
             if case .link(let url) = range.style { url } else { nil }
         }
-        let text = message.text
-        let bare = detector?.matches(in: text, range: NSRange(text.startIndex..., in: text)).compactMap(\.url) ?? []
+        let bare = bareLinks(in: message.text)
         return (annotated + bare).filter { ["http", "https"].contains($0.scheme?.lowercased()) }
             .map { Attachment(name: $0.absoluteString, kind: .link, url: $0) }
     }

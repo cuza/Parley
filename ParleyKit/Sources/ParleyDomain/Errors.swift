@@ -1,5 +1,10 @@
 import Foundation
 
+#if !canImport(Darwin)
+    /// The Keychain's status code type, so `AuthFailure` keeps one shape everywhere.
+    public typealias OSStatus = Int32
+#endif
+
 public enum AuthFailure: Error, LocalizedError, Equatable {
     case signInRequired, browserClosed, chatNotOpen
     case invalidSession, invalidDestination, unexpectedResponse, malformedProto

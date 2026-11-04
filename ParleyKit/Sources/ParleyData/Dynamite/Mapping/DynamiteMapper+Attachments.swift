@@ -1,6 +1,5 @@
 import Foundation
 import ParleyDomain
-import UniformTypeIdentifiers
 
 extension DynamiteMapper {
     /// A Google Meet call, as the chip Google Chat shows: its status, opening the meeting.
@@ -154,7 +153,7 @@ extension DynamiteMapper {
             // No MIME type: Google Chat falls back to the URL's extension.
             let type =
                 !link.mimeType.isEmpty
-                ? link.mimeType : UTType(filenameExtension: url.pathExtension)?.preferredMIMEType ?? ""
+                ? link.mimeType : FileTypes.mimeType(forExtension: url.pathExtension) ?? ""
             let thumbnail = imageURL(link.imageURL)
             if type.hasPrefix("image/") {
                 // Without an image from Google, the link itself is the picture only on a GIF service (a GIF pasted from

@@ -1,23 +1,14 @@
 #if !canImport(os)
     import Foundation
 
-    /// `os.Logger`'s calls where `os` doesn't exist (Linux, Windows), so ParleyKit logs the same way everywhere. Values
-    /// stay hidden unless marked `.public`, as `os` does outside a debugger; numbers and booleans are public by default.
-    /// One line per message on stderr, which systemd's journal picks up.
+    /// `os.Logger`'s calls where `os` doesn't exist (Linux, Windows), so ParleyKit logs the same way everywhere.
+    /// Values stay hidden unless marked `.public`, as `os` does outside a debugger. Numbers and booleans are public by
+    /// default. One line per message on stderr, which systemd's journal picks up.
     public struct Logger: Sendable {
         public enum Privacy: Sendable { case `public`, `private`, auto }
 
         public struct Message: ExpressibleByStringInterpolation, Sendable {
-            public struct StringInterpolation: StringInterpolationProtocol {
-                var text = ""
-                public init(literalCapacity: Int, interpolationCount: Int) {}
-                public mutating func appendLiteral(_ literal: String) { text += literal }
-                public mutating func appendInterpolation<T>(_ value: T, privacy: Privacy = .auto) {
-                    let isScalar = value is any BinaryInteger || value is any BinaryFloatingPoint || value is Bool
-                    let shown = privacy == .public || (privacy == .auto && isScalar)
-                    text += shown ? String(describing: value) : "<private>"
-                }
-            }
+            public typealias StringInterpolation = LogInterpolation
             let text: String
             public init(stringLiteral value: String) { text = value }
             public init(stringInterpolation: StringInterpolation) { text = stringInterpolation.text }
@@ -35,6 +26,16 @@
 
         private func write(_ message: Message) {
             FileHandle.standardError.write(Data("\(category): \(message.text)\n".utf8))
+        }
+    }
+    public struct LogInterpolation: StringInterpolationProtocol {
+        var text = ""
+        public init(literalCapacity: Int, interpolationCount: Int) {}
+        public mutating func appendLiteral(_ literal: String) { text += literal }
+        public mutating func appendInterpolation<T>(_ value: T, privacy: Logger.Privacy = .auto) {
+            let isScalar = value is any BinaryInteger || value is any BinaryFloatingPoint || value is Bool
+            let shown = privacy == .public || (privacy == .auto && isScalar)
+            text += shown ? String(describing: value) : "<private>"
         }
     }
 #endif

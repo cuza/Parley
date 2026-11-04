@@ -1,6 +1,11 @@
 import Foundation
-import ImageIO
-import UniformTypeIdentifiers
+
+#if canImport(ImageIO)
+    import ImageIO
+#endif
+#if canImport(UniformTypeIdentifiers)
+    import UniformTypeIdentifiers
+#endif
 
 /// A Google Drive file, as the @ list offers it and a message's Drive chip carries it.
 public struct DriveFile: Hashable, Codable, Sendable {
@@ -106,23 +111,33 @@ extension Attachment {
     /// A file picked, pasted or dropped into the composer. Images keep their pixel size so the echo reserves its space.
     public static func localFile(at url: URL) throws -> Attachment {
         let name = url.lastPathComponent
-        let values = try? url.resourceValues(forKeys: [.isRegularFileKey, .fileSizeKey, .contentTypeKey])
+        #if canImport(UniformTypeIdentifiers)
+            let values = try? url.resourceValues(forKeys: [.isRegularFileKey, .fileSizeKey, .contentTypeKey])
+        #else
+            let values = try? url.resourceValues(forKeys: [.isRegularFileKey, .fileSizeKey])
+        #endif
         guard url.isFileURL, values?.isRegularFile == true, let size = values?.fileSize else {
             throw AttachmentError.notAFile(name)
         }
         guard size > 0 else { throw AttachmentError.empty(name) }
         guard size <= maxUploadBytes else { throw AttachmentError.tooLarge(name) }
-        let type = values?.contentType ?? UTType(filenameExtension: url.pathExtension) ?? .data
-        var file = Attachment(
-            name: name, contentType: type.preferredMIMEType ?? "application/octet-stream",
-            kind: type.conforms(to: .image) ? .image : .file, url: url)
-        if file.kind == .image, let source = CGImageSourceCreateWithURL(url as CFURL, nil),
-            let properties = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any]
-        {
-            file.width = properties[kCGImagePropertyPixelWidth] as? Int
-            file.height = properties[kCGImagePropertyPixelHeight] as? Int
-            file.thumbnailURL = url
-        }
+        #if canImport(UniformTypeIdentifiers)
+            let type = values?.contentType ?? UTType(filenameExtension: url.pathExtension) ?? .data
+            var file = Attachment(
+                name: name, contentType: type.preferredMIMEType ?? "application/octet-stream",
+                kind: type.conforms(to: .image) ? .image : .file, url: url)
+            if file.kind == .image, let source = CGImageSourceCreateWithURL(url as CFURL, nil),
+                let properties = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any]
+            {
+                file.width = properties[kCGImagePropertyPixelWidth] as? Int
+                file.height = properties[kCGImagePropertyPixelHeight] as? Int
+                file.thumbnailURL = url
+            }
+        #else
+            let mime = FileTypes.mimeType(forExtension: url.pathExtension) ?? "application/octet-stream"
+            let file = Attachment(
+                name: name, contentType: mime, kind: mime.hasPrefix("image/") ? .image : .file, url: url)
+        #endif
         return file
     }
 }
