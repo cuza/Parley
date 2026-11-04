@@ -1,6 +1,11 @@
-import CryptoKit
 import Foundation
 import ParleyDomain
+
+#if canImport(CryptoKit)
+    import CryptoKit
+#else
+    import Crypto
+#endif
 
 /// Domain IDs: conversation "space/<id>" | "dm/<id>"; message "<conversation>/<topic>/<message>".
 enum DynamiteID {

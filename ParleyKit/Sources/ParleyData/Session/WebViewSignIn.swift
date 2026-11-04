@@ -1,8 +1,14 @@
 import AppKit
 import Foundation
-import OSLog
 import ParleyDomain
 import WebKit
+
+#if canImport(FoundationNetworking)
+    import FoundationNetworking
+#endif
+#if canImport(os)
+    import OSLog
+#endif
 
 /// The sign-in window's website data, as `WebViewSignIn` uses it; tests replace it.
 @MainActor public protocol SignInWebData: AnyObject {

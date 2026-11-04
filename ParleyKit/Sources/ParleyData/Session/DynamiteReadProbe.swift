@@ -1,6 +1,10 @@
 import Foundation
 import ParleyDomain
 
+#if canImport(FoundationNetworking)
+    import FoundationNetworking
+#endif
+
 /// A deliberately small wire reader for Connection Diagnostics' read check, independent of the protocol layer it
 /// checks, so a broken mapper can't hide a working session. Field numbers follow Google Chat's schema.
 enum ProbeWire {

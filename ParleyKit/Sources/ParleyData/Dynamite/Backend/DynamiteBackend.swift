@@ -1,7 +1,13 @@
 import Foundation
 import ParleyDomain
 import SwiftProtobuf
-import os
+
+#if canImport(FoundationNetworking)
+    import FoundationNetworking
+#endif
+#if canImport(os)
+    import os
+#endif
 
 /// SwiftProtobuf names a `Message` too: within Data, the name means a chat message, as it did before Data was a module.
 public typealias Message = ParleyDomain.Message

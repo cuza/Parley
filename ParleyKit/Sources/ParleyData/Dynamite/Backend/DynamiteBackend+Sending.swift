@@ -2,6 +2,10 @@ import Foundation
 import ParleyDomain
 import SwiftProtobuf
 
+#if canImport(FoundationNetworking)
+    import FoundationNetworking
+#endif
+
 extension DynamiteBackend {
     public func send(_ draft: MessageDraft, to conversation: ConversationID, thread: ThreadID?) async throws -> Message
     {

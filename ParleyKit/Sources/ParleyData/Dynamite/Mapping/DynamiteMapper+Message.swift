@@ -1,6 +1,9 @@
 import Foundation
 import ParleyDomain
-import os
+
+#if canImport(os)
+    import os
+#endif
 
 extension DynamiteMapper {
     static func message(

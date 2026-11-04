@@ -1,8 +1,19 @@
-import CryptoKit
 import Foundation
-import OSLog
 import ParleyDomain
 import Security
+
+#if canImport(CryptoKit)
+    import CryptoKit
+#else
+    import Crypto
+#endif
+
+#if canImport(FoundationNetworking)
+    import FoundationNetworking
+#endif
+#if canImport(os)
+    import OSLog
+#endif
 
 /// Signing in and the session's health, for the session here and the sign-in views.
 public let authLog = Logger(subsystem: "dev.cuza.Parley", category: "auth")

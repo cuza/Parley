@@ -1,6 +1,12 @@
 import Foundation
 import ParleyDomain
-import os
+
+#if canImport(FoundationNetworking)
+    import FoundationNetworking
+#endif
+#if canImport(os)
+    import os
+#endif
 
 /// One call to Google Contacts' widget service, the one behind the person card and detailed view in Google Chat. A new
 /// capability is a new type conforming to this; `GoogleContacts` sends any of them.

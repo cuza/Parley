@@ -2,6 +2,10 @@ import Foundation
 import ParleyDomain
 import SwiftProtobuf
 
+#if canImport(FoundationNetworking)
+    import FoundationNetworking
+#endif
+
 /// Binary protobuf RPCs over the author's web session. `rt=b` is the live-verified response format.
 struct DynamiteClient: Sendable {
     let authorizer: WebSessionAuthorizer

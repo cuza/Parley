@@ -2,6 +2,10 @@ import Foundation
 import ParleyDomain
 import WebKit
 
+#if canImport(FoundationNetworking)
+    import FoundationNetworking
+#endif
+
 /// Renews the session without a window; tests replace it.
 @MainActor public protocol SessionRenewing: AnyObject {
     func renew() async throws -> WebCredentials

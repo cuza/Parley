@@ -3,7 +3,13 @@ import Foundation
 import Network
 import ParleyDomain
 import SwiftProtobuf
-import os
+
+#if canImport(FoundationNetworking)
+    import FoundationNetworking
+#endif
+#if canImport(os)
+    import os
+#endif
 
 enum PunctualError: Error {
     case unregistered, malformed

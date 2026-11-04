@@ -1,6 +1,12 @@
 import Foundation
 import ParleyDomain
-import os
+
+#if canImport(FoundationNetworking)
+    import FoundationNetworking
+#endif
+#if canImport(os)
+    import os
+#endif
 
 /// Google's services beyond Chat's own API that Google Chat's web client uses (Drive suggestions, People),
 /// on hosts Parley signs requests to. A fixed list: a link in a message never gets a signed request.
