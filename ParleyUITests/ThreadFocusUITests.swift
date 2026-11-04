@@ -33,6 +33,38 @@ import XCTest
         XCTAssertTrue(
             (main.value as? String)?.hasSuffix("x") == true, "the conversation's composer has the keyboard again")
     }
+    /// A click on a conversation in the sidebar puts the keyboard in its composer. ↑ and ↓ in the sidebar leave it
+    /// there, so the next arrow key moves on.
+    func testOpeningAConversationFocusesItsComposerUnlessArrowingThroughTheSidebar() throws {
+        let app = launchDemo()
+        let sidebar = app.descendants(matching: .any)["sidebar"].firstMatch
+        XCTAssertTrue(sidebar.waitForExistence(timeout: 5))
+        func row(_ name: String) -> XCUIElement {
+            sidebar.descendants(matching: .any).matching(NSPredicate(format: "label BEGINSWITH %@", name)).firstMatch
+        }
+        let focused = app.textViews.matching(
+            NSPredicate(format: "identifier == %@ AND hasKeyboardFocus == true", "composer")
+        ).firstMatch
+        // A shortcut: no composer, so the sidebar keeps the keyboard. Its title is a value, and SwiftUI's list rows
+        // report themselves not hittable: click its middle.
+        sidebar.staticTexts.matching(NSPredicate(format: "value == %@", "Drafts")).firstMatch
+            .coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).click()
+        XCTAssertTrue(app.textViews["composer"].waitForNonExistence(timeout: 5))
+        app.typeKey(.downArrow, modifierFlags: [])  // onto Ask Gemini, which has a composer
+        XCTAssertTrue(app.textViews["composer"].waitForExistence(timeout: 5), "↓ opened a conversation")
+        XCTAssertFalse(focused.waitForExistence(timeout: 1), "the composer left the keyboard with the sidebar")
+        XCTAssertEqual(sidebar.value(forKey: "hasKeyboardFocus") as? Bool, true)
+        app.typeKey(.downArrow, modifierFlags: [])
+        XCTAssertFalse(focused.waitForExistence(timeout: 1), "the next ↓ moved through the sidebar too")
+        XCTAssertEqual(sidebar.value(forKey: "hasKeyboardFocus") as? Bool, true)
+
+        row("Alex Rivera").click()
+        XCTAssertTrue(focused.waitForExistence(timeout: 5), "a click gives the conversation's composer the keyboard")
+        app.typeText("hi")
+        let typed = app.textViews.matching(NSPredicate(format: "identifier == %@ AND value == %@", "composer", "hi"))
+            .firstMatch
+        XCTAssertTrue(typed.waitForExistence(timeout: 3), "typing went to the composer without a click")
+    }
     /// With the thread pane's composer in use, Conversation ▸ Open Thread in New Window (⌘O) pops the thread out.
     func testCommandOOpensTheFocusedThreadInAWindow() throws {
         let app = launchDemo()

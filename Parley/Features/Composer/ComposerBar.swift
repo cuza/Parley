@@ -263,8 +263,9 @@ struct ComposerBar: View {
                 needSlashCommands: { query in Task { await store.loadSlashCommands(conversation.id, query: query) } },
                 runCommand: { command in Task { await store.run(command, in: conversation.id) } },
                 loadImage: { try await store.attachmentData($0, thumbnail: $1) },
-                // A thread's composer takes the keyboard as it opens: a quoted message's id or the thread's, so plain text.
-                focus: store.drafting.quoting[scope]?.id?.rawValue ?? thread?.rawValue, handle: composerHandle,
+                // The composer takes the keyboard as its conversation or thread opens, and when a message is quoted.
+                focus: store.drafting.quoting[scope]?.id?.rawValue ?? thread?.rawValue ?? conversation.id.rawValue,
+                handle: composerHandle,
                 height: { if fieldHeight != $0 { fieldHeight = $0 } }
             )
             .frame(minWidth: 60).frame(height: min(130, max(Self.control, fieldHeight)))

@@ -293,15 +293,21 @@ final class ComposerTextView: NSTextView {
     }
     /// Set while the composer has been asked for the keyboard but isn't in a window to take it.
     private var wantsKeyboard = false
-    /// Takes the keyboard now, or as soon as the composer is in its window: one made with a focus (a thread's, as it
-    /// opens) can join its window a few run-loop turns later.
+    /// Takes the keyboard now, or as soon as the composer is in its window: one made with a focus (a conversation's
+    /// or a thread's, as it opens) can join its window a few run-loop turns later.
     func takeKeyboard() {
         if let window {
-            window.makeFirstResponder(self)
+            if !Self.browsingList(window.firstResponder, NSApp.currentEvent) { window.makeFirstResponder(self) }
             wantsKeyboard = false
         } else {
             wantsKeyboard = true
         }
+    }
+    /// A list (the sidebar) that moved its selection with ↑ or ↓ keeps the keyboard, so the next arrow key moves
+    /// it again.
+    static func browsingList(_ responder: NSResponder?, _ event: NSEvent?) -> Bool {
+        guard responder is NSTableView, let event, event.type == .keyDown || event.type == .keyUp else { return false }
+        return event.keyCode == 125 || event.keyCode == 126
     }
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
