@@ -188,7 +188,8 @@ enum CardLayout {
             uniqueKeysWithValues: (sizes.count > 1_000 ? [:] : sizes).map {
                 ($0.absoluteString, [$1.width, $1.height])
             })
-        Task.detached(priority: .background) {
+        // Utility, not background: background disk writes are throttled, and on a busy Mac the file lagged for seconds.
+        Task.detached(priority: .utility) {
             try? FileManager.default.createDirectory(
                 at: file.deletingLastPathComponent(), withIntermediateDirectories: true)
             try? PropertyListEncoder().encode(saved).write(to: file, options: .atomic)
