@@ -45,11 +45,11 @@ struct AttachmentMappingTests: MapperFixtures {
                     width: 800, height: 600)
             ])
     }
-    @Test func uploadedFileHasNoThumbnailAndPercentTokenIsDecodedFirst() throws {
+    @Test func uploadedFileDownloadsAndPercentTokenIsDecodedFirst() throws {
         let file = try #require(
             try attachments([upload("q3.zip", type: "application/zip", token: "x%2By")], text: "see attached")
                 .attachments.first)
-        #expect(file.kind == .file && file.thumbnailURL == nil && file.width == nil)
+        #expect(file.kind == .file && file.width == nil)
         #expect(
             file.url
                 == URL(
@@ -57,16 +57,23 @@ struct AttachmentMappingTests: MapperFixtures {
         let video = try #require(try attachments([upload("clip.mp4", type: "video/mp4", token: "v")]).attachments.first)
         #expect(video.kind == .video && video.thumbnailURL?.absoluteString.contains("url_type=FIFE_URL") == true)
     }
-    /// Google Chat renders a PDF's first page: web asks for it with url_type THUMBNAIL_URL.
-    @Test func uploadedPDFPreviewsItsFirstPage() throws {
-        let pdf = try #require(
-            try attachments([upload("q3.pdf", type: "application/pdf", token: "x%2By")]).attachments.first)
-        #expect(pdf.kind == .file)
+    /// Google Chat renders a file's first page (PDF, Word…) and web asks every uploaded file for it with url_type
+    /// THUMBNAIL_URL; a type it can't render (plain text) answers 400 and web shows the type's icon instead.
+    @Test(arguments: [
+        ("q3.pdf", "application/pdf", "application%2Fpdf"),
+        (
+            "q3.docx", "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            "application%2Fvnd.openxmlformats-officedocument.wordprocessingml.document"
+        ),
+        ("notes.txt", "text/plain", "text%2Fplain"),
+    ])
+    func uploadedFileAsksForItsFirstPage(name: String, type: String, encoded: String) throws {
+        let file = try #require(try attachments([upload(name, type: type, token: "x%2By")]).attachments.first)
+        #expect(file.kind == .file)
         #expect(
-            pdf.thumbnailURL
+            file.thumbnailURL
                 == URL(
-                    string: Self.base
-                        + "url_type=THUMBNAIL_URL&content_type=application%2Fpdf&attachment_token=x%2By"
+                    string: Self.base + "url_type=THUMBNAIL_URL&content_type=\(encoded)&attachment_token=x%2By"
                         + "&allow_caching=true&sz=w512"))
     }
     @Test func driveFileOpensItsLink() throws {

@@ -96,13 +96,14 @@ extension DynamiteMapper {
             return Attachment(
                 name: upload.contentName.isEmpty ? "Attachment" : upload.contentName, contentType: type, kind: kind,
                 // A resized FIFE rendition of a GIF is a still frame: show the animated original.
-                // Google Chat renders a PDF's first page as a picture.
-                thumbnailURL: type == "application/pdf"
+                // Google Chat renders a file's first page (PDF, Word…) as a picture. Web asks for it for every file
+                // and shows the type's icon when there is none (plain text answers 400).
+                thumbnailURL: kind == .file
                     ? attachmentURL([
                         ("url_type", "THUMBNAIL_URL"), ("content_type", type), ("attachment_token", token),
                         ("allow_caching", "true"), ("sz", "w512"),
                     ])
-                    : kind == .file || kind == .voice
+                    : kind == .voice
                         ? nil
                         : type == "image/gif"
                             ? download
