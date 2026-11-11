@@ -386,6 +386,10 @@ extension ComposerTextView {
     func reportHeight() {
         guard bounds.width > 0 else { return }  // not laid out yet: everything would wrap
         let height = contentHeight
+        // Only a draft taller than the field's limit gets a scroller. With autohiding, a legacy scroller (a mouse) that
+        // showed while the field caught up with the text narrowed it, rewrapped it taller, then hid as the field grew,
+        // over and over. A scroller only rewraps the text taller, so this choice never flips back by itself.
+        enclosingScrollView?.hasVerticalScroller = height > NativeComposer.tallest
         guard height != reportedHeight else { return }
         reportedHeight = height
         heightChanged?(height)

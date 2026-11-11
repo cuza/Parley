@@ -28,6 +28,8 @@ struct NativeComposer: NSViewRepresentable {
     var focus: String?  // the field takes focus each time this changes to a new non-nil value
     var handle: ComposerHandle?  // for controls beside the field that act on it
     var height: (CGFloat) -> Void = { _ in }  // the laid-out text height, whenever it changes
+    /// The field grows with its text up to this height, then scrolls.
+    static let tallest: CGFloat = 130
     func makeCoordinator() -> Coordinator { Coordinator(self) }
     func makeNSView(context: Context) -> NSScrollView { Self.makeScrollView(delegate: context.coordinator) }
     static func makeScrollView(delegate: (any NSTextViewDelegate)?) -> NSScrollView {
@@ -54,8 +56,7 @@ struct NativeComposer: NSViewRepresentable {
         view.setAccessibilityIdentifier("composer")
         scroll.documentView = view
         scroll.drawsBackground = false
-        scroll.hasVerticalScroller = true
-        scroll.autohidesScrollers = true  // legacy scrollers ("Show scroll bars: Always", a mouse) only once the draft overflows
+        scroll.hasVerticalScroller = false  // until the draft is taller than `tallest` (`ComposerTextView.reportHeight`)
         return scroll
     }
     func updateNSView(_ scroll: NSScrollView, context: Context) {

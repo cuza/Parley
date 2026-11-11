@@ -268,7 +268,7 @@ struct ComposerBar: View {
                 handle: composerHandle,
                 height: { if fieldHeight != $0 { fieldHeight = $0 } }
             )
-            .frame(minWidth: 60).frame(height: min(130, max(Self.control, fieldHeight)))
+            .frame(minWidth: 60).frame(height: min(NativeComposer.tallest, max(Self.control, fieldHeight)))
             .overlay(alignment: .topLeading) {
                 if draft.isEmpty {  // aligned with the text view's inset and line padding
                     Text(ChatView.composerPrompt(conversation, thread: thread)).foregroundStyle(.tertiary).padding(
