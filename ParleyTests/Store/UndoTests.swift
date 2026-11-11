@@ -54,7 +54,8 @@ import Testing
         manager.undo()
         await eventually { room(store, "launch")?.muted == false }
         manager.redo()
-        await eventually { room(store, "launch")?.muted == true }
+        await eventually { await fake.changes.count == 3 }
+        #expect(room(store, "launch")?.muted == true)
         #expect(await fake.changes == ["mute launch", "unmute launch", "mute launch"])
         #expect(manager.undoActionName == "Mute" && !manager.canRedo)
         manager.undo()
@@ -65,7 +66,8 @@ import Testing
         let (store, fake, manager) = await undoable()
         await store.hide("general")
         manager.undo()
-        await eventually { room(store, "general") != nil }
+        await eventually { await fake.changes.count == 2 }
+        #expect(room(store, "general") != nil)
         #expect(await fake.changes == ["hide general", "unhide general"])
         await store.unhide("general")  // nothing to unhide: nothing changes, and Redo Hide stays
         #expect(manager.redoActionName == "Hide")
@@ -81,8 +83,9 @@ import Testing
         await store.markAsRead("launch")
         #expect(room(store, "launch")?.unread == 0 && manager.undoActionName == "Mark as Read")
         manager.undo()
-        await eventually { room(store, "launch")?.unread == 1 }
-        #expect(await fake.changes.last == "unread launch")
+        // The store changes first, then asks the server: wait for the server's change, which comes last.
+        await eventually { await fake.changes.last == "unread launch" }
+        #expect(room(store, "launch")?.unread == 1)
     }
     @Test func aNotificationLevelGoesBackToTheOneBefore() async {
         let (store, fake, manager) = await undoable()
@@ -91,8 +94,8 @@ import Testing
         await store.setNotificationLevel(.off, "launch")
         #expect(manager.undoActionName == "Change Notifications")
         manager.undo()
-        await eventually { room(store, "launch")?.notificationLevel == .all }
-        #expect(await fake.changes.last == "level all launch")
+        await eventually { await fake.changes.last == "level all launch" }
+        #expect(room(store, "launch")?.notificationLevel == .all)
     }
     @Test func sectionRenamesAndMovesAreUndone() async throws {
         let (store, fake, manager) = await undoable()
