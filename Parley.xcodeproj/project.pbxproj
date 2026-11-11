@@ -9,7 +9,7 @@
 /* Begin PBXBuildFile section */
 		12130BED6EEBB662B58E428B /* ParleyDomain in Frameworks */ = {isa = PBXBuildFile; productRef = E82F65DA472653DF2670C9FC /* ParleyDomain */; };
 		188A763D55CCA3D3B4EDDE1C /* ParleyData in Frameworks */ = {isa = PBXBuildFile; productRef = BD6E8C3873250E6FE075CF70 /* ParleyData */; };
-		88A883AF9CD76B871BDFEF51 /* ShareHandOff.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1E40B4C0687DB78C90926BE1 /* ShareHandOff.swift */; };
+		3C9FE0898E2ED223D4F39386 /* ShareHandOff.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4763474F3571A3AD1DDABD48 /* ShareHandOff.swift */; };
 		9B0D59E4D43E2CD917AD1839 /* Sparkle in Frameworks */ = {isa = PBXBuildFile; productRef = 3823B0153EB2C5F3A9BD226A /* Sparkle */; };
 		E1BB06CCCA2E2E46633D9548 /* ParleyShare.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = 48FFD3DE1AB27B26CEDC676E /* ParleyShare.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
 /* End PBXBuildFile section */
@@ -53,8 +53,8 @@
 /* End PBXCopyFilesBuildPhase section */
 
 /* Begin PBXFileReference section */
-		1E40B4C0687DB78C90926BE1 /* ShareHandOff.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ShareHandOff.swift; sourceTree = "<group>"; };
 		2566E61926555FC1B44EDC09 /* Parley.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Parley.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		4763474F3571A3AD1DDABD48 /* ShareHandOff.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = ShareHandOff.swift; path = ParleyShare/ShareHandOff.swift; sourceTree = "<group>"; };
 		48FFD3DE1AB27B26CEDC676E /* ParleyShare.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = ParleyShare.appex; sourceTree = BUILT_PRODUCTS_DIR; };
 		705F447DEB72AB8F1B77FE45 /* ParleyUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = ParleyUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		B2E626F61AEEEE947B011F9E /* ParleyTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = ParleyTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -153,20 +153,12 @@
 			children = (
 				99236FEB0D1DEBD81E7A8A46 /* Packages */,
 				26273F999C26A48789ADDF1E /* Parley */,
-				841A95CEA3BB6812C6CD0DA3 /* ParleyShare */,
 				49BB7D574DD32857D3469421 /* ParleyShare */,
 				900F4B750DBD3CDF89D0718C /* ParleyTests */,
 				7D6CF91B5827AC9D7DD61F17 /* ParleyUITests */,
+				BA9601D89904F8E1DC50BDBA /* Shared With Extension */,
 				29D2794AEE33E5C69458B358 /* Products */,
 			);
-			sourceTree = "<group>";
-		};
-		841A95CEA3BB6812C6CD0DA3 /* ParleyShare */ = {
-			isa = PBXGroup;
-			children = (
-				1E40B4C0687DB78C90926BE1 /* ShareHandOff.swift */,
-			);
-			path = ParleyShare;
 			sourceTree = "<group>";
 		};
 		99236FEB0D1DEBD81E7A8A46 /* Packages */ = {
@@ -175,6 +167,14 @@
 				E5A7E7F8E9FA62CADE73D9CD /* ParleyKit */,
 			);
 			name = Packages;
+			sourceTree = "<group>";
+		};
+		BA9601D89904F8E1DC50BDBA /* Shared With Extension */ = {
+			isa = PBXGroup;
+			children = (
+				4763474F3571A3AD1DDABD48 /* ShareHandOff.swift */,
+			);
+			name = "Shared With Extension";
 			sourceTree = "<group>";
 		};
 /* End PBXGroup section */
@@ -383,7 +383,7 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				88A883AF9CD76B871BDFEF51 /* ShareHandOff.swift in Sources */,
+				3C9FE0898E2ED223D4F39386 /* ShareHandOff.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -463,7 +463,7 @@
 				CODE_SIGN_IDENTITY = "Apple Development";
 				CODE_SIGN_STYLE = Manual;
 				COPY_PHASE_STRIP = NO;
-				CURRENT_PROJECT_VERSION = 84;
+				CURRENT_PROJECT_VERSION = 85;
 				DEAD_CODE_STRIPPING = YES;
 				DEBUG_INFORMATION_FORMAT = dwarf;
 				DEVELOPMENT_TEAM = ECKB9WN282;
@@ -486,7 +486,7 @@
 				GCC_WARN_UNUSED_FUNCTION = YES;
 				GCC_WARN_UNUSED_VARIABLE = YES;
 				MACOSX_DEPLOYMENT_TARGET = 15.0;
-				MARKETING_VERSION = 1.8.2;
+				MARKETING_VERSION = 1.8.3;
 				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
 				MTL_FAST_MATH = YES;
 				ONLY_ACTIVE_ARCH = YES;
@@ -637,7 +637,7 @@
 				CODE_SIGN_IDENTITY = "Apple Development";
 				CODE_SIGN_STYLE = Manual;
 				COPY_PHASE_STRIP = NO;
-				CURRENT_PROJECT_VERSION = 84;
+				CURRENT_PROJECT_VERSION = 85;
 				DEAD_CODE_STRIPPING = YES;
 				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
 				DEVELOPMENT_TEAM = ECKB9WN282;
@@ -654,7 +654,7 @@
 				GCC_WARN_UNUSED_FUNCTION = YES;
 				GCC_WARN_UNUSED_VARIABLE = YES;
 				MACOSX_DEPLOYMENT_TARGET = 15.0;
-				MARKETING_VERSION = 1.8.2;
+				MARKETING_VERSION = 1.8.3;
 				MTL_ENABLE_DEBUG_INFO = NO;
 				MTL_FAST_MATH = YES;
 				PARLEY_DISPLAY_NAME = Parley;
