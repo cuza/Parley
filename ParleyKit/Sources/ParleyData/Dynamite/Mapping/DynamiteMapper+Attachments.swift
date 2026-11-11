@@ -96,14 +96,20 @@ extension DynamiteMapper {
             return Attachment(
                 name: upload.contentName.isEmpty ? "Attachment" : upload.contentName, contentType: type, kind: kind,
                 // A resized FIFE rendition of a GIF is a still frame: show the animated original.
-                thumbnailURL: kind == .file || kind == .voice
-                    ? nil
-                    : type == "image/gif"
-                        ? download
-                        : attachmentURL([
-                            ("url_type", "FIFE_URL"), ("sz", "w640"), ("content_type", type), ("rwa", "true"),
-                            ("attachment_token", token), ("allow_caching", "true"),
-                        ]),
+                // Google Chat renders a PDF's first page as a picture.
+                thumbnailURL: type == "application/pdf"
+                    ? attachmentURL([
+                        ("url_type", "THUMBNAIL_URL"), ("content_type", type), ("attachment_token", token),
+                        ("allow_caching", "true"), ("sz", "w512"),
+                    ])
+                    : kind == .file || kind == .voice
+                        ? nil
+                        : type == "image/gif"
+                            ? download
+                            : attachmentURL([
+                                ("url_type", "FIFE_URL"), ("sz", "w640"), ("content_type", type), ("rwa", "true"),
+                                ("attachment_token", token), ("allow_caching", "true"),
+                            ]),
                 url: download,
                 width: width, height: height, voice: voice)
         case .driveMetadata(let drive):

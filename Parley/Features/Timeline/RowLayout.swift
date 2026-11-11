@@ -141,7 +141,7 @@ struct RowLayout: Equatable, Sendable {
             guard size.width > maxWidth else { return size }
             return CGSize(width: maxWidth, height: floor(size.height * maxWidth / size.width))
         }
-        if attachment.domain != nil {
+        if attachment.isCard {
             let cardWidth = min(320, maxWidth)
             // ponytail: card text measured with AppKit's text-style fonts; SwiftUI's Text may differ by a point or two.
             let width = cardWidth - 20
@@ -156,7 +156,7 @@ struct RowLayout: Equatable, Sendable {
             height +=
                 2
                 + measure(
-                    styled(attachment.domain ?? "", .preferredFont(forTextStyle: .caption2)), width: width, lines: 1
+                    styled(attachment.cardFooter, .preferredFont(forTextStyle: .caption2)), width: width, lines: 1
                 ).height
             return CGSize(width: cardWidth, height: ceil(height))
         }

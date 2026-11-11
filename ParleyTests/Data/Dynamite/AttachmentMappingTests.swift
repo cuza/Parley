@@ -47,15 +47,27 @@ struct AttachmentMappingTests: MapperFixtures {
     }
     @Test func uploadedFileHasNoThumbnailAndPercentTokenIsDecodedFirst() throws {
         let file = try #require(
-            try attachments([upload("q3.pdf", type: "application/pdf", token: "x%2By")], text: "see attached")
+            try attachments([upload("q3.zip", type: "application/zip", token: "x%2By")], text: "see attached")
                 .attachments.first)
         #expect(file.kind == .file && file.thumbnailURL == nil && file.width == nil)
         #expect(
             file.url
                 == URL(
-                    string: Self.base + "url_type=DOWNLOAD_URL&content_type=application%2Fpdf&attachment_token=x%2By"))
+                    string: Self.base + "url_type=DOWNLOAD_URL&content_type=application%2Fzip&attachment_token=x%2By"))
         let video = try #require(try attachments([upload("clip.mp4", type: "video/mp4", token: "v")]).attachments.first)
         #expect(video.kind == .video && video.thumbnailURL?.absoluteString.contains("url_type=FIFE_URL") == true)
+    }
+    /// Google Chat renders a PDF's first page: web asks for it with url_type THUMBNAIL_URL.
+    @Test func uploadedPDFPreviewsItsFirstPage() throws {
+        let pdf = try #require(
+            try attachments([upload("q3.pdf", type: "application/pdf", token: "x%2By")]).attachments.first)
+        #expect(pdf.kind == .file)
+        #expect(
+            pdf.thumbnailURL
+                == URL(
+                    string: Self.base
+                        + "url_type=THUMBNAIL_URL&content_type=application%2Fpdf&attachment_token=x%2By"
+                        + "&allow_caching=true&sz=w512"))
     }
     @Test func driveFileOpensItsLink() throws {
         let drive = Dynamite_Annotation.with {

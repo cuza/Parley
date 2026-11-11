@@ -144,6 +144,13 @@ struct RowLayoutTests {
         #expect(
             RowLayout.attachmentSize(Attachment(name: String(repeating: "long name ", count: 20), kind: .file)).width
                 == 280)
+        // A PDF with its first page's picture is a card: picture, name, then its kind.
+        let pdf = Attachment(
+            name: "q3.pdf", contentType: "application/pdf", kind: .file,
+            thumbnailURL: URL(string: "https://chat.google.com/api/get_attachment_url?url_type=THUMBNAIL_URL"))
+        #expect(pdf.isCard && pdf.cardFooter == "PDF document")
+        #expect(
+            RowLayout.attachmentSize(pdf).width == 320 && RowLayout.attachmentSize(pdf).height > pdf.cardImageHeight)
         // Seen live: in the narrow thread pane an image ran past the bubble's leading edge. Everything fits the bubble.
         let narrow = RowLayout.attachmentSize(image, maxWidth: 200)
         #expect(narrow.width == 200 && abs(narrow.height / narrow.width - 800.0 / 1200) < 0.01)

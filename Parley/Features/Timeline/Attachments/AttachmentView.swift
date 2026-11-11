@@ -37,7 +37,7 @@ struct AttachmentView: View {
         }  // a recycled row starts with empty fields
         else if attachment.kind == .image || attachment.kind == .video {
             media
-        } else if attachment.domain != nil {
+        } else if attachment.isCard {
             card
         } else {
             chip
@@ -52,7 +52,7 @@ struct AttachmentView: View {
                     if let image {
                         Image(nsImage: image).resizable().scaledToFill().transition(.opacity)
                     } else if failed {  // as Google Chat shows a file it can't preview (no access): its type's icon, large
-                        Image(systemName: driveSymbol ?? "link").font(.system(size: driveSymbol == nil ? 13 : 56))
+                        Image(systemName: failedSymbol).font(.system(size: failedSymbol == "link" ? 13 : 56))
                             .foregroundStyle(own ? ink.opacity(0.8) : Color.secondary).frame(maxHeight: .infinity)
                     }
                 }
@@ -70,7 +70,7 @@ struct AttachmentView: View {
                 if let snippet = attachment.snippet, snippet != attachment.name {
                     Text(snippet).font(.caption).foregroundStyle(text(.secondary, 0.8)).lineLimit(2)
                 }
-                Text(attachment.domain ?? "").font(.caption2).foregroundStyle(text(.tertiary, 0.65)).lineLimit(1)
+                Text(attachment.cardFooter).font(.caption2).foregroundStyle(text(.tertiary, 0.65)).lineLimit(1)
             }
             .padding(.horizontal, 10).padding(.vertical, 8)
         }
@@ -153,6 +153,8 @@ struct AttachmentView: View {
         .background(fill, in: RoundedRectangle(cornerRadius: 10))
         .help(attachment.url?.absoluteString ?? attachment.name)
     }
+    /// A card whose picture didn't load: the file's kind, large, or a small link glyph for a web page.
+    private var failedSymbol: String { driveSymbol ?? (attachment.kind == .file ? "doc.richtext.fill" : "link") }
     private var type: UTType? { attachment.utType }
     /// Card and chip background: set off from my bubble so its text stands out; a light tint elsewhere.
     private var fill: AnyShapeStyle {
@@ -213,6 +215,10 @@ extension Attachment {
     // ponytail: the wire has no byte size; the chip shows the kind instead.
     /// A link to a video (YouTube), drawn with a play button over its picture.
     var isVideoLink: Bool { kind == .link && domain == "youtube.com" }
+    /// Drawn as a card with a picture on top: link previews, Drive files, and a file Google Chat renders (a PDF).
+    var isCard: Bool { domain != nil || (kind == .file && thumbnailURL != nil) }
+    /// The card's last line: the link's site, or the file's kind.
+    var cardFooter: String { domain ?? detail }
     var detail: String {
         if contentType == Self.calendarType { return "Google Calendar" }
         if contentType == Self.taskType { return "Google Tasks" }
