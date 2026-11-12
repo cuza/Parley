@@ -3,7 +3,7 @@ import Foundation
 /// Keyboard navigation over the sidebar (⌘1…9, ⌥⌘↑/⌥⌘↓ next unread).
 extension Conversation {
     /// The sidebar's sections, as web Chat: Ask Gemini, pinned DMs and spaces together, direct messages and groups, spaces,
-    /// then DMs with apps; each in server order.
+    /// then DMs with apps; most recent activity first within each section.
     /// With a `limit` (Settings ▸ Limit sidebar sections), Direct messages, Spaces and Apps show their first `limit` rows,
     /// plus any unread or `selected` one past them in its place; `hidden` is what the cap leaves out, still reported for a
     /// section the user `expanded` ("Show all") so it can offer "Show less".
@@ -13,6 +13,8 @@ extension Conversation {
         _ rooms: [Conversation], limit: Int? = nil, expanded: Set<SidebarKey> = [], selected: ConversationID? = nil,
         custom: [SidebarSection] = []
     ) -> [SidebarRows] {
+        // Stable sorting retains the server order for equal or missing activity times.
+        let rooms = rooms.sorted { ($0.activity ?? .distantPast) > ($1.activity ?? .distantPast) }
         let mine = custom.filter { $0.kind == .custom }
         let keys = Set(mine.map(\.key))
         let rest = rooms.filter { $0.app != .gemini }

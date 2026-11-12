@@ -1,3 +1,4 @@
+import Foundation
 import Testing
 
 @testable import Parley
@@ -120,5 +121,52 @@ struct SidebarLimitTests {
         #expect(Conversation.atShortcut(3, in: rooms, limit: 2)?.id == "s1")
         #expect(Conversation.atShortcut(3, in: rooms)?.id == "d3")
         #expect(Conversation.nextUnread(after: "d1", in: rooms, forward: true)?.id == "s1")
+    }
+}
+
+/// Activity changes reorder rows within their sections without changing grouping or keyboard navigation.
+struct SidebarActivityOrderTests {
+    private func room(
+        _ id: String, activity: TimeInterval? = nil, pinned: Bool = false,
+        section: String? = nil
+    ) -> Conversation {
+        var room = Conversation.fixture(ConversationID(id), name: id, pinned: pinned)
+        room.activity = activity.map { Date(timeIntervalSince1970: $0) }
+        room.section = section
+        return room
+    }
+
+    @Test func newestActivityLeadsEachSection() {
+        let rooms = [
+            room("old", activity: 1), room("pin-old", activity: 2, pinned: true),
+            room("custom-old", activity: 3, section: "projects"), room("new", activity: 4),
+            room("pin-new", activity: 5, pinned: true), room("custom-new", activity: 6, section: "projects"),
+        ]
+        let custom = [SidebarSection(kind: .custom, key: "projects", name: "Projects", position: 2)]
+        let sections = Conversation.sidebarSections(rooms, custom: custom)
+        #expect(sections.first { $0.key == .pinned }?.rooms.map(\.id) == ["pin-new", "pin-old"])
+        #expect(sections.first { $0.key == .spaces }?.rooms.map(\.id) == ["new", "old"])
+        #expect(sections.first { $0.key == .custom("projects") }?.rooms.map(\.id) == ["custom-new", "custom-old"])
+        #expect(Conversation.atShortcut(1, in: rooms, custom: custom)?.id == "pin-new")
+    }
+
+    @Test func equalAndMissingActivityKeepTheirInputOrder() {
+        let rooms = [room("missing-a"), room("equal-a", activity: 1), room("missing-b"), room("equal-b", activity: 1)]
+        #expect(Conversation.sidebarOrder(rooms).map(\.id) == ["equal-a", "equal-b", "missing-a", "missing-b"])
+    }
+
+    @Test func activityIsSortedBeforeApplyingTheRowLimit() {
+        let rooms = [room("old", activity: 1), room("middle", activity: 2), room("new", activity: 3)]
+        let section = Conversation.sidebarSections(rooms, limit: 1).first { $0.key == .spaces }
+        #expect(section?.rooms.map(\.id) == ["new"])
+        #expect(section?.hidden.map(\.id) == ["middle", "old"])
+    }
+
+    @MainActor @Test func serverActivityMovesAnExistingConversationWithoutARefresh() {
+        let store = ChatStore(backend: FakeBackend())
+        store.rooms.conversations = [room("first", activity: 2), room("second", activity: 1)]
+        #expect(Conversation.sidebarOrder(store.rooms.conversations).map(\.id) == ["first", "second"])
+        store.apply(.conversationActivity("second", at: Date(timeIntervalSince1970: 3)))
+        #expect(Conversation.sidebarOrder(store.rooms.conversations).map(\.id) == ["second", "first"])
     }
 }

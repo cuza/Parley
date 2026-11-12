@@ -131,7 +131,7 @@ public struct Conversation: Identifiable, Hashable, Codable, Sendable {
     public var notificationLevel: NotificationLevel?  // as Google Chat stores it for me; nil until the server reports it
     public var app: App?  // a 1:1 DM (`.direct`) with an app instead of a person
     public enum App: String, Codable, Sendable { case bot, gemini }  // gemini: Ask Gemini, a sidebar shortcut in Google Chat
-    public var activity: Date?  // the server's last-activity time (its sidebar sort time), which Home orders by
+    public var activity: Date?  // the server's last-activity time, used to order the sidebar and Home
     public var hidden: Date?  // when I hid it from my sidebar; listed in Settings ▸ Hidden conversations instead
     public var external: Bool?  // people outside my organisation take part; nil until the server says
     public init(
