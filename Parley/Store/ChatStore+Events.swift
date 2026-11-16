@@ -229,6 +229,8 @@ extension ChatStore {
         if let index = conversationIndex(room.id) {
             rooms.conversations[index] = room
         } else {
+            // One I created or joined has no time from Google yet: the sidebar sorts by it, and it is the newest.
+            room.activity = room.activity ?? .now
             rooms.conversations.insert(room, at: 0)
         }
         // Members or roles may have changed: what is on screen is read again.

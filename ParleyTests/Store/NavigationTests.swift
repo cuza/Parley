@@ -169,4 +169,12 @@ struct SidebarActivityOrderTests {
         store.apply(.conversationActivity("second", at: Date(timeIntervalSince1970: 3)))
         #expect(Conversation.sidebarOrder(store.rooms.conversations).map(\.id) == ["second", "first"])
     }
+
+    /// A space I create or join comes back without a time from Google: it is the newest until Google's own arrives.
+    @MainActor @Test func aNewConversationWithoutActivityLeadsItsSection() {
+        let store = ChatStore(backend: FakeBackend())
+        store.rooms.conversations = [room("older", activity: 1), room("newer", activity: 2)]
+        store.apply(.conversationUpserted(room("created")))
+        #expect(Conversation.sidebarOrder(store.rooms.conversations).map(\.id) == ["created", "newer", "older"])
+    }
 }
